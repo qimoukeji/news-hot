@@ -1,0 +1,21 @@
+{
+  "name": "@aihot/codex-reset",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "initialize": "node --env-file-if-exists=../../.env scripts/initialize.ts"
+  },
+  "exports": {
+    "./module": "./module.ts",
+    "./server": "./server.ts",
+    "./web": "./web.tsx",
+    "./contracts": "./contracts.ts"
+  },
+  "dependencies": {
+    "@aihot/backend": "*",
+    "@aihot/contracts": "*",
+    "@aihot/site": "*",
+    "zod": "4.6.5",
+    "@aihot/api": "*"
+  }
+}

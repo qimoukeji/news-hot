@@ -129,6 +129,7 @@
 
 ## 8. 模型和部署
 
+- 请求参数：默认模型的温度、总输出上限与请求超时分别用 `LLM_TEMPERATURE`、`LLM_MAX_TOKENS`、`LLM_TIMEOUT_MS`（毫秒）。`LLM_EXTRA_JSON` 中的 `temperature`、`max_tokens` 优先于对应单项配置，其余字段同样优先于流程默认值；未配置的字段才使用流程默认值，再使用通用默认值。具名模型在 `site/models.ts` 中设置 `temperature`、`maxTokens`、`timeoutMs` 或 `extra`。显式总输出上限包含思考与答案，不再叠加思考额度；仅未配置总上限时使用每一步额度加 `LLM_REASONING_TOKENS` / `reasoningTokens`。
 - 模型：`.env` 里的 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`，任何 OpenAI 兼容接口都行，所有步骤默认都用它。`site/models.ts` 列出具名的模型（各用自己的地址和密钥环境变量）和每一步默认用哪个；部署时还可以用环境变量（见 `.env.example`）或后台“模型与评测”页逐步改选。用推理模型（先想再答）时给它留出推理的额度：默认模型设 `LLM_REASONING_TOKENS`，具名模型在 `site/models.ts` 里写 `reasoningTokens`；不留的话推理会把每一步的输出额度用光，答案为空，每次调用都失败。
 - 部署：见 [部署](deploy.md)。
 

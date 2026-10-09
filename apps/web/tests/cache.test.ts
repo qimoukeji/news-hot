@@ -34,7 +34,11 @@ const api = createServer((req, res) => {
     return res.end("# Article");
   }
   if (url.pathname === "/api/site/items/long-lived") return res.end(JSON.stringify({ id: "long-lived", title: "t" }));
-  if (url.pathname === "/api/site/contact") return res.end(JSON.stringify({ wechatQr: "/qr.png", feishuQr: "/qr.png" }));
+  if (url.pathname === "/api/site/contact") {
+    // The two cookie variants must compare content under the same absolute freshness deadline.
+    res.setHeader("X-Accel-Expires", `@${deadline}`);
+    return res.end(JSON.stringify({ wechatQr: "/qr.png", feishuQr: "/qr.png" }));
+  }
   if (url.pathname === "/api/site/stories/merged") {
     res.statusCode = 308;
     return res.end(JSON.stringify({ mergedInto: "surviving-story" }));

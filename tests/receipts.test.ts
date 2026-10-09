@@ -9,7 +9,7 @@ import { config } from "@aihot/backend/config";
 import { closeDb, sql } from "@aihot/backend/db";
 import { chatJson, ModelOutputError } from "@aihot/backend/providers/llm";
 import { embeddingsAvailable } from "@aihot/backend/providers/embeddings";
-import { BudgetExceededError, logicalKeyFor, markStalePendingReceipts, paidRequest, ReceiptUnknownError } from "@aihot/backend/providers/receipts";
+import { BudgetExceededError, logicalKeyFor, markStalePendingReceipts, paidRequest, ReceiptUnknownError, ReceiptBusyError, ReceiptFailedError, retireMonitorUnknownReceipts } from "@aihot/backend/providers/receipts";
 import { autoReleaseUnknownReceipts } from "@aihot/backend/operations/recover";
 
 const usage = { prompt_tokens: 80, completion_tokens: 20, total_tokens: 100 };
@@ -277,4 +277,46 @@ test("an unknown outcome is released automatically once, so a lost answer costs 
   assert.equal(await status(), "unknown", "a second loss waits for the admin");
   await assert.rejects(paidRequest(req, lost), ReceiptUnknownError);
   assert.equal(sent, 2);
+});
+
+test("monitor unknown outcomes fail without releasing or repeating the logical request", async () => {
+  for (const purpose of ["monitor.scan", "monitor.lookback", "monitor.context", "monitor.recognize"]) {
+    const req = { service: "invariant-unbudgeted", purpose, identity: { lost: tag() }, attemptTag: "round-1" };
+    let sent = 0;
+    const lost = async () => { sent++; throw new Error("socket closed without a complete response"); };
+    await assert.rejects(paidRequest(req, lost), ReceiptUnknownError);
+    const [receipt] = await sql`SELECT id, status, attempts FROM receipts WHERE logical_key = ${logicalKeyFor(req)}`;
+    assert.equal(receipt!.status, "failed");
+    assert.equal((await sql`SELECT status FROM receipt_attempts WHERE receipt_id = ${receipt!.id}`)[0]!.status, "unknown", "billing remains unknown");
+    await autoReleaseUnknownReceipts(Date.now() + 3600_000);
+    await assert.rejects(paidRequest(req, lost), ReceiptFailedError);
+    assert.equal(sent, 1);
+    await assert.rejects(paidRequest({ ...req, attemptTag: "round-2" }, lost), ReceiptUnknownError);
+    assert.equal(sent, 2, "a later normal round owns a separate receipt");
+    assert.equal((await sql`SELECT attempts FROM receipts WHERE logical_key = ${logicalKeyFor(req)}`)[0]!.attempts, 1);
+  }
+});
+
+test("stale monitor placeholders fail while retaining unknown attempt outcomes", async () => {
+  const request = { service: "invariant-unbudgeted", purpose: "monitor.scan", identity: tag() };
+  const receipt = await paidRequest(request, async () => ({ response: { ok: true } }));
+  await sql`UPDATE receipts SET status = 'pending', updated_at = now() - interval '11 minutes' WHERE id = ${receipt.receiptId}`;
+  await sql`UPDATE receipt_attempts SET status = 'pending' WHERE receipt_id = ${receipt.receiptId}`;
+  await markStalePendingReceipts();
+  assert.equal((await sql`SELECT status FROM receipts WHERE id = ${receipt.receiptId}`)[0]!.status, "failed");
+  assert.equal((await sql`SELECT status FROM receipt_attempts WHERE receipt_id = ${receipt.receiptId}`)[0]!.status, "unknown");
+});
+
+test("retiring legacy monitor recovery preserves paid history and leaves other modules untouched", async () => {
+  const monitor = await paidRequest({ service: "invariant-unbudgeted", purpose: "monitor.context", identity: tag() }, async () => ({ response: { original: "saved" }, cost: { amount: 0.2, currency: "USD", basis: "actual" } }));
+  const other = await paidRequest({ service: "invariant-unbudgeted", purpose: "invariant_test", identity: tag() }, async () => ({ response: { original: "other" } }));
+  await sql`UPDATE receipts SET status='unknown' WHERE id IN ${sql([monitor.receiptId, other.receiptId])}`;
+  await sql`UPDATE receipt_attempts SET status='unknown',error='legacy lost response' WHERE receipt_id=${monitor.receiptId}`;
+  const [before] = await sql`SELECT * FROM receipt_attempts WHERE receipt_id=${monitor.receiptId}`;
+  assert.ok(await retireMonitorUnknownReceipts(sql) >= 1);
+  assert.equal(await retireMonitorUnknownReceipts(sql), 0);
+  const [receipt] = await sql`SELECT status,response,cost,currency,cost_basis FROM receipts WHERE id=${monitor.receiptId}`;
+  assert.deepEqual(receipt, { status: "failed", response: { original: "saved" }, cost: 0.2, currency: "USD", cost_basis: "actual" });
+  assert.deepEqual((await sql`SELECT * FROM receipt_attempts WHERE receipt_id=${monitor.receiptId}`)[0], before);
+  assert.equal((await sql`SELECT status FROM receipts WHERE id=${other.receiptId}`)[0]!.status, "unknown");
 });

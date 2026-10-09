@@ -57,7 +57,7 @@ export function createEgressResolver(proxyUrl: string): Resolve {
     let work = pending.get(host);
     if (!work) {
       work = (async () => {
-        const signal = AbortSignal.timeout(5_000);
+        const signal = AbortSignal.timeout(30_000);
         const records = (await Promise.all(["A", "AAAA"].map(async (type) => {
           const url = new URL("https://cloudflare-dns.com/dns-query");
           url.search = new URLSearchParams({ name: host, type }).toString();
@@ -73,7 +73,9 @@ export function createEgressResolver(proxyUrl: string): Resolve {
         if (cache.size >= 256) cache.delete(cache.keys().next().value!);
         cache.set(host, { addresses, until: Date.now() + Math.max(0, Math.min(60, ...records.map((r) => r.TTL || 0))) * 1000 });
         return addresses;
-      })().finally(() => pending.delete(host));
+      })().catch(error => {
+        throw new Error(`Egress DNS lookup failed for ${host}: ${String(error)}`, { cause: error });
+      }).finally(() => pending.delete(host));
       pending.set(host, work);
     }
     return work;

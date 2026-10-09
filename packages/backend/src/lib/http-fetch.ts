@@ -15,7 +15,7 @@ import { DEPLOYMENT, SITE } from "@aihot/site";
  * hosts, are connected here instead, so the
  * connect-time address check still applies. A name sent through the proxy is resolved through it too
  * (egress-proxy.ts), and the tunnel goes to the checked address. "direct" is for paid APIs called
- * straight (SocialData, Dajiala) and the site's own addresses.
+ * straight (Dajiala) and the site's own addresses.
  */
 export type EgressRoute = "egress" | "direct";
 

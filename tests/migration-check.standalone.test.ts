@@ -19,8 +19,17 @@ git("init", "-q");
 git("config", "user.email", "test@example.invalid");
 git("config", "user.name", "Test");
 write("database/migrations/0001_history.sql", "UPDATE old_table SET done = true;");
+write("database/migrations/0002_lines.sql", "-- history\nSELECT 1;\n");
 git("add", ".");
 git("commit", "-qm", "history");
+
+test("Windows checkout line endings preserve SQL while actual edits are rejected", () => {
+  write("database/migrations/0002_lines.sql", "-- history\r\nSELECT 1;\r\n");
+  assert.deepEqual(checkMigrations(root, "HEAD"), []);
+  write("database/migrations/0002_lines.sql", "-- history\r\nSELECT 2;\r\n");
+  assert.match(checkMigrations(root, "HEAD").join("\n"), /immutable/);
+  git("restore", ".");
+});
 
 test("unchanged history is accepted, but edits and deletions fail", () => {
   assert.deepEqual(checkMigrations(root, "HEAD"), []);

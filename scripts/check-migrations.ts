@@ -5,6 +5,8 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { FIRST_ONLINE_MIGRATION, migrationPlan } from "./migration-safety.ts";
 
+// Git may check out CRLF on Windows; SQL content is immutable, checkout line endings are not.
+const lf = (text: string) => text.replaceAll("\r\n", "\n");
 const isMigration = (file: string) => /^(database\/migrations|modules\/[^/]+\/migrations)\/[^/]+\.sql$/.test(file);
 
 export function checkMigrations(root: string, base: string): string[] {
@@ -13,7 +15,7 @@ export function checkMigrations(root: string, base: string): string[] {
   const current = git("ls-files", "--cached", "--others", "--exclude-standard").split("\n").filter((file) => isMigration(file) && existsSync(path.join(root, file)));
   const problems: string[] = [];
   for (const file of before) {
-    if (!existsSync(path.join(root, file)) || readFileSync(path.join(root, file), "utf8") !== git("show", `${base}:${file}`)) problems.push(`${file}: deployed migrations are immutable; add a new migration`);
+    if (!existsSync(path.join(root, file)) || lf(readFileSync(path.join(root, file), "utf8")) !== lf(git("show", `${base}:${file}`))) problems.push(`${file}: deployed migrations are immutable; add a new migration`);
   }
   const names = new Set<string>();
   for (const file of current) {

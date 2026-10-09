@@ -17,6 +17,8 @@ export interface Scheduled {
   cron: string;
   run: () => Promise<unknown>;
   missed?: "skip" | "once";
+  /** Automatic queue retries after a failed run; defaults to 1. Use 0 when the next scheduled scan supplies the missing work. */
+  retryLimit?: number;
   /** Read when the worker starts, after the modules are installed: false removes the schedule and its execution queue; run history remains. */
   when?: () => boolean;
 }
@@ -197,6 +199,8 @@ export interface RequestNotices {
 export interface ServerModule {
   /** Its folder under modules/. */
   name: string;
+  /** Public projections, read only through publication/modules.ts by HTTP and Agent exits. */
+  publications?: Record<string, (input: Record<string, unknown>) => Promise<unknown>>;
   /** Its HTTP routes, and hooks on the app such as what to flush when it closes, registered before the engine's v1 fallbacks (apps/api/src/app.ts). */
   http?: (app: FastifyInstance) => void;
   agent?: {

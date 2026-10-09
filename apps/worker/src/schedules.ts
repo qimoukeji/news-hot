@@ -2,6 +2,7 @@
 // job_runs; missed slots run once.
 import type { PgBoss } from "pg-boss";
 import { ensureQueue, recordRun } from "@aihot/backend/jobs/queue";
+import { sql } from "@aihot/backend/db";
 import { responder, serverModules, type Scheduled } from "@aihot/backend/modules";
 import { sweepUnprocessed } from "@aihot/backend/jobs/content";
 import { translatePending } from "@aihot/backend/editorial/translate";
@@ -63,7 +64,16 @@ export async function registerSchedules(boss: PgBoss) {
   const schedules = [...ENGINE_SCHEDULES, ...serverModules().flatMap((m) => m.schedules ?? [])].filter((s) => s.when?.() ?? true);
   for (const s of schedules) {
     const queue = `cron.${s.name}`;
-    await ensureQueue(queue, { policy: "singleton", retryLimit: 1, expireInSeconds: 3600 });
+    const retryLimit = s.retryLimit ?? 1;
+    await ensureQueue(queue, { policy: "singleton", retryLimit, expireInSeconds: 3600 });
+    // Queue options are copied into jobs at send time. Updating just the queue leaves old jobs
+    // retryable, so retire pending retries and remove retry allowances before starting the handler.
+    await boss.updateQueue(queue, { retryLimit });
+    if (retryLimit === 0) await sql`
+      UPDATE pgboss.job SET retry_limit = 0,
+        state = CASE WHEN state = 'retry' THEN 'failed'::pgboss.job_state ELSE state END,
+        completed_on = CASE WHEN state = 'retry' THEN now() ELSE completed_on END
+      WHERE name = ${queue} AND state IN ('created', 'retry', 'active')`;
     await boss.schedule(queue, s.cron, {}, { tz: "Asia/Shanghai", missed: s.missed ?? "skip" });
     // Schedules fire at minute boundaries; a 15 s pickup keeps them on time with a third of the polling.
     await boss.work(queue, { pollingIntervalSeconds: 15 }, async () => recordRun(s.name, s.run));

@@ -1,0 +1,19 @@
+/* Reset monitor status card: a 135° wash of the state's tone (amber pending, green landed, rose alert). */
+.cr-wash {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--tone, var(--ink-4)) 7%, var(--surface)), var(--surface) 60%);
+}
+/* The state dot carries a soft halo that breathes while something is pending. */
+.cr-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 9999px;
+  background: currentColor;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 18%, transparent);
+}
+.cr-dot-live {
+  animation: cr-pulse 2s ease-in-out infinite;
+}
+@keyframes cr-pulse {
+  50% { box-shadow: 0 0 0 7px color-mix(in srgb, currentColor 6%, transparent); }
+}

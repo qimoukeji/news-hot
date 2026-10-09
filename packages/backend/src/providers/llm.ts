@@ -16,7 +16,11 @@ export interface ModelSpec {
   apiKeyEnv: string;
   /** Extra request fields, e.g. switching reasoning off for short structured tasks. */
   extra?: Record<string, unknown>;
-  /** Output tokens added to every call's own limit for a reasoning model, which reasons before it answers. */
+  temperature?: number;
+  /** Total output cap, including reasoning; when configured it replaces the step's token budget. */
+  maxTokens?: number;
+  timeoutMs?: number;
+  /** Extra reasoning tokens added to a step's limit only when no total output cap is configured. */
   reasoningTokens?: number;
   jsonMode: boolean;
   vision?: boolean;
@@ -25,10 +29,21 @@ export interface ModelSpec {
 function extraFromEnv(value: string | undefined): Record<string, unknown> | undefined {
   if (!value) return undefined;
   try {
-    return JSON.parse(value) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected an object");
+    return parsed as Record<string, unknown>;
   } catch {
     throw new Error("LLM_EXTRA_JSON must be a JSON object, e.g. {\"enable_thinking\": false}");
   }
+}
+
+function requestNumber(value: unknown, name: string, min: number, max = Infinity, integer = false): number | undefined {
+  if (value === undefined) return undefined;
+  const number = typeof value === "string" && value.trim() ? Number(value) : value;
+  if (typeof number !== "number" || !Number.isFinite(number) || number < min || number > max || integer && !Number.isInteger(number)) {
+    throw new Error(`${name} must be ${integer ? "an integer" : "a number"} between ${min} and ${max}`);
+  }
+  return number;
 }
 
 function reasoningTokensFromEnv(value: string | undefined): number | undefined {
@@ -43,6 +58,9 @@ export const MODELS: Record<string, ModelSpec> = {
     key: "default", service: "llm", baseUrlEnv: "LLM_BASE_URL", apiKeyEnv: "LLM_API_KEY",
     get model() { return process.env.LLM_MODEL ?? ""; },
     get extra() { return extraFromEnv(process.env.LLM_EXTRA_JSON); },
+    get temperature() { return requestNumber(process.env.LLM_TEMPERATURE || undefined, "LLM_TEMPERATURE", 0, 2); },
+    get maxTokens() { return requestNumber(process.env.LLM_MAX_TOKENS || undefined, "LLM_MAX_TOKENS", 1, Infinity, true); },
+    get timeoutMs() { return requestNumber(process.env.LLM_TIMEOUT_MS || undefined, "LLM_TIMEOUT_MS", 1, 2_147_483_647, true); },
     get reasoningTokens() { return reasoningTokensFromEnv(process.env.LLM_REASONING_TOKENS); },
     get jsonMode() { return process.env.LLM_JSON_MODE !== "false"; },
     get vision() { return process.env.LLM_VISION === "true"; },
@@ -63,6 +81,8 @@ export interface ChatJsonOptions<S extends z.ZodType> {
   schema: S;
   temperature?: number;
   maxTokens?: number;
+  /** Capability defaults for extra fields; explicit model configuration wins and participates in receipt identity. */
+  extra?: Record<string, unknown>;
   attemptTag?: string;
   timeoutMs?: number;
   /** false: the model answers in its own text format (no JSON mode); `parse` turns it into the schema's input. */
@@ -134,8 +154,11 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
   const apiKey = credential("models", spec.apiKeyEnv);
   if (!baseUrl || !apiKey || !spec.model) throw new Error(`Model ${opts.model} is not configured (${spec.baseUrlEnv}, ${spec.apiKeyEnv}${spec.key === "default" ? ", LLM_MODEL" : ""})`);
 
-  const temperature = opts.temperature ?? 0.2;
-  const maxTokens = Math.max(opts.maxTokens ?? 1500, 512) + (spec.reasoningTokens ?? 0);
+  const extra = { ...(opts.extra ?? {}), ...(spec.extra ?? {}) };
+  const temperature = requestNumber(extra.temperature !== undefined ? extra.temperature : spec.temperature ?? opts.temperature ?? 0.2, "temperature", 0, 2)!;
+  const configuredMaxTokens = requestNumber(extra.max_tokens !== undefined ? extra.max_tokens : spec.maxTokens, "max_tokens", 1, Infinity, true);
+  const maxTokens = configuredMaxTokens ?? Math.max(opts.maxTokens ?? 1500, 512) + (spec.reasoningTokens ?? 0);
+  const timeoutMs = requestNumber(spec.timeoutMs ?? opts.timeoutMs ?? 120_000, "timeoutMs", 1, 2_147_483_647, true)!;
   const userText = typeof opts.user === "string" ? opts.user : JSON.stringify(opts.user);
   const body: Record<string, unknown> = {
     model: spec.model,
@@ -145,10 +168,10 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
       // Multimodal parts go through as parts; plain objects are sent as JSON text.
       { role: "user", content: typeof opts.user === "string" || Array.isArray(opts.user) ? opts.user : userText },
     ],
+    ...(spec.jsonMode && opts.json !== false ? { response_format: { type: "json_object" } } : {}),
+    ...extra,
     temperature,
     max_tokens: maxTokens,
-    ...(spec.jsonMode && opts.json !== false ? { response_format: { type: "json_object" } } : {}),
-    ...(spec.extra ?? {}),
   };
 
   const receipt = await paidRequest(
@@ -157,8 +180,8 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
       model: spec.model,
       purpose: opts.purpose,
       subject: opts.subject,
-      identity: { model: spec.model, promptVersion: opts.promptVersion, system: sha256(opts.system), user: sha256(userText), temperature, maxTokens, extra: spec.extra ?? null },
-      requestSummary: { promptVersion: opts.promptVersion, systemHash: sha256(opts.system), userHash: sha256(userText), userChars: userText.length, temperature, maxTokens },
+      identity: { model: spec.model, promptVersion: opts.promptVersion, system: sha256(opts.system), user: sha256(userText), temperature, maxTokens, extra: Object.keys(extra).length ? extra : null },
+      requestSummary: { promptVersion: opts.promptVersion, systemHash: sha256(opts.system), userHash: sha256(userText), userChars: userText.length, temperature, maxTokens, timeoutMs },
       attemptTag: opts.attemptTag,
     },
     async () => {
@@ -169,7 +192,7 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
           body: JSON.stringify(body),
-          signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000),
+          signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (error) {
         if (isConnectFailure(error)) throw new ProviderRejectedError(`connect failed: ${String(error)}`, null, true);

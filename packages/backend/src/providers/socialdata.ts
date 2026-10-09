@@ -1,7 +1,7 @@
 // SocialData (X search). Paid per request: every call goes through receipts and the budget.
 import { credential } from "../config.ts";
 import { guardedFetch } from "../lib/http-fetch.ts";
-import { assertAccepted, paidRequest, type CallOutcome, type ReceiptRequest, type ReceiptResult } from "./receipts.ts";
+import { assertAccepted, isMonitorRequest, paidRequest, rejectReceivedResponse, type CallOutcome, type ReceiptRequest, type ReceiptResult } from "./receipts.ts";
 
 export interface SdUser {
   name: string;
@@ -70,7 +70,7 @@ async function get<T>(path: string, request: Omit<ReceiptRequest, "service">,
       headers: { authorization: `Bearer ${key}`, accept: "application/json" },
       timeoutMs: read.timeoutMs,
       maxBytes: read.maxBytes,
-      route: "direct",
+      route: "egress",
     });
     if (res.status === 404 && read.missing) return { response: null, usage: read.missing, cost: null };
     const text = res.text();
@@ -81,6 +81,13 @@ async function get<T>(path: string, request: Omit<ReceiptRequest, "service">,
 
 /** Lookups of one post or article. */
 const LOOKUP = { timeoutMs: 30_000, maxBytes: 4 * 1024 * 1024 };
+
+function validateMonitorTweet(tweet: SdTweet, depth = 0) {
+  if (depth > 8 || !tweet || !/^\d+$/.test(tweet.id_str) || !Number.isFinite(Date.parse(tweet.tweet_created_at))
+    || !tweet.user?.screen_name || typeof (tweet.full_text ?? tweet.text) !== "string") throw new Error("SocialData returned an invalid monitor post");
+  if (tweet.quoted_status) validateMonitorTweet(tweet.quoted_status, depth + 1);
+  if (tweet.retweeted_status) validateMonitorTweet(tweet.retweeted_status, depth + 1);
+}
 
 /**
  * Searches recent tweets. `window` makes the receipt identity time-bucketed so a retry in the same
@@ -102,6 +109,12 @@ export async function searchTweets(query: string, opts: { purpose: string; subje
       },
     });
   const json = receipt.response as { tweets?: SdTweet[]; next_cursor?: string | null };
+  if (isMonitorRequest(opts.purpose)) {
+    try {
+      if (!json || !Array.isArray(json.tweets) || json.next_cursor != null && typeof json.next_cursor !== "string") throw new Error("SocialData returned an invalid monitor page");
+      json.tweets.forEach(t => validateMonitorTweet(t));
+    } catch (error) { await rejectReceivedResponse(receipt.receiptId, String(error)); throw error; }
+  }
   return { tweets: json.tweets ?? [], nextCursor: json.next_cursor ?? null, receiptId: receipt.receiptId, reused: receipt.reused };
 }
 
@@ -155,10 +168,15 @@ export async function getArticle(tweetId: string, opts: { purpose: string; subje
   return (receipt.response as SdArticle | null) ?? null;
 }
 
-/** One tweet by id (context for replies and quotes). Paid; the receipt makes retries free. */
-export async function getTweet(id: string, opts: { purpose: string; subject: string }): Promise<SdTweet | null> {
+/** One tweet by id (context for replies and quotes). Saved answers are reused without another call. */
+export async function getTweet(id: string, opts: { purpose: string; subject: string; roundId?: string }): Promise<SdTweet | null> {
   const receipt = await get<SdTweet>(`/twitter/tweets/${encodeURIComponent(id)}`,
-    { purpose: opts.purpose, subject: opts.subject, identity: { tweet: id }, requestSummary: { tweet: id } },
+    { purpose: opts.purpose, subject: opts.subject, identity: { tweet: id }, requestSummary: { tweet: id }, attemptTag: opts.roundId },
     { ...LOOKUP, missing: { tweets: 0 }, settle: (json) => ({ response: json, usage: { tweets: 1 }, cost: objectsCost(1) }) });
-  return (receipt.response as SdTweet | null) ?? null;
+  const tweet = (receipt.response as SdTweet | null) ?? null;
+  if (tweet && isMonitorRequest(opts.purpose)) {
+    try { validateMonitorTweet(tweet); }
+    catch (error) { await rejectReceivedResponse(receipt.receiptId, String(error)); throw error; }
+  }
+  return tweet;
 }

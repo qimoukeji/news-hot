@@ -9,7 +9,7 @@ import { resumeAfterRelease } from "../jobs/content.ts";
 import { sweepUngrouped } from "../jobs/events.ts";
 import { retryReleasedReceiptJobs } from "../jobs/queue.ts";
 import { markStaleDeliveries } from "../notify/deliver.ts";
-import { markStalePendingReceipts, releaseUnknownReceipt } from "../providers/receipts.ts";
+import { isMonitorRequest, markStalePendingReceipts, releaseUnknownReceipt } from "../providers/receipts.ts";
 
 const AUTO_RELEASE_AFTER_MS = 30 * 60_000;
 export const AUTO_RELEASE_NOTE = "自动放行：结果未知超过 30 分钟，未核对是否计费";
@@ -27,8 +27,9 @@ async function release(id: number, error: string, actor: string, note: string, b
 /** Admin, after checking the provider's console: records whether it was billed and releases it. */
 export async function releaseReceipt(id: number, input: { billed: boolean; note: string }, actor: string) {
   if (!input.note?.trim()) throw new Error("note is required");
-  const [row] = await sql<{ status: string }[]>`SELECT status FROM receipts WHERE id = ${id}`;
+  const [row] = await sql<{ status: string; purpose: string }[]>`SELECT status, purpose FROM receipts WHERE id = ${id}`;
   if (!row) return null;
+  if (isMonitorRequest(row.purpose)) throw new Conflict("监控请求失败后由下一轮扫描补齐，不支持回执放行");
   if (row.status !== "unknown") throw new Conflict("只有结果未知的回执需要人工核对");
   const error = `人工核对：${input.billed ? "供应商已计费但结果未取回" : "供应商未计费"}。${input.note}`;
   return release(id, error, actor, input.note, input.billed);
@@ -41,7 +42,7 @@ export async function releaseReceipt(id: number, input: { billed: boolean; note:
 export async function autoReleaseUnknownReceipts(now = Date.now()) {
   const rows = await sql<{ id: number }[]>`
     SELECT r.id FROM receipts r
-    WHERE r.status = 'unknown' AND r.updated_at < ${new Date(now - AUTO_RELEASE_AFTER_MS)}
+    WHERE r.status = 'unknown' AND r.purpose NOT IN ('monitor.scan', 'monitor.lookback', 'monitor.context', 'monitor.recognize') AND r.updated_at < ${new Date(now - AUTO_RELEASE_AFTER_MS)}
       AND NOT EXISTS (SELECT 1 FROM receipt_attempts a WHERE a.receipt_id = r.id AND a.error LIKE ${AUTO_RELEASE_NOTE + "%"})
     ORDER BY r.id LIMIT 200`;
   let released = 0;

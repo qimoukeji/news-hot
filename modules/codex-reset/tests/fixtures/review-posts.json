@@ -1,0 +1,581 @@
+[
+  {
+    "id": "2078253555698581623",
+    "publishedAt": "2026-07-17T23:00:34.000Z",
+    "text": "@iamsaranhere Scoop",
+    "context": [
+      {
+        "id": "2077973075589750926",
+        "author": "iamsaranhere",
+        "relation": "reply",
+        "text": "codex limits got reseted ?",
+        "publishedAt": "2026-07-17T04:26:02.000Z"
+      }
+    ],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "Scoop回应额度重置问题，但不是明确确认或承诺。"
+  },
+  {
+    "id": "2078289174789275902",
+    "publishedAt": "2026-07-18T01:22:06.000Z",
+    "text": "@samifathi @OpenAI @sama Will give signs of life soon",
+    "context": [
+      {
+        "id": "2078248520029470937",
+        "author": "samifathi",
+        "relation": "reply",
+        "text": "I am getting seriously concerned about the health and future of @OpenAI @sama and @thsottiaux. It's been over 24 hours since a reset. Are we okay?",
+        "publishedAt": "2026-07-17T22:40:33.000Z"
+      }
+    ],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "生命迹象是对重置间隔玩笑的回应，没有具体动作。"
+  },
+  {
+    "id": "2079609359085289538",
+    "publishedAt": "2026-07-21T16:48:03.000Z",
+    "text": "https://t.co/bpFdSRO2bH",
+    "context": [
+      {
+        "id": "2079609157934886975",
+        "author": "thsottiaux",
+        "relation": "reply",
+        "text": "10M! \n\nNew day, new usage reset for paid users of Codex and ChatGPT Work. Lands in the next hour. Enjoy. https://t.co/VUJ4S3vKDG",
+        "publishedAt": "2026-07-21T16:47:15.000Z"
+      }
+    ],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "自身只有链接；父帖已有独立重置公告，不能把它重复当作新动作。"
+  },
+  {
+    "id": "2087423996115681767",
+    "publishedAt": "2026-08-12T06:20:37.000Z",
+    "text": "I previously promised a reset for every 1M in additional active users for Codex, until 10M. \n\nWe blew past that and have been silent since 10M. Little surprise for you tomorrow.",
+    "context": [],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "回顾增长重置政策并暗示惊喜，未明确明天重置。"
+  },
+  {
+    "id": "2089063967301730789",
+    "publishedAt": "2026-08-16T18:57:17.000Z",
+    "text": "@Ananth7e Maybe",
+    "context": [
+      {
+        "id": "2088909332473881056",
+        "author": "Ananth7e",
+        "relation": "reply",
+        "text": "are we going to get a reset when codex crosses 20M users?",
+        "publishedAt": "2026-08-16T08:42:49.000Z"
+      }
+    ],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "Maybe表达可能性，不承诺20M里程碑重置。"
+  },
+  {
+    "id": "2089078284487139347",
+    "publishedAt": "2026-08-16T19:54:10.000Z",
+    "text": "@Ananth7e Maybe",
+    "context": [
+      {
+        "id": "2089065252575170768",
+        "author": "Ananth7e",
+        "relation": "reply",
+        "text": "\"maybe\" from tibo is basically a confirmed reset",
+        "publishedAt": "2026-08-16T19:02:23.000Z"
+      },
+      {
+        "id": "2089063967301730789",
+        "author": "thsottiaux",
+        "relation": "quote",
+        "text": "@Ananth7e Maybe",
+        "publishedAt": "2026-08-16T18:57:17.000Z"
+      }
+    ],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "直接重复Maybe，不采信读者把可能等同确认。"
+  },
+  {
+    "id": "2092311059197808936",
+    "publishedAt": "2026-08-25T18:00:04.000Z",
+    "text": "@dtzy_88 Ah yeah, forgot to say",
+    "context": [
+      {
+        "id": "2092265390948909194",
+        "author": "dtzy_88",
+        "relation": "reply",
+        "text": "发生了什么，Tibo reset 了？？？",
+        "publishedAt": "2026-08-25T14:58:36.000Z"
+      }
+    ],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "父帖的Tibo reset对象不清，短答没有明确Codex额度动作。"
+  },
+  {
+    "id": "2092862554632826968",
+    "publishedAt": "2026-08-27T06:31:31.000Z",
+    "text": "A good thing about having aged is that I feel that it’s been 20 years since I’ve pressed the reset button. Intrigued to see if I can find it tomorrow and dust it up",
+    "context": [],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "寻找重置按钮是暗示；不把明天找按钮记成执行重置。"
+  },
+  {
+    "id": "2092993835953787255",
+    "publishedAt": "2026-08-27T15:13:11.000Z",
+    "text": "@ShayanSpiel I always deliver",
+    "context": [
+      {
+        "id": "2092932546145271997",
+        "author": "ShayanSpiel",
+        "relation": "reply",
+        "text": "@thsottiaux Don't do this please. if you gonna reset, say it clearly. Don't play.",
+        "publishedAt": "2026-08-27T11:09:38.000Z"
+      },
+      {
+        "id": "2092862554632826968",
+        "author": "thsottiaux",
+        "relation": "reply",
+        "text": "A good thing about having aged is that I feel that it’s been 20 years since I’ve pressed the reset button. Intrigued to see if I can find it tomorrow and dust it up",
+        "publishedAt": "2026-08-27T06:31:31.000Z"
+      }
+    ],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "I always deliver没有明确答应本轮重置，保留相关回应。"
+  },
+  {
+    "id": "2093551005711679557",
+    "publishedAt": "2026-08-29T04:07:10.000Z",
+    "text": "@growing_daniel There is a place and a time for resets. Soon, but not today",
+    "context": [
+      {
+        "id": "2093527116814192994",
+        "author": "growing_daniel",
+        "relation": "reply",
+        "text": "@thsottiaux Wow that’s terrible. Sounds like it’s time for another limit reset",
+        "publishedAt": "2026-08-29T02:32:15.000Z"
+      },
+      {
+        "id": "2093515916076343774",
+        "author": "thsottiaux",
+        "relation": "reply",
+        "text": "We unfortunately have decided that we cannot continue providing access to our models through Cursor and are ending our partnership. It boils down to trust and we’ve asked that this takes effect on November 12 to give you some time to plan.\n\nMany have used the GPT models through Cursor and here are options we know should work in the future:\n\n- We will continue to allow using your own OpenAI API key and similarly will continue to provide access through our IDE extensions for Cursor.\n- We will keep working with the broadest range of tools and harnesses, some of which are OSS, but also many many closed-source ones.\n\nWe are as committed as ever to continue supporting developers and the flourishing ecosystem of tools, harnesses and products. We will also continue to invest in our own open-source initiatives and believe in broad optionality for developers.\n\nYou can read more about our decision in the blog:\nhttps://openai.com/index/our-decision-on-cursor-following-its-acquisition-by-spacex/",
+        "publishedAt": "2026-08-29T01:47:44.000Z"
+      }
+    ],
+    "originalPropositions": [
+      {
+        "kind": "direct_reset",
+        "kindExplicit": false,
+        "action": "announce",
+        "real": true,
+        "count": 1,
+        "role": "answer",
+        "relatesTo": null,
+        "excerpt": "Soon, but not today",
+        "excerptZh": "很快，但不是今天。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "propositions": [
+      {
+        "kind": "direct_reset",
+        "kindExplicit": false,
+        "action": "announce",
+        "real": true,
+        "count": 1,
+        "role": "answer",
+        "relatesTo": null,
+        "excerpt": "Soon, but not today",
+        "excerptZh": "很快，但不是今天。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "decision": "event",
+    "expectedReview": false,
+    "reason": "直接回答再重置诉求：Soon but not today是预告；不推算日期，不转复核。"
+  },
+  {
+    "id": "2093573991965557198",
+    "publishedAt": "2026-08-29T05:38:31.000Z",
+    "text": "Looking at the dashboard we might hit a new milestone to celebrate tomorrow. Hold on to your Codex",
+    "context": [],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "unrelated",
+    "expectedReview": false,
+    "reason": "只提Codex增长里程碑庆祝，无重置、重置卡或故障内容。"
+  },
+  {
+    "id": "2096692394435752258",
+    "publishedAt": "2026-09-06T20:09:56.000Z",
+    "text": "@Gelassoldat @rezoundous Who says it won't reset in a while 👀",
+    "context": [
+      {
+        "id": "2096690263561306468",
+        "author": "Gelassoldat",
+        "relation": "reply",
+        "text": "@rezoundous Fable, in most instances. Also, my usage has expired and won't reset for a while.",
+        "publishedAt": "2026-09-06T20:01:28.000Z"
+      },
+      {
+        "id": "2096673536995717318",
+        "author": "rezoundous",
+        "relation": "reply",
+        "text": "I'm genuinely curious. Do you guys prefer Astra or Fable?",
+        "publishedAt": "2026-09-06T18:55:00.000Z"
+      }
+    ],
+    "originalPropositions": [],
+    "propositions": [],
+    "decision": "related",
+    "expectedReview": false,
+    "reason": "反问回应使用额度刷新，没有明确额外重置承诺。"
+  },
+  {
+    "id": "2097183639356489952",
+    "publishedAt": "2026-09-08T04:41:58.000Z",
+    "text": "@0x0SojalSec You forgot the part where I reset usage twice in the middle",
+    "context": [
+      {
+        "id": "2097087104534888698",
+        "author": "0x0SojalSec",
+        "relation": "reply",
+        "text": "The most expensive “hello” I’ve ever seen.\nGPT-6 Astra on Codex. https://t.co/QaDm9ruCYm",
+        "publishedAt": "2026-09-07T22:18:22.000Z"
+      }
+    ],
+    "originalPropositions": [
+      {
+        "kind": "direct_reset",
+        "kindExplicit": true,
+        "action": "confirm",
+        "real": true,
+        "count": 2,
+        "role": "action",
+        "relatesTo": null,
+        "excerpt": "I reset usage twice in the middle",
+        "excerptZh": "中间我重置过两次额度。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "propositions": [
+      {
+        "kind": "direct_reset",
+        "kindExplicit": true,
+        "action": "confirm",
+        "real": true,
+        "count": 2,
+        "role": "action",
+        "relatesTo": null,
+        "excerpt": "I reset usage twice in the middle",
+        "excerptZh": "中间我重置过两次额度。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "decision": "review",
+    "expectedReview": true,
+    "reason": "明确回顾重置两次，但发生日期和对应轮次未知，不能创建当日确认。"
+  },
+  {
+    "id": "2101352781219258527",
+    "publishedAt": "2026-09-19T16:48:38.000Z",
+    "text": "@udiWertheimer OK fine. But it’s also still coming in Tuesday",
+    "context": [
+      {
+        "id": "2101093319501664368",
+        "author": "udiWertheimer",
+        "relation": "reply",
+        "text": "ok tibo you guys didn’t ship anything interesting this week\n\nyou owe us a banked reset\n\nsorry i don’t make the rules",
+        "publishedAt": "2026-09-18T23:37:38.000Z"
+      },
+      {
+        "id": "2099744972195131850",
+        "author": "thsottiaux",
+        "relation": "quote",
+        "text": "This week will also be a level of ships that you could have expected for DevDay 2025. Crazy",
+        "publishedAt": "2026-09-15T06:19:47.000Z"
+      }
+    ],
+    "originalPropositions": [
+      {
+        "kind": "reset_credit",
+        "kindExplicit": false,
+        "action": "announce",
+        "real": false,
+        "count": 1,
+        "role": "uncertain",
+        "relatesTo": null,
+        "excerpt": "OK fine. But it’s also still coming in Tuesday",
+        "excerptZh": "好吧。但它也还是会在星期二到来。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "propositions": [
+      {
+        "kind": "reset_credit",
+        "kindExplicit": true,
+        "action": "announce",
+        "real": true,
+        "count": 1,
+        "role": "answer",
+        "relatesTo": null,
+        "excerpt": "OK fine. But it’s also still coming in Tuesday",
+        "excerptZh": "好吧。但它也还是会在星期二到来。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "decision": "event",
+    "expectedReview": false,
+    "reason": "OK fine接受直接父帖唯一banked reset请求；Tuesday的it可能指产品发布，不继承时间。"
+  },
+  {
+    "id": "2103963215885701493",
+    "publishedAt": "2026-09-26T21:41:35.000Z",
+    "text": "@giadotai Sorry Gia. More resets coming next week",
+    "context": [
+      {
+        "id": "2103919273353830410",
+        "author": "giadotai",
+        "relation": "reply",
+        "text": "The reset came right after my own reset, couldn’t be worse timing.",
+        "publishedAt": "2026-09-26T18:46:58.000Z"
+      },
+      {
+        "id": "2103911959544610829",
+        "author": "thsottiaux",
+        "relation": "quote",
+        "text": "Resets all propagated. That will be all. Have a fantastic weekend.",
+        "publishedAt": "2026-09-26T18:17:54.000Z"
+      }
+    ],
+    "originalPropositions": [
+      {
+        "kind": "direct_reset",
+        "kindExplicit": false,
+        "action": "announce",
+        "real": true,
+        "count": 1,
+        "role": "action",
+        "relatesTo": null,
+        "excerpt": "More resets coming next week",
+        "excerptZh": "下周还会有更多重置。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "propositions": [
+      {
+        "kind": "direct_reset",
+        "kindExplicit": false,
+        "action": "announce",
+        "real": true,
+        "count": 1,
+        "role": "action",
+        "relatesTo": null,
+        "excerpt": "More resets coming next week",
+        "excerptZh": "下周还会有更多重置。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "decision": "event",
+    "expectedReview": false,
+    "reason": "明确下周还会重置，建立独立预告；缺具体日期或形式不妨碍入库。"
+  },
+  {
+    "id": "2105173168281506088",
+    "publishedAt": "2026-09-30T05:49:30.000Z",
+    "text": "@kr0der Yes, check email",
+    "context": [
+      {
+        "id": "2105157445857538064",
+        "author": "kr0der",
+        "relation": "reply",
+        "text": "i randomly saw that i have 62,393 credits in Codex so i checked how much $ that would cost normally\n\n25,000 credits is $1.5k AUD so this is about $3.7k AUD (~$2.5k USD)\n\nthanks OpenAI for the free credits (is this due to the $200 plan change?) and also the extra banked reset 🫡 https://t.co/8OqP4JxaZO",
+        "publishedAt": "2026-09-30T04:47:01.000Z"
+      }
+    ],
+    "originalPropositions": [
+      {
+        "kind": "reset_credit",
+        "kindExplicit": false,
+        "action": "confirm",
+        "real": false,
+        "count": 1,
+        "role": "uncertain",
+        "relatesTo": null,
+        "excerpt": "Yes, check email",
+        "excerptZh": "是的，查看邮件。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "propositions": [
+      {
+        "kind": "reset_credit",
+        "kindExplicit": false,
+        "action": "confirm",
+        "real": true,
+        "count": 1,
+        "role": "answer",
+        "relatesTo": null,
+        "excerpt": "Yes, check email",
+        "excerptZh": "是的，查看邮件。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "decision": "review",
+    "expectedReview": true,
+    "reason": "Yes确认直接父帖，但父帖同时感谢美元credits与banked reset，确认对象缺关键依据。"
+  },
+  {
+    "id": "2107587158001496242",
+    "publishedAt": "2026-10-06T21:41:50.000Z",
+    "text": "@itsmattfranco It must be done",
+    "context": [
+      {
+        "id": "2107587055739970020",
+        "author": "itsmattfranco",
+        "relation": "reply",
+        "text": "i'm sorry tibo, but hopefully today's updates were helpful for others! https://t.co/KYBtz4V26P",
+        "publishedAt": "2026-10-06T21:41:25.000Z"
+      },
+      {
+        "id": "2107576143285219799",
+        "author": "thsottiaux",
+        "relation": "quote",
+        "text": "Vote",
+        "publishedAt": "2026-10-06T20:58:04.000Z"
+      }
+    ],
+    "originalPropositions": [
+      {
+        "kind": "direct_reset",
+        "kindExplicit": false,
+        "action": "announce",
+        "real": false,
+        "count": 1,
+        "role": "uncertain",
+        "relatesTo": null,
+        "excerpt": "It must be done",
+        "excerptZh": "这必须做。",
+        "statedTime": null,
+        "timeInferred": false,
+        "expectedLanding": null,
+        "scope": {
+          "audienceSource": null,
+          "plans": null,
+          "audienceZh": null,
+          "productsZh": null
+        }
+      }
+    ],
+    "propositions": [],
+    "decision": "unrelated",
+    "expectedReview": false,
+    "reason": "主帖和已存文字上下文只有更新、投票和It must be done，无明确额度重置依据。"
+  }
+]

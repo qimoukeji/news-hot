@@ -9,7 +9,11 @@ export interface ModelPreset {
   apiKeyEnv: string;
   /** 额外的请求字段，比如短小的结构化任务关掉推理。 */
   extra?: Record<string, unknown>;
-  /** 推理模型先想再答，额外给推理留的输出额度（token），加在每一步自己的额度上。default 用环境变量 LLM_REASONING_TOKENS。 */
+  /** Configured request parameters take precedence over each step's defaults. maxTokens is the total output cap. */
+  temperature?: number;
+  maxTokens?: number;
+  timeoutMs?: number;
+  /** 未配置总输出上限时，额外给推理留的额度（token）加在每一步额度上。default 用 LLM_REASONING_TOKENS。 */
   reasoningTokens?: number;
   /** 接口支持 JSON 模式。 */
   jsonMode: boolean;
