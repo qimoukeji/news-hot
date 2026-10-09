@@ -24,6 +24,7 @@ import {
 } from "@aihot/backend/editorial/analyze";
 import { importSelectBenchRun } from "@aihot/backend/admin/selectbench";
 import { evalModels, pmap, positiveInt, safeReportNamePart, usageFor } from "./eval-tools.ts";
+import { selectionMetrics, selectionThresholdMetrics } from "./eval-selection-core.ts";
 
 // Without options: the site's gold set (site.ts DEPLOYMENT.selectionGold), else the whole of .data/gold.jsonl
 // (up to 200 cases), swept over a wide range of thresholds.
@@ -134,46 +135,40 @@ for (const model of models) {
       return { r, out: null, receiptIds, error: String(error).slice(0, 200) };
     }
   });
-  let tp = 0, fp = 0, fn = 0, tn = 0, either = 0, errors = 0;
+  const metrics = selectionMetrics(results.map((x) => ({
+    gold: x.r.gold.decision,
+    decision: x.out ? (x.out.selected ? "select" : "reject") : null,
+  })));
   const mistakes: Array<Record<string, unknown>> = [];
   for (const x of results) {
-    if (!x.out) { errors++; continue; }
+    if (!x.out || x.r.gold.decision === "either") continue;
     const pred = x.out.selected ? "select" : "reject";
     const gold = x.r.gold.decision;
-    if (gold === "either") { either++; continue; }
-    if (pred === "select" && gold === "select") tp++;
-    else if (pred === "select" && gold === "reject") { fp++; mistakes.push({ kind: "FP", title: x.r.material.title, score: x.out.score, reason: x.out.reasonZh, stratum: x.r.samplingContext?.samplingStratum ?? null }); }
-    else if (pred === "reject" && gold === "select") { fn++; mistakes.push({ kind: "FN", title: x.r.material.title, score: x.out.score, relevance: x.out.relevance, stratum: x.r.samplingContext?.samplingStratum ?? null }); }
-    else tn++;
+    if (pred === "select" && gold === "reject") mistakes.push({ kind: "FP", title: x.r.material.title, score: x.out.score, reason: x.out.reasonZh, stratum: x.r.samplingContext?.samplingStratum ?? null });
+    else if (pred === "reject" && gold === "select") mistakes.push({ kind: "FN", title: x.r.material.title, score: x.out.score, relevance: x.out.relevance, stratum: x.r.samplingContext?.samplingStratum ?? null });
   }
   const usage = await usageFor(results.flatMap((x) => x.receiptIds));
-  const precision = tp / Math.max(1, tp + fp);
-  const recall = tp / Math.max(1, tp + fn);
-  const f1 = (2 * precision * recall) / Math.max(1e-9, precision + recall);
   const summary = {
-    model, n: sample.length, decisive: tp + fp + fn + tn, either, errors, tp, fp, fn, tn,
-    accuracy: +((tp + tn) / Math.max(1, tp + fp + fn + tn)).toFixed(3),
-    precision: +precision.toFixed(3), recall: +recall.toFixed(3), f1: +f1.toFixed(3),
-    selectedRate: +((tp + fp) / Math.max(1, tp + fp + fn + tn)).toFixed(3),
-    goldSelectRate: +((tp + fn) / Math.max(1, tp + fp + fn + tn)).toFixed(3),
+    model,
+    ...metrics,
     ...usage,
     wallSeconds: Math.round((Date.now() - started) / 1000),
   };
   console.log(JSON.stringify(summary));
-  // Threshold sweep on the raw attention score (selection rule = relevance pass && score >= t).
-  const sweep: Array<Record<string, number>> = [];
+  // Threshold sweep keeps valid-output metrics, while coverage and completeAcc charge decisive failures.
+  const thresholdCases = results.map((x) => ({
+    gold: x.r.gold.decision,
+    available: x.out !== null,
+    relevance: x.out?.relevance ?? null,
+    score: x.out?.score ?? null,
+  }));
+  const sweep = [];
   for (let t = defaults.sweep[0]; t <= defaults.sweep[1]; t += 2) {
-    let a = 0, b = 0, c = 0, d = 0;
-    for (const x of results) {
-      if (!x.out || x.r.gold.decision === "either") continue;
-      const pred = x.out.relevance === "pass" && x.out.score !== null && x.out.score >= t;
-      const g = x.r.gold.decision === "select";
-      if (pred && g) a++; else if (pred) b++; else if (g) c++; else d++;
-    }
-    const P = a / Math.max(1, a + b), R = a / Math.max(1, a + c);
-    sweep.push({ t, acc: +((a + d) / Math.max(1, a + b + c + d)).toFixed(3), P: +P.toFixed(3), R: +R.toFixed(3), F1: +((2 * P * R) / Math.max(1e-9, P + R)).toFixed(3), sel: +((a + b) / Math.max(1, a + b + c + d)).toFixed(3) });
+    sweep.push(selectionThresholdMetrics(thresholdCases, t));
   }
-  console.log(sweep.map((s) => `  t=${s.t} acc=${s.acc} P=${s.P} R=${s.R} F1=${s.F1} sel=${s.sel}`).join("\n"));
+  console.log(sweep.map((s) =>
+    `  t=${s.t} acc=${s.acc} completeAcc=${s.completeAcc} coverage=${s.coverage} P=${s.P} R=${s.R} F1=${s.F1} sel=${s.sel}`
+  ).join("\n"));
   const cases = results.map((x) => ({
     caseId: x.r.caseId,
     title: x.r.material.title,
