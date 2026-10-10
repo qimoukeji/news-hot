@@ -127,7 +127,7 @@ test("public activities reflect current active links and revision refreshes the 
   assert.equal(activity.statusChanged, false);
   await sql`UPDATE monitor_posts SET translation='人工修正译文' WHERE id=${id}`;
   await sql`INSERT INTO monitor_state (key,value) VALUES ('publication_revision', ${sql.json({ revision:"post-only-test" })})
-    ON CONFLICT (key) DO UPDATE SET value=excluded.value`;
+    ON CONFLICT (monitor_id, key) DO UPDATE SET value=excluded.value`;
   const page = await codexResetPage(clock);
   assert.notEqual(page.version, original.version);
   assert.equal(page.version, (await codexResetVersion(clock)).version);

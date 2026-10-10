@@ -1,5 +1,5 @@
 import { installModules } from "@aihot/backend/modules";
-import monitorModule from "../server.ts";
+import monitorModule from "../../codex-reset/server.ts";
 installModules([monitorModule]);
 // Reset monitor assembly completes the recognition's paid receipt in the transaction that writes its
 // events, as every paid result is committed: business rows first, then the receipt.
@@ -7,8 +7,8 @@ import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { closeDb, sql } from "@aihot/backend/db";
-import { applyRecognition } from "../backend/assemble.ts";
-import type { Proposition, Recognition } from "../backend/recognize.ts";
+import { applyRecognition } from "../../codex-reset/backend/assemble.ts";
+import type { Proposition, Recognition } from "../../codex-reset/backend/recognize.ts";
 
 after(async () => {
   await closeDb();

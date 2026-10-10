@@ -1,0 +1,1 @@
+ALTER TABLE monitor_event_posts VALIDATE CONSTRAINT monitor_event_posts_event_monitor_fkey;

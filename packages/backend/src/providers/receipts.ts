@@ -29,7 +29,8 @@ export class ReceiptFailedError extends Error {
   constructor(receiptId: number, message: string, options?: ErrorOptions) { super(message, options); this.receiptId = receiptId; }
 }
 
-export const isMonitorRequest = (purpose: string) => ["monitor.scan", "monitor.lookback", "monitor.context", "monitor.recognize"].includes(purpose);
+export const MONITOR_PURPOSE_PATTERN = "^(monitor|reset_monitor\\.[a-z][a-z0-9-]*)\\.(scan|lookback|context|recognize)$";
+export const isMonitorRequest = (purpose: string) => new RegExp(MONITOR_PURPOSE_PATTERN).test(purpose);
 
 export class ReceiptUnknownError extends Error {
   readonly receiptId: number;
@@ -239,7 +240,7 @@ export async function markStalePendingReceipts(): Promise<number> {
   return sql.begin(async (tx) => {
     // Recheck status and age when the row lock is acquired: a response may commit while we wait.
     const stale = await tx<{ id: number }[]>`
-      UPDATE receipts SET status = CASE WHEN purpose IN ('monitor.scan', 'monitor.lookback', 'monitor.context', 'monitor.recognize') THEN 'failed' ELSE 'unknown' END,
+      UPDATE receipts SET status = CASE WHEN purpose ~ ${MONITOR_PURPOSE_PATTERN} THEN 'failed' ELSE 'unknown' END,
         error = ${reason}, updated_at = now()
       WHERE status = 'pending' AND updated_at < ${new Date(Date.now() - PENDING_STALE_MS)} RETURNING id`;
     if (stale.length) {
@@ -251,9 +252,9 @@ export async function markStalePendingReceipts(): Promise<number> {
 }
 
 /** Retire old monitor recovery state without changing attempts or their unknown billing outcomes. */
-export async function retireMonitorUnknownReceipts(db: Db): Promise<number> {
+export async function retireMonitorUnknownReceipts(db: Db, purposes?: string[]): Promise<number> {
   const changed = await db`UPDATE receipts SET status = 'failed', updated_at = now() WHERE status = 'unknown'
-    AND purpose IN ('monitor.scan', 'monitor.lookback', 'monitor.context', 'monitor.recognize')`;
+    AND purpose ~ ${MONITOR_PURPOSE_PATTERN} AND (${purposes === undefined} OR purpose = ANY(${purposes ?? []}::text[]))`;
   return changed.count;
 }
 
@@ -264,7 +265,7 @@ export async function retireMonitorUnknownReceipts(db: Db): Promise<number> {
 export async function releaseUnknownReceipt(db: Db, id: number, error: string): Promise<{ subject: string | null; purpose: string } | null> {
   const [released] = await db<{ subject: string | null; purpose: string }[]>`
     UPDATE receipts SET status = 'failed', error = ${error}, updated_at = now()
-    WHERE id = ${id} AND status = 'unknown' AND purpose NOT IN ('monitor.scan', 'monitor.lookback', 'monitor.context', 'monitor.recognize') RETURNING subject, purpose`;
+    WHERE id = ${id} AND status = 'unknown' AND purpose !~ ${MONITOR_PURPOSE_PATTERN} RETURNING subject, purpose`;
   if (released) await db`UPDATE receipt_attempts SET status = 'failed', error = ${error} WHERE receipt_id = ${id} AND status = 'unknown'`;
   return released ?? null;
 }

@@ -9,7 +9,7 @@ import { resumeAfterRelease } from "../jobs/content.ts";
 import { sweepUngrouped } from "../jobs/events.ts";
 import { retryReleasedReceiptJobs } from "../jobs/queue.ts";
 import { markStaleDeliveries } from "../notify/deliver.ts";
-import { isMonitorRequest, markStalePendingReceipts, releaseUnknownReceipt } from "../providers/receipts.ts";
+import { MONITOR_PURPOSE_PATTERN, isMonitorRequest, markStalePendingReceipts, releaseUnknownReceipt } from "../providers/receipts.ts";
 
 const AUTO_RELEASE_AFTER_MS = 30 * 60_000;
 export const AUTO_RELEASE_NOTE = "自动放行：结果未知超过 30 分钟，未核对是否计费";
@@ -42,7 +42,7 @@ export async function releaseReceipt(id: number, input: { billed: boolean; note:
 export async function autoReleaseUnknownReceipts(now = Date.now()) {
   const rows = await sql<{ id: number }[]>`
     SELECT r.id FROM receipts r
-    WHERE r.status = 'unknown' AND r.purpose NOT IN ('monitor.scan', 'monitor.lookback', 'monitor.context', 'monitor.recognize') AND r.updated_at < ${new Date(now - AUTO_RELEASE_AFTER_MS)}
+    WHERE r.status = 'unknown' AND r.purpose !~ ${MONITOR_PURPOSE_PATTERN} AND r.updated_at < ${new Date(now - AUTO_RELEASE_AFTER_MS)}
       AND NOT EXISTS (SELECT 1 FROM receipt_attempts a WHERE a.receipt_id = r.id AND a.error LIKE ${AUTO_RELEASE_NOTE + "%"})
     ORDER BY r.id LIMIT 200`;
   let released = 0;

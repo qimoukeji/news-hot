@@ -1,6 +1,6 @@
 import { installModules } from "@aihot/backend/modules";
 
-import monitorModule from "../server.ts";
+import monitorModule from "../../codex-reset/server.ts";
 
 installModules([monitorModule]);
 
@@ -28,7 +28,7 @@ import { closeDb, sql } from "@aihot/backend/db";
 
 import { stopBoss } from "@aihot/backend/jobs/queue";
 
-import { collectPosts, collectPendingContext, monitorTick } from "../backend/scan.ts";
+import { collectPosts, collectPendingContext, monitorTick } from "../../codex-reset/backend/scan.ts";
 
 import type { SdTweet } from "@aihot/backend/providers/socialdata";
 
@@ -94,7 +94,7 @@ after(async () => { await app.close(); await provider.close(); await model.close
 
 async function state(key: string, value: unknown) {
 
-  await sql`INSERT INTO monitor_state (key, value) VALUES (${key}, ${sql.json(value as never)}) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
+  await sql`INSERT INTO monitor_state (key, value) VALUES (${key}, ${sql.json(value as never)}) ON CONFLICT (monitor_id, key) DO UPDATE SET value = EXCLUDED.value`;
 
 }
 

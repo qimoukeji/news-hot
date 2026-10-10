@@ -1,18 +1,25 @@
 import { Reply, stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { after, beforeEach, test } from "node:test";
+import { after, beforeEach, mock, test } from "node:test";
+import timers from "node:timers/promises";
 import { config } from "@aihot/backend/config";
 import { closeDb, sql } from "@aihot/backend/db";
-import { collectPosts, collectPendingContext, processPending } from "../backend/scan.ts";
+import { collectPosts, collectPendingContext, processPending } from "../../codex-reset/backend/scan.ts";
 import { paidRequest, ReceiptUnknownError, ProviderRejectedError, BudgetExceededError } from "@aihot/backend/providers/receipts";
 import { autoReleaseUnknownReceipts } from "@aihot/backend/operations/recover";
-import { searchTweets, getTweet, tweetText } from "../backend/providers/collectors.ts";
-import { normalizeTweet } from "../backend/providers/twitterapi.ts";
-import { scanCron, scanMinutes } from "../config.ts";
-import { codexResetPage, codexResetVersion } from "../backend/read.ts";
+import { searchTweets, getTweet, tweetText } from "../../codex-reset/backend/providers/collectors.ts";
+import { normalizeTweet } from "../../codex-reset/backend/providers/twitterapi.ts";
+import { scanCron, scanMinutes } from "../../codex-reset/config.ts";
+import { codexResetPage, codexResetVersion } from "../../codex-reset/backend/read.ts";
+import { inMonitor } from "../backend/context.ts";
+import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
+import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
+import { getTweet as sharedGetTweet } from "../backend/providers/collectors.ts";
 
 const calls: URL[] = [];
+// Transport integration tests skip the real wait; the fixed interval is tested with a controlled clock.
+mock.method(timers, "setTimeout", async () => undefined);
 const post = (id: string) => ({ id, text: "Reset &amp; see https://t.co/a", createdAt: "2026-10-08T01:00:00Z", author: { name: "Tibo", userName: "thsottiaux" },
   entities: { urls: [{ url: "https://t.co/a", expanded_url: "https://example.com/reset" }] } });
 let answer: (url: URL) => unknown = () => ({ tweets: [], has_next_page: false, next_cursor: "" });
@@ -188,18 +195,51 @@ test("page two failure preserves page one and the last full-success time", async
   assert.equal((await sql`SELECT count(*)::int n FROM receipts WHERE purpose='monitor.scan'`)[0]!.n, 3);
 });
 
-test("configured request spacing applies to paid calls while replay stays local", async () => {
-  process.env.TWITTERAPI_IO_REQUEST_INTERVAL_MS = "40";
-  const times: number[] = [];
-  answer = url => { times.push(Date.now()); return { tweets: [post(url.searchParams.get("tweet_ids")!)] }; };
+test("replaying a received lookup stays local", async () => {
+  answer = url => ({ tweets: [post(url.searchParams.get("tweet_ids")!)] });
+  await getTweet("1001", { purpose: "monitor.context", subject: "lookup" });
+  await getTweet("1002", { purpose: "monitor.context", subject: "lookup" });
+  await getTweet("1002", { purpose: "monitor.context", subject: "lookup" });
+  assert.equal(calls.length, 2);
+});
+
+test("concurrent monitors keep separate receipts and a provider failure releases the next request", { timeout: 10000 }, async () => {
+  const claudeProvider = process.env.CLAUDE_RESET_PROVIDER;
+  process.env.CLAUDE_RESET_PROVIDER = "twitterapi_io";
+  const starts: string[] = [];
+  let failedStarted!: () => void;
+  const entered = new Promise<void>(resolve => { failedStarted = resolve; });
+  let releaseFailure!: () => void;
+  const failureGate = new Promise<void>(resolve => { releaseFailure = resolve; });
+  answer = async url => {
+    const id = url.searchParams.get("tweet_ids")!;
+    starts.push(id);
+    if (id === "7003") { failedStarted(); await failureGate; return new Reply(402, { message: "Insufficient balance" }); }
+    return { tweets: [post(id)] };
+  };
+  const codexCall = (id: string) => inMonitor(codex, () => sharedGetTweet(id, { purpose: "monitor.context", subject: "parallel-lookup", roundId: `parallel-${id}` }));
+  const claudeCall = (id: string) => inMonitor(claude, () => sharedGetTweet(id, { purpose: "reset_monitor.claude.context", subject: "parallel-lookup", roundId: `parallel-${id}` }));
   try {
-    await getTweet("1001", { purpose: "monitor.context", subject: "spacing" });
-    await getTweet("1002", { purpose: "monitor.context", subject: "spacing" });
-    await getTweet("1002", { purpose: "monitor.context", subject: "spacing" });
-    assert.equal(times.length, 2);
-    assert.ok(times[1]! - times[0]! >= 40);
+    const results = await Promise.all([codexCall("7001"), claudeCall("7002")]);
+    assert.deepEqual(results.map(result => result?.id_str), ["7001", "7002"]);
+    assert.equal(starts.length, 2);
+
+    const failed = codexCall("7003").then(() => null, error => error);
+    await entered;
+    const following = claudeCall("7004");
+    releaseFailure();
+    const failure = await failed;
+    const received = await following;
+    assert.equal(received?.id_str, "7004");
+    assert.ok(failure instanceof ProviderRejectedError);
+    assert.equal(failure.status, 402);
+    assert.deepEqual(starts.slice(2), ["7003", "7004"]);
+    const purposes = (await sql`SELECT purpose FROM receipts WHERE request->>'id' IN ('7001','7002','7003','7004') ORDER BY purpose`).map(row => row.purpose);
+    assert.deepEqual(purposes, ["monitor.context", "monitor.context", "reset_monitor.claude.context", "reset_monitor.claude.context"]);
   } finally {
-    delete process.env.TWITTERAPI_IO_REQUEST_INTERVAL_MS;
+    releaseFailure();
+    if (claudeProvider === undefined) delete process.env.CLAUDE_RESET_PROVIDER;
+    else process.env.CLAUDE_RESET_PROVIDER = claudeProvider;
   }
 });
 

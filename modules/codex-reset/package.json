@@ -12,10 +12,9 @@
     "./contracts": "./contracts.ts"
   },
   "dependencies": {
+    "@aihot/reset-monitor": "*",
     "@aihot/backend": "*",
     "@aihot/contracts": "*",
-    "@aihot/site": "*",
-    "zod": "4.6.5",
-    "@aihot/api": "*"
+    "@aihot/site": "*"
   }
 }

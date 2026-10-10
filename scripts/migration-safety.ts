@@ -1,6 +1,6 @@
 // A deliberately small online-migration vocabulary. Unknown SQL needs an explicit safety design, not an opt-out.
 export const FIRST_ONLINE_MIGRATION = 55;
-export type MigrationPlan = { kind: "transaction" | "validation" | "statistics" } | { kind: "index"; index: string; table: string };
+export type MigrationPlan = { kind: "transaction" | "validation" | "statistics" } | { kind: "index" | "primary-key"; index: string; table: string };
 
 // Keep quoted values opaque, including their semicolons and comment markers. SQL bodies are not in
 // the accepted vocabulary; rejecting them also prevents hiding writes in DO or function definitions.
@@ -54,6 +54,7 @@ const LITERAL = `(?:'(?:[^']|'')*'|-?\\d+(?:\\.\\d+)?|true|false|null)(?: :: ${T
 const addColumn = new RegExp(`^alter table ${RELATION} add column (?:if not exists )?${IDENT} ${TYPE}(?: not null)?(?: default ${LITERAL})?(?: not null)?$`, "i");
 const alterDefault = new RegExp(`^alter table ${RELATION} alter column ${IDENT} (?:set default ${LITERAL}|drop default)$`, "i");
 const indexStart = new RegExp(`^create (unique )?index concurrently if not exists (${IDENT}) on (${RELATION}) `, "i");
+const primaryKey = new RegExp(`^alter table (${RELATION}) add constraint ${IDENT} primary key using index (${IDENT})$`, "i");
 
 function singleAction(tokens: string[]) {
   let depth = 0;
@@ -89,6 +90,8 @@ export function migrationPlan(text: string): MigrationPlan {
   // the change, and the release running while it applies no longer reads or writes it.
   if (new RegExp(`^drop table if exists ${RELATION}$`, "i").test(sql)) return { kind: "transaction" };
   if (!singleAction(tokens)) throw new Error("use one ALTER TABLE action per statement");
+  const key = primaryKey.exec(sql);
+  if (key) return { kind: "primary-key", index: key[2], table: key[1].replace(/ \. /g, ".") };
   if (new RegExp(`^alter table ${RELATION} drop (?:column|constraint) if exists ${IDENT}$`, "i").test(sql)) return { kind: "transaction" };
   if (addColumn.test(sql)) {
     if (/\bnot null\b/i.test(words) && (!/\bdefault\b/i.test(words) || /\bdefault null\b/i.test(words))) throw new Error("NOT NULL on a new column requires a non-null constant default");
@@ -96,5 +99,5 @@ export function migrationPlan(text: string): MigrationPlan {
   }
   if (alterDefault.test(sql)) return { kind: "transaction" };
   if (new RegExp(`^alter table ${RELATION} add constraint ${IDENT} (?:check \\(.*\\)|foreign key \\(.*\\) references .*) not valid$`, "i").test(sql)) return { kind: "transaction" };
-  throw new Error(`not safe for an online migration: ${sql.slice(0, 180)}. Use constant-default columns, NOT VALID then separate validation, concurrent indexes, column MCV statistics with separate column ANALYZE, or DROP TABLE IF EXISTS / DROP COLUMN IF EXISTS / DROP CONSTRAINT IF EXISTS for one object nothing uses; backfill data in bounded batches outside release migrations.`);
+  throw new Error(`not safe for an online migration: ${sql.slice(0, 180)}. Use constant-default columns, NOT VALID then separate validation, concurrent indexes, checked PRIMARY KEY USING INDEX, column MCV statistics with separate column ANALYZE, or DROP TABLE IF EXISTS / DROP COLUMN IF EXISTS / DROP CONSTRAINT IF EXISTS for one object nothing uses; backfill data in bounded batches outside release migrations.`);
 }

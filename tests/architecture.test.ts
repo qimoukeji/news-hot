@@ -161,17 +161,19 @@ test("every environment variable the code reads is listed in a template, and eve
   assert.deepEqual([...listed].filter((name) => !readAnywhere.has(name)), [], "no code reads it: remove it from the template");
 });
 
-// A module can use the engine, but it does not reach into another module; the site composes capabilities.
-test("modules do not import other modules", () => {
+// AI modules may depend on the shared reset engine; peer features remain composed by the site.
+test("modules only import the declared shared engine, never peer modules", () => {
   const installed = existsSync(path.join(ROOT, "modules")) ? readdirSync(path.join(ROOT, "modules"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name) : [];
   const found = violations(modules(), (file, spec) => {
     const owner = file.split("/")[1];
+    const dependencies = JSON.parse(readFileSync(path.join(ROOT, "modules", owner!, "package.json"), "utf8")).dependencies ?? {};
+    const allowed = (target: string | undefined) => target === "reset-monitor" && !!dependencies["@aihot/reset-monitor"];
     if (spec.startsWith(".")) {
       const target = path.posix.join(path.posix.dirname(file), spec).split("/");
-      return target[0] === "modules" && target[1] !== owner;
+      return target[0] === "modules" && target[1] !== owner && !allowed(target[1]);
     }
     const target = /^@aihot\/([^/]+)/.exec(spec)?.[1];
-    return !!target && installed.includes(target) && target !== owner;
+    return !!target && installed.includes(target) && target !== owner && !allowed(target);
   });
-  assert.deepEqual(found, [], "compose modules in site/modules instead of importing their implementation");
+  assert.deepEqual(found, [], "declare the shared engine dependency; compose peer modules in site/modules");
 });

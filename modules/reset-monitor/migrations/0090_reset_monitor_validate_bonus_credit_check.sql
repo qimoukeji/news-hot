@@ -1,0 +1,1 @@
+ALTER TABLE monitor_events VALIDATE CONSTRAINT monitor_events_event_type_check;

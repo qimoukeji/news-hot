@@ -151,7 +151,7 @@ docker compose up -d --build
 
 最值得花时间的是评分标准（`industry/prompts/selection-score.md`）和门槛：拿一两百条你自己标注过的资料，用 `scripts/eval-selection.ts` 跑一遍，看它选得准不准，再回去改。怎么做写在 [精选与校准](docs/selection.md) 里。
 
-Codex 重置监控已作为本站模块安装，见 [配置与入口](modules/codex-reset/README.md)。
+本站安装 [Codex 重置监控](modules/codex-reset/README.md)与 [Claude 额度动态](modules/claude-reset/README.md)，共用 [重置监控引擎](modules/reset-monitor/README.md)。奖励额度是共享事件类型，由各模块声明是否启用；新增 AI 监控只需提供信源、识别与时间策略、入口配置，不再复制业务逻辑或新建数据表。
 
 ## 文档
 

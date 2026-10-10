@@ -1,16 +1,16 @@
 # Codex 重置监控模块
 
-本模块负责 Tibo（`@thsottiaux`）的 Codex 额度重置与重置卡监控；框架通过 `site/modules/` 安装，不直接导入本模块。
+本模块负责 Tibo（`@thsottiaux`）的 Codex 额度重置与重置卡监控；框架通过 `site/modules/` 安装，不直接导入本模块。通用实现位于 `../reset-monitor/`；此目录保留 Codex 的配置、提示词、时间策略、薄入口、行为回归测试及不可改写的历史迁移。
+
+`eventKinds` 仅启用 `direct_reset` 与 `reset_credit`，保留现有行为；共享引擎的 `bonus_credit` 由其他已声明模块使用，不自动改变 Codex 的识别范围。
 
 ## 目录
 
 - `module.ts`、`server.ts`、`web.tsx`：地址声明、后端接入、网页导航。
 - `contracts.ts`、`config.ts`：共享类型与配置，前端不得导入后端配置。
-- `backend/`：采集、识别、事件组装、时间解析、管理操作与公开数据投影。
-- `backend/providers/`：可替换的采集提供商及统一接口；只有这里处理提供商的数据格式。
-- `api/`：公开与管理接口；公开读取通过框架 `publication/` 的模块读取入口。
-- `web/`：监控页面、后台页面与组件，数据只从 HTTP 接口读取。
-- `migrations/`：恢复本模块表的新迁移，每个文件一条语句，不修改历史迁移。
+- `backend/`：绑定 Codex 定义的薄入口，通用实现不放在这里。
+- `web/`：绑定 Codex 展示配置的路由入口，通用页面在共享引擎；数据只从 HTTP 读取。
+- `migrations/`：不可改写的历史迁移；共享表的新迁移在 `../reset-monitor/migrations/`。
 - `tests/`：本地假服务和独立测试数据库；禁止真实模型、采集与推送请求。
 - `scripts/`：模块命令行入口；初始化必须显式指定起止时间并遵守付费安全阀。
 - 离线实帖评估的输入、逐条标注和报告存放在 `.data/local-preview/`，不提交凭据或生产数据库快照；只读导出，事件组装在独立测试数据库验证。

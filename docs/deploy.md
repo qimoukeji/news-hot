@@ -169,7 +169,7 @@ MCP 的 `subscriptions/listen` 现在立即返回 HTTP 404 和 JSON-RPC `-32601 
   - 删掉了 `features.ts`、`chronicle.ts` 和 `chronicles/`；`topics.json` 里的 `orgNames`、`leaderboardProvider`、`chronicleTerms` 不再使用，可以删掉。
   - `taxonomy.ts` 的类别可以写 `feedLabel`（分类 RSS 标题里的名字，示例站用“AI 模型”这样的说法）；`ENTITIES` 加了几家公司。当时类别上还可以写 `publicAs`，让它在公开接口里并进另一类；这个字段后来删掉了，改成 `site/site.ts` 的 `PUBLIC_CATEGORIES.merge`（见上方），再写 `publicAs` 通不过类型检查。
 - **推送接口的限流可以设置**：`/api/ingest/items` 每个客户端每分钟最多推几次由 `INGEST_RATE_LIMIT` 决定，`docker compose` 默认 10，和以前一样；不用 Docker 时默认不限，前面没有代理限流的话在 `.env` 里设上。
-- **不再使用的环境变量**：`ARTIFICIAL_ANALYSIS_API_KEY`、`MONITOR_MODEL`，可以从 `.env` 删掉。
+- **不再使用的环境变量**：`ARTIFICIAL_ANALYSIS_API_KEY`，可以从 `.env` 删掉。
 
 #### 升级到公开接口 3.0.0（2026 年 10 月 3 日）
 
@@ -260,15 +260,47 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 开发时用带热更新的方式：`npm run dev:api`、`npm run dev:worker`、`npm run dev:web`。开发时想免登录进后台，在 `.env` 里设 `DEV_AUTH_ROLE=admin`（生产环境会拒绝启动）。
 
-## Codex 重置监控
+## 重置监控
 
-本站安装了 `modules/codex-reset/` 模块，配置见 [README](../modules/codex-reset/README.md)。更新时执行 `npm run db:migrate` 创建四张监控表和两个索引，不恢复历史运营数据。发布前保持采集和模型安全阀关闭；修改提供商配置后重启 API 和 worker。
+本站安装 [Codex 模块](../modules/codex-reset/README.md)和 [Claude 模块](../modules/claude-reset/README.md)，共用 [重置监控引擎](../modules/reset-monitor/README.md)。共享包不单独注册站点入口；各 AI 模块在 `site/modules/` 三份清单和 workspace 依赖中安装。Docker 构建包含两个 AI 模块及共享包的 package 清单。
 
+两个模块默认每 15 分钟扫描、每天北京时间 04:40 查漏最近 24 小时。Claude 默认 SocialData，使用 `CLAUDE_RESET_PROVIDER`、`CLAUDE_RESET_SCAN_MINUTES`；两模块识别共用 `MONITOR_MODEL`，填 `default` 或未配置时使用 `LLM_*`，也可填具名模型预设。后台“重置监控识别”共用 `monitor` 能力，后台选择优先于环境变量。供应商凭据与请求预算共用，TwitterAPI.io 为遵守免费套餐限制，在进程内固定间隔 5.5 秒，不提供环境变量配置；执行锁、检查点、通知与数据库记录按监控隔离。开发与验证保持采集、模型及推送安全阀关闭。
 
-### Codex 重置监控更新说明
+### 共享表升级
 
-更新该模块时先停止专用 worker，完成检查后重启 API、网站和 worker，避免新旧复核接口混用。正常采集每 15 分钟运行，每天北京时间 04:40 查漏最近 24 小时。采集与识别开关只在明确启用的 worker 中开启，推送保持关闭。
+共享表隔离使用 `0065`–`0088` 共 24 个迁移，不修改已发布的 Codex 迁移。现有四张 `monitor_*` 表增加非空 `monitor_id`，默认 `codex`；原帖子 ID、事件 ID、原文、模型结果、人工修改、检查点和通知去重状态保留。帖子、事件、关联与状态的主键改为包含监控 ID 的复合主键，关联外键同时校验归属。同一 ID 可以存在于不同监控中；后续新增 AI 不需要新表。
 
-本次无需数据库 schema 迁移。首次运行清理旧的分页续跑、上下文重试次数及放行控制状态；历史帖子、事件、付费回执和人工审计保留。历史监控未知回执执行状态改为失败，请求尝试中未知计费仍保留。旧采集截止时间不能单独证明整轮成功，新检查点仅承接已有整轮核验成功时间；没有该证据时，正常扫描在付费前失败，不能默认扫描全部历史。先确认有限起止范围，再从仓库根目录执行 `npm run initialize -w @aihot/codex-reset -- --since 2026-10-08T00:00:00Z --until 2026-10-09T00:00:00Z`，把示例时间换成已确认的带时区 ISO 时间；采集与模型安全阀必须均已明确启用，凭据和预算沿用部署配置。Docker 使用同一个命令：`docker compose run --rm worker npm run initialize -w @aihot/codex-reset -- --since <已确认的ISO时间> --until <已确认的ISO时间>`，时间参数替换成实际值。该入口实际采集并识别，只在整轮成功后建立截止时间；失败保留已采帖子但不写成功水位，不自动提高预算或缩短范围。首次运行或切换提供商均需完成该初始化。
+迁移先以 `CONCURRENTLY IF NOT EXISTS` 建立四个复合唯一索引，添加 `NOT VALID` 复合外键并单独验证，再移除旧外键和依次替换主键，另加两个范围查询索引。每个文件一条语句；唯一索引在旧主键移除前已有效，整个过程保留唯一约束和外键保护。复合外键引用预建唯一索引，附加主键后索引 OID 保持，外键继续引用同一索引。主键附加使用 `ADD CONSTRAINT ... PRIMARY KEY USING INDEX`；运行器先持表锁检查索引属于本表、有效、唯一、普通 btree、默认排序、无表达式或部分条件、列已非空，拒绝隐式非空扫描。
 
-框架的恢复任务继续服务其他用途，但排除本模块的主采集、每日查漏、上下文和识别请求。本模块失败即中止，下一轮从上次整轮成功时间正常扫描；无恢复、重试次数、手动放行或跨轮分页游标。标准 worker 的监控队列为零重试，更新时同步已有队列和排队任务，旧待重试任务结束为失败并保留历史。旧“已核实”只保留历史记录，不作为完成复核依据；历史判断通过完整人工复核修正，不自动批量改判或合并事件。
+升级顺序：
+
+1. 备份数据库及附件，先在备份副本验证完整迁移和两监控查询。构建新版代码和镜像。
+2. 暂停全部监控写入，停止所有旧 API、worker 和网站实例；包含脚本及人工复核写入。不要滚动部署让新旧实例同时连接迁移中的库。
+3. 执行 `npm run db:migrate`，Docker 使用 `docker compose run --rm setup`。占锁或无效索引报错时按上方“更新”处理，不能跳过迁移或改账本。
+4. 更新所有实例，在采集、模型和推送安全阀关闭的配置下启动，核对 Codex 记录、关联、人工审计、原检查点、通知去重及两监控的页面、后台权限、API、Agent 和 MCP。
+5. 核验通过后再按运营授权恢复写入。Claude 首次采集需要独立有限范围初始化；Codex 已有可验证成功检查点继续使用。
+
+若迁移或核验失败，保持写入暂停，从升级前备份恢复到空数据库并恢复旧应用和对应附件，再核验后启动。已更换复合主键的库不能直接接回旧代码；不通过手工删除监控列、改主键或修改迁移账本回退。原数据库和失败现场可保留用于诊断。
+
+### 奖励额度类型升级
+
+`0089_reset_monitor_bonus_credit_check.sql`、`0090_reset_monitor_validate_bonus_credit_check.sql` 和 `0091_reset_monitor_drop_old_event_type_check.sql` 扩展现有 `monitor_events.type` 约束，允许 `direct_reset`、`reset_credit` 和 `bonus_credit`。依次添加 `NOT VALID` 新 CHECK、单独验证、移除旧 CHECK，每个文件仅一条语句，全程保留类型校验；不新增表或列，不改写历史迁移。奖励详情使用已有 `presentation.bonusCredit` JSON，原记录、关联、识别结果、人工审计、检查点及通知去重保持不变，新安装同样执行全部迁移。
+
+共享引擎提供奖励额度类型，各模块通过 `eventKinds` 声明启用范围，自动识别、后台编辑和人工复核统一校验。Claude 启用官方一次性云会话奖励额度，仍排除 API 赠金、每月 API credits、额度提升及普通限额调整；Codex 继续仅使用原两类。页面名称为“Claude 额度动态”，既有入口和任务标识不变。官方可领取表示活动状态，不表示个人已经到账；领取截止和奖励到期分别保留原话、独立换算明确时间，缺失时间或时区不推测。奖励统计、日历和通知与重置及重置卡分别呈现。
+
+按上方备份、暂停写入、迁移、更新全部实例、核验后恢复的顺序升级。在新代码开始写入奖励事件前完成全部三个迁移；旧 CHECK 尚在时奖励写入仍会被拒绝。升级不自动重识别、回填或改写历史帖子，历史赠额需要按运营授权另行复核或重识别，不因更新代码自动成为事件。
+
+核验应覆盖已有数据、三个合法类型和非法类型拒绝、两监控隔离、后台启用类型限制及页面、API、Agent、MCP 的同一奖励详情。代码交付仅使用本地假服务和测试数据库验证，不会自动执行生产迁移、真实采集、推送、`.env` 修改或部署。需要回退时暂停写入，恢复升级前备份和对应旧应用；已有奖励事件的数据库不能直接连接只支持两类的旧应用，也不能删除奖励数据或改写迁移账本来回退。
+
+### 有限范围初始化
+
+新安装、切换提供商，或没有整轮成功证据时，普通扫描会在付费前失败。先确认真实运营范围，替换下面的示例时间；参数须为带时区 ISO 时间且 `since < until <= 当前时间`：
+
+```bash
+npm run initialize -w @aihot/codex-reset -- --since 2026-10-08T00:00:00Z --until 2026-10-09T00:00:00Z
+npm run initialize -w @aihot/claude-reset -- --since 2026-10-08T00:00:00Z --until 2026-10-09T00:00:00Z
+```
+
+Docker 在相同环境中执行 `docker compose run --rm worker npm run initialize -w @aihot/claude-reset -- --since <已确认的ISO时间> --until <已确认的ISO时间>`，Codex 替换 workspace 名。命令不修改配置，实际采集并调用模型；必须明确启用 `COLLECT_ENABLED=true`、`MODEL_CALLS_ENABLED=true`，配置供应商和模型凭据、预算，推送按既有授权配置。
+
+每页成功即保存，所有分页、必要上下文和识别完成才写成功截止时间。失败保留材料、不写成功检查点，不提高预算或自动缩短范围；普通下一轮从上次成功时间重新查询。监控回执失败即中止，不自动恢复或放行，队列零重试；未知请求仍保留计费未知。框架其他用途的恢复机制不适用于重置监控。人工审核待处理不妨碍技术流程成功，人工更正不发送事件通知。

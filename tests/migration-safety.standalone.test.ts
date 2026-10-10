@@ -87,6 +87,25 @@ test("concurrent indexes have one retriable statement per file, outside a transa
   assert.throws(() => migrationPlan("CREATE INDEX CONCURRENTLY IF NOT EXISTS article_idx ON articles (id); ALTER TABLE articles ADD COLUMN flag text;"));
 });
 
+test("primary keys can only attach a named prebuilt index, with runtime catalog checks", () => {
+  assert.deepEqual(migrationPlan("ALTER TABLE public.monitor_posts ADD CONSTRAINT monitor_posts_pkey PRIMARY KEY USING INDEX monitor_posts_monitor_key_idx;"), {
+    kind: "primary-key", table: "public.monitor_posts", index: "monitor_posts_monitor_key_idx",
+  });
+  assert.deepEqual(migrationPlan('ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_pkey" PRIMARY KEY USING INDEX "posts_idx";'), {
+    kind: "primary-key", table: '"public"."posts"', index: '"posts_idx"',
+  });
+  for (const statement of [
+    "ALTER TABLE monitor_posts ADD CONSTRAINT key PRIMARY KEY (monitor_id, id);",
+    "ALTER TABLE monitor_posts ADD CONSTRAINT key UNIQUE USING INDEX posts_idx;",
+    "ALTER TABLE monitor_posts ADD PRIMARY KEY USING INDEX posts_idx;",
+    "ALTER TABLE monitor_posts ADD CONSTRAINT key PRIMARY KEY USING INDEX public.posts_idx;",
+    "ALTER TABLE monitor_posts ADD CONSTRAINT key PRIMARY KEY USING INDEX posts_idx DEFERRABLE;",
+    "ALTER TABLE monitor_posts ADD CONSTRAINT key PRIMARY KEY USING INDEX posts_idx NOT VALID;",
+    "ALTER TABLE monitor_posts ADD CONSTRAINT key PRIMARY KEY USING INDEX posts_idx, ADD COLUMN flag text;",
+    "ALTER TABLE monitor_posts ADD CONSTRAINT key PRIMARY KEY USING INDEX posts_idx; SELECT 1;",
+  ]) assert.throws(() => migrationPlan(statement), statement);
+});
+
 test("comments and string literals cannot disguise dangerous statements or split safe defaults", () => {
   assert.equal(migrationPlan("/* outer /* nested */ comment */ ALTER TABLE articles ADD COLUMN note text DEFAULT 'CHECK; -- it''s text'; -- UPDATE articles\n").kind, "transaction");
   assert.throws(() => migrationPlan("CREATE /* misleading */ INDEX article_idx ON articles (id);"));

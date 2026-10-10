@@ -78,6 +78,7 @@ test("pending review previews before submitting and supports events outside the 
   try {
     await page.goto(`${web.origin}/admin/monitor/posts/${post.id}/review`);
     await page.getByLabel("分类", { exact: true }).selectOption("events");
+    await expect(page.getByLabel("类型", { exact: true }).locator('option[value="bonus_credit"]')).toHaveCount(0);
     await expect(page.getByLabel("关联目标事件").locator("option[value='outside-first-page']")).toHaveCount(1);
     await page.getByLabel("关联目标事件").selectOption("outside-first-page");
     await page.getByRole("button", { name: "预览影响", exact: true }).click();

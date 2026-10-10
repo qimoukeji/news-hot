@@ -106,7 +106,7 @@ test("initialization CLI validates a finite explicit range and performs the comp
 });
 
 async function existingEvent(id: string, source: string, at: Date, withdrawn = false) {
-  await sql`INSERT INTO monitor_posts (id, author, published_at, text, url, processed_at) VALUES (${source}, 'thsottiaux', ${at}, 'All reset for everyone.', ${`https://x.com/i/status/${source}`}, ${at}) ON CONFLICT (id) DO NOTHING`;
+  await sql`INSERT INTO monitor_posts (id, author, published_at, text, url, processed_at) VALUES (${source}, 'thsottiaux', ${at}, 'All reset for everyone.', ${`https://x.com/i/status/${source}`}, ${at}) ON CONFLICT (monitor_id, id) DO NOTHING`;
   await sql`INSERT INTO monitor_events (id, type, status, title, created_at, updated_at, confirmed_at, confirmation_basis, withdrawn)
     VALUES (${id}, 'direct_reset', 'confirmed', 'Codex reset', ${at}, ${at}, ${at}, 'source_post', ${withdrawn})`;
   await sql`INSERT INTO monitor_event_posts (event_id, post_id, stage, action, text, original_text)

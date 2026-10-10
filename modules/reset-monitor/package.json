@@ -1,0 +1,21 @@
+{
+  "name": "@aihot/reset-monitor",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./*.ts",
+    "./web": "./web.tsx",
+    "./web/page": "./web/page.tsx",
+    "./web/admin": "./web/admin.tsx",
+    "./web/review": "./web/review.tsx"
+  },
+  "dependencies": {
+    "@aihot/backend": "*",
+    "@aihot/contracts": "*",
+    "@aihot/site": "*",
+    "@aihot/api": "*",
+    "zod": "4.6.5",
+    "react": "19.3.0",
+    "react-router": "8.4.0"
+  }
+}

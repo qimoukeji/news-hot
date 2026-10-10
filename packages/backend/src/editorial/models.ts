@@ -37,7 +37,9 @@ export type CapabilityKey = keyof typeof CAPABILITIES;
 /** Every step: the engine's, then the installed modules' (their defaults also from site/models.ts). */
 export function capabilities(): Record<string, Capability> {
   const all: Record<string, Capability> = { ...CAPABILITIES };
-  for (const m of serverModules()) for (const [key, step] of Object.entries(m.models ?? {})) all[key] = { ...step, default: DEFAULTS[key] ?? "default" };
+  for (const m of serverModules()) for (const [key, step] of Object.entries(m.models ?? {})) {
+    all[key] = { ...step, default: DEFAULTS[key] ?? "default", purposes: [...new Set([...(all[key]?.purposes ?? []), ...step.purposes])] };
+  }
   return all;
 }
 

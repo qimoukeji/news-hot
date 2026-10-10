@@ -70,7 +70,7 @@ async function announcement(at = new Date()) {
   return { postId: id, eventId: applied.eventIds[0]! };
 }
 async function version(id: string) { return (await sql`SELECT updated_at FROM monitor_events WHERE id = ${id}`)[0]!.updated_at.toISOString(); }
-async function state(key: string, value: unknown) { await sql`INSERT INTO monitor_state (key, value) VALUES (${key}, ${sql.json(value as never)}) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`; }
+async function state(key: string, value: unknown) { await sql`INSERT INTO monitor_state (key, value) VALUES (${key}, ${sql.json(value as never)}) ON CONFLICT (monitor_id, key) DO UPDATE SET value = EXCLUDED.value`; }
 
 test("malformed recognition aborts and the next round preserves every claim", async () => {
   const valid = rec();

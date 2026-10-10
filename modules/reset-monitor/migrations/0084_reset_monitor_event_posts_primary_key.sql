@@ -1,0 +1,1 @@
+ALTER TABLE monitor_event_posts ADD CONSTRAINT monitor_event_posts_pkey PRIMARY KEY USING INDEX monitor_event_posts_monitor_key_idx;
