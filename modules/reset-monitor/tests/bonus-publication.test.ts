@@ -119,12 +119,14 @@ test("admin corrections and repeated manual reviews preserve bonus facts and imm
   assert.equal(detail.history.length, 2);
 });
 
-test("bonus type respects module policy while a third monitor reuses public and notification behavior", async () => {
-  await addPost(codex, "unsupported", now);
-  await assert.rejects(review(codex, "unsupported"), /不支持这个事件类型/);
+test("Codex supports bonus review while a third monitor reuses public and notification behavior", async () => {
+  await addPost(codex, "supported", now);
+  await review(codex, "supported");
+  assert.equal((await inMonitor(codex, () => listMonitorEvents())).events[0]!.type, "bonus_credit");
   await sql`INSERT INTO monitor_events (monitor_id,id,type,status,title,label,display_label,scope,created_at,updated_at) VALUES ('codex','codex-edit','direct_reset','announced','','全员重置','额度重置','Pro',${new Date(now)},${new Date(now)})`;
-  const codexEvent = (await inMonitor(codex, () => listMonitorEvents())).events[0]!;
-  await assert.rejects(inMonitor(codex, () => updateMonitorEvent(codexEvent.id, { patch: { type: "bonus_credit" }, version: new Date(codexEvent.updated_at).toISOString(), reason: "不支持奖励类型" }, "reviewer")), /不支持这个事件类型/);
+  const codexEvent = (await inMonitor(codex, () => listMonitorEvents())).events.find(e => e.id === "codex-edit")!;
+  await inMonitor(codex, () => updateMonitorEvent(codexEvent.id, { patch: { type: "bonus_credit" }, version: new Date(codexEvent.updated_at).toISOString(), reason: "补齐无既有证据的事件类型" }, "reviewer"));
+  assert.equal((await inMonitor(codex, () => listMonitorEvents())).events.find(e => e.id === codexEvent.id)!.type, "bonus_credit");
   const realNow = Date.now();
   await addPost(third, "bonus-third", realNow);
   await review(third, "bonus-third");
@@ -220,9 +222,10 @@ test("a third product enables automatic bonus recognition using only its definit
   assert.equal((await inMonitor(claude, () => resetPage(now))).count, 0);
   await addPost(codex, "codex-auto", now);
   await sql`UPDATE monitor_posts SET text=${text} WHERE monitor_id='codex' AND id='codex-auto'`;
-  assert.deepEqual(await inMonitor(codex, () => applyRecognition("codex-auto", structuredClone(rec))), { eventIds: [], notify: [] });
+  const codexResult = await inMonitor(codex, () => applyRecognition("codex-auto", structuredClone(rec)));
+  assert.equal(codexResult.eventIds.length, 1);
   const [saved] = await sql`SELECT recognition FROM monitor_posts WHERE monitor_id='codex' AND id='codex-auto'`;
-  assert.equal(saved!.recognition.relevant, false);
+  assert.equal(saved!.recognition.relevant, true);
   assert.deepEqual(saved!.recognition.modelResult, rec);
 });
 

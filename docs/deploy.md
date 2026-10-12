@@ -261,6 +261,15 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 开发时用带热更新的方式：`npm run dev:api`、`npm run dev:worker`、`npm run dev:web`。开发时想免登录进后台，在 `.env` 里设 `DEV_AUTH_ROLE=admin`（生产环境会拒绝启动）。
 
 ## 重置监控
+### 多账号与共享监控配置
+
+账号、显示名、默认产品、套餐、作者时间策略和可选筛选统一在 `site/reset-monitors.ts`，不新增密钥或必填环境变量。本次没有数据库 schema 变更，不删除帖子、事件、关联或人工结论，也不自动重识别、撤回或补采历史。
+
+升级时先保持迁入的原名单，重启 API 和 worker，运行原有扫描建立 `monitor_state` 配置基线后再改账号名单。原账号沿用成功检查点；新增或移除后重新添加的账号从首次扫描观察到配置的时间开始，起点在请求前保存，失败后仍使用同一起点。仅修改显示名或大小写不改变起点。扩大筛选范围只采生效后的内容，旧范围失败窗口仍按旧规则补齐；每日查漏不越过新账号或新范围起点。
+
+配置修改后重启 API 和 worker；网页通过 HTTP 读取当前账号配置。公开页面、API、Agent 和 MCP 展示账号采集起点与范围生效时间；旧历史起点未记录时显示未知，不能宣称新增账号覆盖过去记录。历史补采需另行指定范围，本次升级不执行。
+
+初始化断点保存的原查询、版本和游标保持不变，Grok 补采继续追加查询。配置与未完成断点不一致时会在付费请求前中止；应恢复原配置完成初始化，再修改范围，不能覆盖断点或把未完成范围记为成功。三个模块均启用奖励额度，活动可领取与个人到账分开，奖励不计入重置次数、不接受账户回执确认。仅显式绑定 `tibo` 的账号使用 Tibo 时间预测，其他账号默认不预测；新事件按自身策略展示，旧事件不回填。
 
 本站安装 [Codex 模块](../modules/codex-reset/README.md)、[Claude 模块](../modules/claude-reset/README.md)和 [Grok 模块](../modules/grok-reset/README.md)，共用 [重置监控引擎](../modules/reset-monitor/README.md)。共享包不单独注册站点入口；各 AI 模块在 `site/modules/` 三份清单和 workspace 依赖中安装。Docker 构建包含三个 AI 模块及共享包的 package 清单。
 
@@ -286,7 +295,7 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 `0089_reset_monitor_bonus_credit_check.sql`、`0090_reset_monitor_validate_bonus_credit_check.sql` 和 `0091_reset_monitor_drop_old_event_type_check.sql` 扩展现有 `monitor_events.type` 约束，允许 `direct_reset`、`reset_credit` 和 `bonus_credit`。依次添加 `NOT VALID` 新 CHECK、单独验证、移除旧 CHECK，每个文件仅一条语句，全程保留类型校验；不新增表或列，不改写历史迁移。奖励详情使用已有 `presentation.bonusCredit` JSON，原记录、关联、识别结果、人工审计、检查点及通知去重保持不变，新安装同样执行全部迁移。
 
-共享引擎提供奖励额度类型，各模块通过 `eventKinds` 声明启用范围，自动识别、后台编辑和人工复核统一校验。Claude 启用官方一次性云会话奖励额度，仍排除 API 赠金、每月 API credits、额度提升及普通限额调整；Codex 继续仅使用原两类。页面名称为“Claude 额度动态”，既有入口和任务标识不变。官方可领取表示活动状态，不表示个人已经到账；领取截止和奖励到期分别保留原话、独立换算明确时间，缺失时间或时区不推测。奖励统计、日历和通知与重置及重置卡分别呈现。
+三个模块统一启用共享奖励额度类型，自动识别、后台编辑和人工复核统一校验。Claude 启用官方一次性云会话奖励额度，仍排除 API 赠金、每月 API credits、额度提升及普通限额调整；Codex 同样支持奖励额度。页面名称为“Claude 额度动态”，既有入口和任务标识不变。官方可领取表示活动状态，不表示个人已经到账；领取截止和奖励到期分别保留原话、独立换算明确时间，缺失时间或时区不推测。奖励统计、日历和通知与重置及重置卡分别呈现。
 
 按上方备份、暂停写入、迁移、更新全部实例、核验后恢复的顺序升级。在新代码开始写入奖励事件前完成全部三个迁移；旧 CHECK 尚在时奖励写入仍会被拒绝。升级不自动重识别、回填或改写历史帖子，历史赠额需要按运营授权另行复核或重识别，不因更新代码自动成为事件。
 

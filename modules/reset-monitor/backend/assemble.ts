@@ -11,6 +11,9 @@ import { estimateFor, resolveStatedTime, scheduleFrom, type Schedule } from "./t
 import { bonusCreditOf, bonusOpeningTime } from "./bonus-credit.ts";
 import { eventLabel, eventDisplayLabel } from "../event-kind.ts";
 import { trustedThreadEvents } from "./thread-events.ts";
+import { authorTimePolicy, withAuthorTime } from "./context.ts";
+import { resolve as resolveExplicitTime } from "./explicit-time.ts";
+import { productsConflict, plansFromScopeLabel } from "./scope-policy.ts";
 
 const HOUR = 3600_000;
 const OUTAGE_LINK_MS = 18 * HOUR;
@@ -57,6 +60,8 @@ function usableTime(p: Proposition, postAt: Date, context: ContextInput[], sourc
   const hedged = p.statedTime.precision === "approximate" && p.statedTime.relativeHours && !HEDGED.test(p.excerpt);
   const source = context.find((c) => c.id === p.timeSourceId);
   const at = source?.publishedAt ? new Date(source.publishedAt) : postAt;
+  if (p.kind === "bonus_credit") return resolveExplicitTime(p.statedTime, at, source?.text ?? sourceText);
+  // The author adopts the source words; their timestamp remains the relative-time anchor.
   return resolveStatedTime(hedged ? { ...p.statedTime, precision: "deadline" } : p.statedTime, at, source?.text ?? sourceText, p.timeInferred);
 }
 
@@ -75,13 +80,15 @@ function legacyScope(p: Proposition): string {
   return "";
 }
 
-function presentationOf(p: Proposition, extra: Record<string, unknown> = {}) {
+function presentationOf(p: Proposition, author: string, extra: Record<string, unknown> = {}) {
   const scopeLabel = p.scope.plans?.length ? p.scope.plans.join(", ") : p.scope.audienceSource;
   return {
     scopeKnown: !!scopeLabel,
     scopeLabel: scopeLabel ?? null,
     kindExplicit: p.kindExplicit,
-    timeInferred: currentMonitor().timePolicy === "explicit" ? false : p.timeInferred,
+    timeInferred: authorTimePolicy() === "explicit" || p.kind === "bonus_credit" ? false : p.timeInferred,
+    timePolicy: p.kind === "bonus_credit" ? "explicit" : authorTimePolicy(),
+    timeAuthor: author,
     audienceZh: p.scope.audienceZh,
     productsZh: p.scope.productsZh,
     ...(p.kind === "bonus_credit" ? { bonusCredit: p.bonusCredit ?? null } : {}),
@@ -117,13 +124,19 @@ function claimScopesConflict(a: Proposition, b: Proposition): boolean {
     || !!currentMonitor().scopeConflicts?.(a.scope, b.scope);
 }
 
-function eventScopeConflicts(e: EventRow, p: Proposition): boolean {
+function eventScope(e: EventRow): Proposition["scope"] {
   const label = e.presentation?.scopeLabel;
-  return !!currentMonitor().scopeConflicts?.({
+  return {
     audienceSource: typeof label === "string" ? label : null,
-    plans: typeof label === "string" ? label.split(/,\s*/) : null, audienceZh: null,
+    plans: typeof label === "string" ? plansFromScopeLabel(label, currentMonitor().plans) : null, audienceZh: null,
     productsZh: typeof e.presentation?.productsZh === "string" ? e.presentation.productsZh : null,
-  }, p.scope);
+  };
+}
+function eventScopeConflicts(e: EventRow, p: Proposition): boolean {
+  return !!currentMonitor().scopeConflicts?.(eventScope(e), p.scope);
+}
+function eventProductConflicts(e: EventRow, p: Proposition): boolean {
+  return productsConflict(eventScope(e), p.scope, currentMonitor().productAliases);
 }
 
 function mergeRepeatedScope(original: Proposition, repeated: Proposition) {
@@ -157,7 +170,7 @@ async function enrichEvent(tx: Tx, id: string, p: Proposition, previous: Record<
   const quota = currentMonitor().quotaScope?.(p.scope, p);
   if (quota) patch.quotaScope = quota;
   if (p.kindExplicit) patch.kindExplicit = true;
-  if (p.statedTime) patch.timeInferred = currentMonitor().timePolicy === "explicit" ? false : p.timeInferred;
+  if (p.statedTime) patch.timeInferred = authorTimePolicy() === "explicit" || p.kind === "bonus_credit" ? false : p.timeInferred;
   if (!Object.keys(patch).length) return;
   await tx`UPDATE monitor_events SET presentation = coalesce(presentation, '{}'::jsonb) || ${tx.json(patch as never)},
     type = CASE WHEN ${p.kindExplicit && previous?.kindExplicit === false} THEN ${p.kind} ELSE type END,
@@ -166,15 +179,28 @@ async function enrichEvent(tx: Tx, id: string, p: Proposition, previous: Record<
     scope = CASE WHEN ${!keepKnownScope && !!legacyScope(p)} THEN ${legacyScope(p)} ELSE scope END WHERE monitor_id = ${monitorId()} AND (id = ${id}) `;
 }
 
-async function findTarget(tx: Tx, p: Proposition, postAt: Date, postAuthor: string): Promise<{ target: EventRow | null; needsReview: boolean }> {
+async function verifiedCrossAuthorTarget(tx: Tx, eventId: string, postAt: Date, postAuthor: string, context: ContextInput[], sourceText: string): Promise<boolean> {
+  const sources = await tx<{ id: string; author: string; text: string; published_at: Date }[]>`
+    SELECT p.id,p.author,p.text,p.published_at FROM monitor_event_posts l JOIN monitor_posts p ON p.monitor_id=l.monitor_id AND p.id=l.post_id
+    WHERE l.monitor_id=${monitorId()} AND l.event_id=${eventId} AND p.published_at<=${postAt}`;
+  return sources.some(source => source.author.toLowerCase() === postAuthor.toLowerCase()
+    || context.some(c => c.id === source.id && isAuthor(c.author) && c.author.replace(/^@/, "").toLowerCase() === source.author.toLowerCase()
+      && c.text === source.text && c.publishedAt && Date.parse(c.publishedAt) === source.published_at.getTime())
+    || new RegExp(`https?://(?:www\\.)?(?:x|twitter)\\.com/(?:[A-Za-z0-9_]+|i)/status/${source.id}(?:[?/#\\s]|$)`, "i").test(sourceText));
+}
+
+async function findTarget(tx: Tx, p: Proposition, postAt: Date, postAuthor: string, context: ContextInput[], sourceText: string): Promise<{ target: EventRow | null; needsReview: boolean }> {
   if (p.relatesTo) {
     const [e] = await tx<EventRow[]>`SELECT id, type, status, schedule, presentation, created_at FROM (SELECT * FROM monitor_events WHERE monitor_id = ${monitorId()}) AS monitor_events WHERE id = ${p.relatesTo} AND NOT withdrawn`;
     // "The second reset has landed" can complete its explicitly named announcement.
     // A new announcement or a further reset after completion is independent of the named old round.
     if (e && p.count === 1 && newRound(p.excerpt) && (p.action === "announce" || p.action === "confirm" && e.status === "confirmed")) return { target: null, needsReview: false };
     const kindCompatible = e && (e.type === p.kind || e.type !== "bonus_credit" && p.kind !== "bonus_credit" && (!p.kindExplicit || e.presentation?.kindExplicit === false));
-    if (e && kindCompatible && e.created_at <= postAt && !eventScopeConflicts(e, p) && (p.action === "amend"
-      || !scopeConflicts(e.presentation?.scopeLabel as string | null, propositionScope(p)) && !quotaConflicts(e.presentation?.quotaScope, p))) return { target: e, needsReview: false };
+    if (e && kindCompatible && e.created_at <= postAt && !eventProductConflicts(e, p) && (p.action === "amend"
+      || !eventScopeConflicts(e, p) && !scopeConflicts(e.presentation?.scopeLabel as string | null, propositionScope(p)) && !quotaConflicts(e.presentation?.quotaScope, p))) {
+      if (currentMonitor().requireCrossAuthorEvidence && !await verifiedCrossAuthorTarget(tx, e.id, postAt, postAuthor, context, sourceText)) return { target: null, needsReview: true };
+      return { target: e, needsReview: false };
+    }
     return { target: null, needsReview: true };
   }
   if (p.action === "announce") return { target: null, needsReview: false };
@@ -188,13 +214,10 @@ async function findTarget(tx: Tx, p: Proposition, postAt: Date, postAuthor: stri
     ORDER BY created_at DESC`;
   const eligible = rows.filter((e) => isOpen(e, postAt, 12 * HOUR) && !scopeConflicts(e.presentation?.scopeLabel as string | null, propositionScope(p)) && !quotaConflicts(e.presentation?.quotaScope, p) && !eventScopeConflicts(e, p));
   if (eligible.length === 1 && currentMonitor().requireCrossAuthorEvidence) {
-    const [sameAuthor] = await tx`SELECT 1 FROM monitor_event_posts ep
-      JOIN monitor_posts p ON p.monitor_id = ep.monitor_id AND p.id = ep.post_id
-      WHERE ep.monitor_id = ${monitorId()} AND ep.event_id = ${eligible[0]!.id} AND lower(p.author) = ${postAuthor.toLowerCase()} LIMIT 1`;
-    if (!sameAuthor) return { target: null, needsReview: true };
+    if (!await verifiedCrossAuthorTarget(tx, eligible[0]!.id, postAt, postAuthor, context, sourceText)) return { target: null, needsReview: true };
   }
   return { target: eligible.length === 1 ? eligible[0]! : null, needsReview: eligible.length > 1
-    || eligible.length === 0 && rows.some((e) => isOpen(e, postAt, 12 * HOUR) && eventScopeConflicts(e, p)) };
+    || eligible.length === 0 && rows.some((e) => isOpen(e, postAt, 12 * HOUR) && eventProductConflicts(e, p)) };
 }
 
 /** Text compared loosely: case, quotes, dashes, links, emoji and spacing aside. */
@@ -224,7 +247,7 @@ async function link(tx: Tx, eventId: string, postId: string, p: Proposition) {
     ON CONFLICT (monitor_id, event_id, post_id) DO UPDATE SET stage = EXCLUDED.stage, action = EXCLUDED.action, text = EXCLUDED.text, original_text = EXCLUDED.original_text`;
 }
 
-async function createEvent(tx: Tx, p: Proposition, postId: string, index: number, postAt: Date, status: "announced" | "confirmed", context: ContextInput[], sourceText: string, extra: Record<string, unknown> = {}, nth = 1) {
+async function createEvent(tx: Tx, p: Proposition, postId: string, index: number, postAt: Date, status: "announced" | "confirmed", context: ContextInput[], sourceText: string, author: string, extra: Record<string, unknown> = {}, nth = 1) {
   // Event ids: <kind>-<creating post>-<proposition #>-<reset # within it> ("reset twice" makes -1-1 and -1-2).
   const id = `${p.kind === "bonus_credit" ? "bonus" : p.kind === "reset_credit" ? "banked" : "reset"}-${postId}-${index + 1}-${nth}`;
   const stated = usableTime(p, postAt, context, sourceText);
@@ -234,7 +257,7 @@ async function createEvent(tx: Tx, p: Proposition, postId: string, index: number
     INSERT INTO monitor_events (monitor_id, id, type, status, title, scope, label, display_label, schedule, estimate, presentation, confirmed_at, confirmation_basis, created_at, updated_at)
     VALUES (${monitorId()}, ${id}, ${p.kind}, ${status}, '', ${legacyScope(p)}, ${eventLabel(p.kind)},
             ${p.kindExplicit ? eventDisplayLabel(p.kind) : "重置（形式未明确）"},
-            ${schedule ? tx.json(schedule as never) : null}, ${estimate ? tx.json(estimate as never) : null}, ${tx.json(presentationOf(p, extra) as never)},
+            ${schedule ? tx.json(schedule as never) : null}, ${estimate ? tx.json(estimate as never) : null}, ${tx.json(presentationOf(p, author, extra) as never)},
             ${status === "confirmed" ? postAt : null}, ${status === "confirmed" ? "source_post" : null}, ${postAt}, ${postAt})
     ON CONFLICT (monitor_id, id) DO NOTHING`;
   return id;
@@ -251,6 +274,7 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
       SELECT author, published_at, text, raw, context, processed_at FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE id = ${postId} FOR UPDATE`;
     if (!post) throw new Error(`monitor post ${postId} not found`);
     if (post.processed_at) return { eventIds: [], notify: [] };
+    return withAuthorTime(post.author, async () => {
     const postAt = post.published_at;
     const originalContext: ContextInput[] = post.raw?.context ?? post.context.map((c) => ({ id: String(c.id), author: String(c.author), relation: c.relation as ContextInput["relation"], text: String(c.originalText ?? ""), publishedAt: typeof c.publishedAt === "string" ? c.publishedAt : null }));
     const modelResult = structuredClone(rec);
@@ -375,7 +399,7 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
         const stated = usableTime(p, postAt, originalContext, post.text);
         if (!stated || scheduleFrom(stated).label === here.label) continue;
       }
-        const resolution = await findTarget(tx, p, postAt, post.author);
+        const resolution = await findTarget(tx, p, postAt, post.author, originalContext, post.text);
       if (resolution.needsReview) { held.push(p); reasons.set(p, p.relatesTo ? "指定关联事件不存在或与明确事实冲突" : "存在多个可能的关联事件"); continue; }
       const target = resolution.target;
       // A single event id cannot identify every round in a multi-round statement.
@@ -401,15 +425,15 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
           if (stated && target.status === "announced") {
             const schedule = scheduleFrom(stated);
             const estimate = p.kind === "bonus_credit" ? null : estimateFor({ schedule, announcedAt: postAt, model: p.expectedLanding });
-            await tx`UPDATE monitor_events SET schedule = ${tx.json(schedule as never)}, estimate = ${tx.json(estimate as never)}, updated_at = ${postAt} WHERE monitor_id = ${monitorId()} AND (id = ${eventId}) `;
+            await tx`UPDATE monitor_events SET schedule = ${tx.json(schedule as never)}, estimate = ${tx.json(estimate as never)}, presentation = coalesce(presentation, '{}'::jsonb) || ${tx.json({ timePolicy: p.kind === "bonus_credit" ? "explicit" : authorTimePolicy(), timeAuthor: post.author })}, updated_at = ${postAt} WHERE monitor_id = ${monitorId()} AND (id = ${eventId}) `;
             if (schedule.label !== target.schedule?.label) applied.notify.push({ eventId, action: "amend", postId });
           }
         } else {
-          eventId = await createEvent(tx, p, postId, index, postAt, "announced", originalContext, post.text);
+          eventId = await createEvent(tx, p, postId, index, postAt, "announced", originalContext, post.text, post.author);
           createdHere.set(p.kind, { id: eventId, label: labelOf(p, postAt, originalContext, post.text), claim: p });
           applied.notify.push({ eventId, action: "announce", postId });
           for (let nth = 2; nth <= p.count; nth++) {
-            const extraId = await createEvent(tx, p, postId, index, postAt, "announced", originalContext, post.text, {}, nth);
+            const extraId = await createEvent(tx, p, postId, index, postAt, "announced", originalContext, post.text, post.author, {}, nth);
             await link(tx, extraId, postId, p);
             applied.eventIds.push(extraId);
           }
@@ -422,10 +446,10 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
           const stated = usableTime(p, postAt, originalContext, post.text);
           if (stated && target.status === "announced") {
             const schedule = scheduleFrom(stated);
-            await tx`UPDATE monitor_events SET schedule = ${tx.json(schedule as never)}, estimate = ${p.kind === "bonus_credit" ? null : tx.json(estimateFor({ schedule, announcedAt: postAt, model: p.expectedLanding }) as never)} WHERE monitor_id = ${monitorId()} AND (id = ${eventId}) `;
+            await tx`UPDATE monitor_events SET schedule = ${tx.json(schedule as never)}, estimate = ${p.kind === "bonus_credit" ? null : tx.json(estimateFor({ schedule, announcedAt: postAt, model: p.expectedLanding }) as never)}, presentation = coalesce(presentation, '{}'::jsonb) || ${tx.json({ timePolicy: p.kind === "bonus_credit" ? "explicit" : authorTimePolicy(), timeAuthor: post.author })} WHERE monitor_id = ${monitorId()} AND (id = ${eventId}) `;
           }
         } else {
-          eventId = await createEvent(tx, p, postId, index, postAt, "announced", originalContext, post.text, { inProgress: true, reportedAt: postAt.toISOString() });
+          eventId = await createEvent(tx, p, postId, index, postAt, "announced", originalContext, post.text, post.author, { inProgress: true, reportedAt: postAt.toISOString() });
           createdHere.set(p.kind, { id: eventId, label: labelOf(p, postAt, originalContext, post.text), claim: p });
           applied.notify.push({ eventId, action: "announce", postId });
         }
@@ -446,11 +470,11 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
             WHERE monitor_id = ${monitorId()} AND (id = ${eventId} AND status = 'announced') `;
           if (updated.count) applied.notify.push({ eventId, action: "confirm", postId });
         } else {
-          eventId = await createEvent(tx, p, postId, index, postAt, "confirmed", originalContext, post.text);
+          eventId = await createEvent(tx, p, postId, index, postAt, "confirmed", originalContext, post.text, post.author);
           applied.notify.push({ eventId, action: "confirm", postId });
           // "We reset twice" with nothing announced: each stated round is a confirmed reset of its own.
           for (let nth = 2; nth <= p.count; nth++) {
-            const extraId = await createEvent(tx, p, postId, index, postAt, "confirmed", originalContext, post.text, {}, nth);
+            const extraId = await createEvent(tx, p, postId, index, postAt, "confirmed", originalContext, post.text, post.author, {}, nth);
             await link(tx, extraId, postId, p);
             applied.eventIds.push(extraId);
           }
@@ -471,7 +495,7 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
         if (stated && target.status === "announced") {
           const schedule = scheduleFrom(stated);
           timeChanged = schedule.label !== target.schedule?.label;
-          await tx`UPDATE monitor_events SET schedule = ${tx.json(schedule as never)}, estimate = ${p.kind === "bonus_credit" ? null : tx.json(estimateFor({ schedule, announcedAt: postAt, model: p.expectedLanding }) as never)} WHERE monitor_id = ${monitorId()} AND (id = ${eventId}) `;
+          await tx`UPDATE monitor_events SET schedule = ${tx.json(schedule as never)}, estimate = ${p.kind === "bonus_credit" ? null : tx.json(estimateFor({ schedule, announcedAt: postAt, model: p.expectedLanding }) as never)}, presentation = coalesce(presentation, '{}'::jsonb) || ${tx.json({ timePolicy: p.kind === "bonus_credit" ? "explicit" : authorTimePolicy(), timeAuthor: post.author })} WHERE monitor_id = ${monitorId()} AND (id = ${eventId}) `;
         }
         // Readers who were told of the announcement hear of a new time or a different audience.
         const bonusChanged = p.kind === "bonus_credit" && p.bonusCredit && Object.entries(p.bonusCredit).some(([key, value]) =>
@@ -525,5 +549,6 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
       ON CONFLICT (monitor_id, key) DO UPDATE SET value = excluded.value`;
 
     return applied;
+    });
   });
 }

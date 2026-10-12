@@ -123,13 +123,16 @@ test("normal scanning and daily lookback cannot run concurrently", async () => {
 
 for (const lookbackHours of [undefined, 24]) test(`a ${lookbackHours ? "lookback" : "first scan"} finishes all pages within one round`, async () => {
   const ids = Array.from({ length: 12 }, (_, i) => String(8000000000000000100n - BigInt(i)));
+  // Provider results belong to the requested window, rather than being timestamped
+  // after the scan started as each asynchronous page response is generated.
+  const latestPostAt = Date.now() - 60_000;
   const queries: string[] = [];
   answer = (url) => {
     const params = new URL(url, provider.url).searchParams;
     const page = Number(params.get("cursor") ?? 0);
     queries.push(params.get("query")!);
     const since = Number(params.get("query")?.match(/since_time:(\d+)/)?.[1] ?? 0) * 1000;
-    const available = ids.map((id, i) => ({ id, at: Date.now() - i * 3600_000 })).filter((p) => p.at >= since);
+    const available = ids.map((id, i) => ({ id, at: latestPostAt - i * 3600_000 })).filter((p) => p.at >= since);
     const post = available[page];
     return { tweets: post ? [{ id_str: post.id, tweet_created_at: new Date(post.at).toISOString(), full_text: "hello", user: { screen_name: "thsottiaux" } }] : [], next_cursor: page + 1 < available.length ? String(page + 1) : null };
   };
@@ -155,10 +158,11 @@ test("page failure saves previous pages and aborts before context or recognition
   const checkpoint = { checkpointVersion: 2, scannedThrough: "2026-09-20T00:00:00.000Z" };
   await state("cursor:socialdata", checkpoint);
   let requests = 0;
+  const postAt = new Date(Date.now() - 60_000).toISOString();
   answer = url => {
     requests++;
     return new URL(url, provider.url).searchParams.has("cursor") ? new Reply(503, { error: "page two failed" }) : {
-      tweets: [{ id_str: "1001", tweet_created_at: new Date().toISOString(), full_text: "We will reset tonight", user: { screen_name: "thsottiaux" }, in_reply_to_status_id_str: "1000" }], next_cursor: "second",
+      tweets: [{ id_str: "1001", tweet_created_at: postAt, full_text: "We will reset tonight", user: { screen_name: "thsottiaux" }, in_reply_to_status_id_str: "1000" }], next_cursor: "second",
     };
   };
   const hits = model.hits();
@@ -172,7 +176,8 @@ test("page failure saves previous pages and aborts before context or recognition
 test("context failure aborts before recognition without advancing success coverage", async () => {
   const checkpoint = { checkpointVersion: 2, scannedThrough: "2026-09-20T00:00:00.000Z" };
   await state("cursor:socialdata", checkpoint);
-  answer = url => url.includes("/search") ? { tweets: [{ id_str: "1001", tweet_created_at: new Date().toISOString(), full_text: "We will reset tonight", user: { screen_name: "thsottiaux" }, in_reply_to_status_id_str: "1000" }] }
+  const postAt = new Date(Date.now() - 60_000).toISOString();
+  answer = url => url.includes("/search") ? { tweets: [{ id_str: "1001", tweet_created_at: postAt, full_text: "We will reset tonight", user: { screen_name: "thsottiaux" }, in_reply_to_status_id_str: "1000" }] }
     : new Reply(503, { error: "context unavailable" });
   const hits = model.hits();
   await assert.rejects(monitorTick(), /503/);

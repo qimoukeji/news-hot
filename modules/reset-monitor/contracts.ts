@@ -55,6 +55,7 @@ export interface ResetMonitorEvent {
     scopeLabel: string | null;
     kindExplicit: boolean;
     timeInferred: boolean;
+    timePolicy?: "predicted" | "explicit";
     audienceZh: string | null;
     productsZh: string | null;
     quotaScope?: string | null;
@@ -96,6 +97,8 @@ export interface ResetMonitorMonitor {
   lastVerifiedAt: string | null;
   pendingCount: number;
   reviewCount: number;
+  authors?: Array<{ handle: string; name: string; collectedSince: string | null }>;
+  scopeEffectiveAt?: string | null;
 }
 
 export interface ResetMonitorOutage {
@@ -218,7 +221,7 @@ export interface AdminMonitorPost {
   relevant: boolean | null;
   outage: unknown;
   links: Array<{ eventId: string; stage: string }>;
-  manual_review?: { by: string; at: string; reason: string; decision: AdminMonitorReviewDraft["decision"] } | null;
+  manual_review?: { by: string; at: string; reason: string; decision: AdminMonitorReviewDraft["decision"]; completed?: boolean } | null;
 }
 
 export interface AdminMonitorPosts extends AdminMonitorPagination {

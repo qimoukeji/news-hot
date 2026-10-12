@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, authorHandles, authorNameFor, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
 // The public snapshot and monitor page read the
 // same events. Announcement, in-progress, confirmation and "should have landed" stay distinct;
 // passing an announced time never turns into a confirmation.
@@ -9,6 +9,7 @@ import { sql, type Db } from "@aihot/backend/db";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
 import { proxiedImage } from "@aihot/backend/media/imgproxy";
 import { siteUrl } from "@aihot/backend/publication/links";
+import { collectionCoverageKey, CollectionCoverage } from "./collection-coverage.ts";
 
 export const monitorPageUrl = () => siteUrl(currentMonitor().pagePath);
 /** After the estimated window passes: "expired_unconfirmed" first, then "likely_completed". */
@@ -36,7 +37,7 @@ interface EventRow {
   display_label: string;
   schedule: { precision: string; from: string; through: string; label: string } | null;
   estimate: { from: string; through: string; basis: string; label: string; reason: string } | null;
-  presentation: { scopeKnown: boolean; scopeLabel: string | null; kindExplicit: boolean; timeInferred: boolean; audienceZh: string | null; productsZh: string | null; quotaScope?: string | null; reportedAt: string | null; inProgress?: boolean; bonusCredit?: ResetMonitorBonusCredit | null } | null;
+  presentation: { scopeKnown: boolean; scopeLabel: string | null; kindExplicit: boolean; timeInferred: boolean; timePolicy?: "explicit" | "predicted"; audienceZh: string | null; productsZh: string | null; quotaScope?: string | null; reportedAt: string | null; inProgress?: boolean; bonusCredit?: ResetMonitorBonusCredit | null } | null;
   confirmed_at: Date | null;
   occurred_on: Date | null;
   confirmation_basis: "source_post" | "receipt_review" | null;
@@ -83,7 +84,7 @@ export function presentationStatus(e: Pick<EventRow, "status" | "estimate" | "sc
   if (e.status === "confirmed") return "confirmed";
   const window = e.estimate ?? e.schedule;
   const through = window ? Date.parse(window.through) : null;
-  if (through !== null && now >= through) return currentMonitor().timePolicy === "explicit" || now < through + LIKELY_COMPLETED_AFTER_MS ? "expired_unconfirmed" : "likely_completed";
+  if (through !== null && now >= through) return (e.presentation?.timePolicy ?? currentMonitor().timePolicy) === "explicit" || now < through + LIKELY_COMPLETED_AFTER_MS ? "expired_unconfirmed" : "likely_completed";
   return e.presentation?.inProgress ? "in_progress" : "announced";
 }
 
@@ -91,18 +92,19 @@ export function presentationStatus(e: Pick<EventRow, "status" | "estimate" | "sc
  * Titles follow the event's state, so an announcement that should have landed says so, and a reset
  * confirmed only by an account check does not read as the monitored author's own confirmation.
  */
-export function eventTitle(type: EventRow["type"], status: EventRow["status"], shown: PresentationStatus, kindExplicit: boolean, basis: EventRow["confirmation_basis"] = null): string {
-  if (type === "bonus_credit") return shown === "expired" ? "奖励额度已到期" : shown === "claim_closed" ? "奖励额度领取已截止" : status === "confirmed" ? basis === "source_post" ? "奖励额度活动可领取" : "奖励活动确认依据待核实" : `${currentMonitor().authorName} 预告奖励额度活动`;
+export function eventTitle(type: EventRow["type"], status: EventRow["status"], shown: PresentationStatus, kindExplicit: boolean, basis: EventRow["confirmation_basis"] = null, author?: string): string {
+  const name = author ? authorNameFor(author) : "官方";
+  if (type === "bonus_credit") return shown === "expired" ? "奖励额度已到期" : shown === "claim_closed" ? "奖励额度领取已截止" : status === "confirmed" ? basis === "source_post" ? "奖励额度活动可领取" : "奖励活动确认依据待核实" : `${name} 预告奖励额度活动`;
   const credit = type === "reset_credit";
   if (status === "confirmed") {
     if (!basis) return credit ? "重置卡确认依据待核实" : "额度重置确认依据待核实";
     if (credit) return "重置卡已发放";
     if (basis === "receipt_review") return "额度重置已核实到账";
-    return kindExplicit ? `${currentMonitor().product} 额度重置已完成` : `${currentMonitor().authorName} 确认重置`;
+    return kindExplicit ? `${currentMonitor().product} 额度重置已完成` : `${name} 确认重置`;
   }
   if (shown === "likely_completed") return credit ? "重置卡应已发放" : "额度应已重置";
   if (shown === "in_progress") return credit ? "重置卡正在发放" : "额度重置进行中";
-  return credit ? `${currentMonitor().authorName} 预告将发放重置卡` : `${currentMonitor().authorName} 预告将重置额度`;
+  return credit ? `${name} 预告将发放重置卡` : `${name} 预告将重置额度`;
 }
 
 /**
@@ -117,9 +119,9 @@ export function awaitingReviewCondition() {
 
 async function loadHealth(db: Db = sql) {
   const state = new Map((await db<{ key: string; value: any }[]>`
-    SELECT key, value FROM (SELECT * FROM monitor_state WHERE monitor_id = ${monitorId()}) AS monitor_state WHERE key IN (${watermarksKey()}, 'publication_revision')`).map((r) => [r.key === watermarksKey() ? "watermarks" : r.key, r.value]));
+    SELECT key, value FROM (SELECT * FROM monitor_state WHERE monitor_id = ${monitorId()}) AS monitor_state WHERE key IN (${watermarksKey()}, 'publication_revision', ${collectionCoverageKey()})`).map((r) => [r.key === watermarksKey() ? "watermarks" : r.key, r.value]));
   const [counts] = await db<{ pending: number; review: number; first_post: Date | null }[]>`
-    SELECT count(*) FILTER (WHERE processed_at IS NULL) AS pending, count(*) FILTER (WHERE ${awaitingReviewCondition()}) AS review, min(published_at) AS first_post
+    SELECT count(*) FILTER (WHERE processed_at IS NULL AND lower(author)=ANY(${authorHandles()}::text[])) AS pending, count(*) FILTER (WHERE ${awaitingReviewCondition()}) AS review, min(published_at) AS first_post
     FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts`;
   state.set("history", { from: counts?.first_post?.toISOString() ?? null });
   return { state, counts: counts ?? { pending: 0, review: 0 } };
@@ -155,6 +157,7 @@ function eventJson(e: EventRow, links: LinkRow[], posts: Map<string, PostRow>, n
         scopeLabel: p.scopeLabel,
         kindExplicit: p.kindExplicit,
         timeInferred: p.timeInferred,
+        ...(p.timePolicy ? { timePolicy: p.timePolicy } : {}),
         audienceZh: p.audienceZh,
         productsZh: p.productsZh,
         ...(p.quotaScope !== undefined ? { quotaScope: p.quotaScope } : {}),
@@ -192,7 +195,7 @@ function eventJson(e: EventRow, links: LinkRow[], posts: Map<string, PostRow>, n
     presentation,
     estimate: e.type === "bonus_credit" || e.status === "confirmed" ? null : estimate,
     status: e.status,
-    title: eventTitle(e.type, e.status, status, p?.kindExplicit ?? true, e.confirmation_basis),
+    title: eventTitle(e.type, e.status, status, p?.kindExplicit ?? true, e.confirmation_basis, eventPosts[0]?.author),
     scope: e.scope,
     createdAt: bjIso(e.created_at),
     updatedAt: bjIso(e.updated_at),
@@ -216,6 +219,7 @@ function monitorJson(state: Map<string, any>, counts: { pending: number; review:
   if (!w) return null;
   const verified = w.lastVerifiedAt ? Date.parse(w.lastVerifiedAt) : NaN;
   const age = now - verified;
+  const coverage = state.has(collectionCoverageKey()) ? CollectionCoverage.parse(state.get(collectionCoverageKey())) : null;
   // Unresolved work outranks a fresh check: a held window or a post waiting for a person needs
   // attention, a post not yet processed means the picture is delayed.
   const status: ResetMonitorMonitor["status"] = !Number.isFinite(verified) ? "unknown"
@@ -228,6 +232,9 @@ function monitorJson(state: Map<string, any>, counts: { pending: number; review:
     lastVerifiedAt: bjIso(w.lastVerifiedAt),
     pendingCount: Number(counts.pending),
     reviewCount: Number(counts.review),
+    authors: currentMonitor().authors.map(author => ({ handle: author.handle, name: author.name,
+      collectedSince: bjIso(coverage?.authors.find(a => a.handle.toLowerCase() === author.handle.toLowerCase())?.collectedSince) })),
+    scopeEffectiveAt: bjIso(coverage?.scopeEffectiveAt),
   };
 }
 
@@ -319,7 +326,7 @@ async function snapshotWithRevision(now: number, from?: number): Promise<{ snaps
 type CalendarMark = ResetMonitorCalendarMark;
 
 function versionHash(events: Array<[string, string | null, PresentationStatus | undefined]>, outage: string | null, monitor: ResetMonitorMonitor | null, revision: unknown): string {
-  const health = monitor && [monitor.status, monitor.pendingCount, monitor.reviewCount];
+  const health = monitor && [monitor.status, monitor.pendingCount, monitor.reviewCount, monitor.authors, monitor.scopeEffectiveAt];
   return sha256(stableJson({ events, outage, health, revision: revision ?? null, scanMinutes: scanMinutes() })).slice(0, 16);
 }
 

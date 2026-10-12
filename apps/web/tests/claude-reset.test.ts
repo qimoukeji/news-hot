@@ -17,6 +17,8 @@ const requests: string[] = [];
 const writes: Array<{ path: string; body: any; csrf?: string }> = [];
 let web: WebServer;
 let browser: Browser;
+let codexExplicitFixture = false;
+let codexAmendedConfirmationFixture = false;
 
 function publicEvent(product: string): ResetMonitorEvent {
   return {
@@ -35,12 +37,34 @@ function sitePage(product: string): ResetMonitorSitePage {
   const bonus: ResetMonitorEvent = { ...event, id: "grok-reward", type: "bonus_credit", status: "confirmed", confirmedAt: at, confirmationBasis: "source_post",
     presentation: { ...event.presentation!, productsZh: "Grok 普通额度", status: "available", bonusCredit: { amount: "one-time bonus credits", eligibility: null, claimMethod: null, claimDeadline: null, expiresAt: null } },
     posts: [{ ...event.posts[0]!, id: "grok-post", author: "grok", text: "奖励额度现在可以领取。", url: "https://x.com/grok/status/grok-post" }] };
+  if (product === "Codex" && codexExplicitFixture) {
+    event.posts[0]!.author = "NewOfficial";
+    event.presentation!.timePolicy = "explicit";
+    event.schedule = { precision: "exact", from: "2026-10-10T18:00:00+08:00", through: "2026-10-10T18:00:00+08:00", label: "北京时间 18:00" };
+    event.estimate = { from: "2026-10-11T08:00:00+08:00", through: "2026-10-11T12:00:00+08:00", basis: "author_habit", label: "旧预计窗口", reason: "不能向其他作者套用的惯例" };
+    bonus.id = "codex-reward";
+    bonus.presentation!.productsZh = "Codex";
+    bonus.presentation!.timePolicy = "explicit";
+    bonus.posts[0]!.author = "NewOfficial";
+  }
+  if (product === "Codex" && codexAmendedConfirmationFixture) {
+    const confirmation = { ...event.posts[0]!, stage: "确认", text: "额度已重置。" };
+    event.status = "confirmed";
+    event.presentation!.status = "confirmed";
+    event.confirmedAt = at;
+    event.confirmationBasis = "source_post";
+    event.posts = [{ ...confirmation, id: "amend-post", author: "NewOfficial", publishedAt: "2026-10-10T17:00:00+08:00", stage: "补充", text: "此次重置适用于 Pro、Max。" }, confirmation];
+  }
+  const hasBonus = product === "Grok" || (product === "Codex" && codexExplicitFixture);
   return {
     schemaVersion: 1, timezone: "Asia/Shanghai", today, checkedAt: at, historyFrom: "2026-10-09T00:00:00+08:00",
-    count: product === "Grok" ? 2 : 1, events: product === "Grok" ? [event, bonus] : [event], monitor: null, outage: null, scanMinutes: 15, current: event, lastLanded: null,
-    ...(product === "Grok" ? { activeBonuses: [bonus] } : {}),
+    count: hasBonus ? 2 : 1, events: hasBonus ? [event, bonus] : [event], monitor: product === "Codex" && codexExplicitFixture ? {
+      status: "healthy", lastAttemptAt: at, lastCollectedAt: at, lastVerifiedAt: at, pendingCount: 0, reviewCount: 0,
+      authors: [{ handle: "thsottiaux", name: "Tibo", collectedSince: null }, { handle: "NewOfficial", name: "New Official", collectedSince: at }], scopeEffectiveAt: at,
+    } : null, outage: null, scanMinutes: 15, current: event, lastLanded: null,
+    ...(hasBonus ? { activeBonuses: [bonus] } : {}),
     authorAvatar: null, stats: { resets90: 0, credits90: 0, bonuses90: 0, medianIntervalDays: null, lastResetDate: null },
-    calendar: [today, "2026-10-09"].map(date => ({ date, eventId, type: "direct_reset", state: "pending", label: "等待生效" })),
+    calendar: [today, "2026-10-09"].map(date => ({ date, eventId, type: "direct_reset", state: event.status === "confirmed" ? "confirmed" : "pending", label: event.status === "confirmed" ? "已确认重置" : "等待生效" })),
     confirmMinutes: [], version: `${product}-v1`, selectedDate: today,
   };
 }
@@ -85,6 +109,45 @@ const api = createServer(async (req, res) => {
   }
   res.statusCode = 404;
   send({ code: "not_found" });
+});
+
+test("Codex displays explicit author time, rewards and collection coverage independently of Tibo policy", async () => {
+  codexExplicitFixture = true;
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${web.origin}/codex-reset`);
+    await expect(page.getByText("原帖时间 今天 18:00", { exact: true }).first()).toBeVisible();
+    await expect(page.locator("article header strong").first()).toHaveText("New Official");
+    await expect(page.getByText("监控账号：Tibo（@thsottiaux）、New Official（@NewOfficial）", { exact: true })).toBeVisible();
+    await expect(page.getByText("奖励额度活动", { exact: true })).toBeVisible();
+    await expect(page.getByText("活动可领取", { exact: true }).first()).toBeVisible();
+    await page.getByText("监控正常", { exact: false }).click();
+    await expect(page.getByText("@thsottiaux：历史采集起点未记录", { exact: true })).toBeVisible();
+    await expect(page.getByText("@NewOfficial：2026-10-10 16:00 起采集，不包含此前历史", { exact: true })).toBeVisible();
+    await expect(page.getByText("采集范围自 2026-10-10 16:00 生效，不自动补采此前历史", { exact: true })).toBeVisible();
+    const text = await page.locator("body").innerText();
+    assert.equal(text.includes("不能向其他作者套用的惯例"), false);
+    assert.equal(text.includes("应已生效（按预计时间，未见确认帖）"), false);
+    assert.equal(text.includes("预计 今天 18:00"), false);
+    assert.ok(text.includes("额度重置、重置卡与奖励额度"));
+  } finally { codexExplicitFixture = false; await page.close(); }
+});
+
+test("calendar keeps official confirmation and its time when another author adds the latest amendment", async () => {
+  codexAmendedConfirmationFixture = true;
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${web.origin}/codex-reset`);
+    const calendar = page.locator('section[aria-labelledby="calendar-title"]');
+    const detail = calendar.locator("aside");
+    await expect(detail.getByText("官方已确认", { exact: true })).toBeVisible();
+    await expect(detail.getByText("确认帖 10/10 16:00", { exact: false })).toBeVisible();
+    await expect(calendar.locator(`[data-day="${today}"]`)).toHaveAttribute("aria-label", `${today}，今天，已确认重置`);
+    await expect(detail.locator("article header small").first()).toHaveText("@NewOfficial");
+    await expect(detail.getByText("@NewOfficial 已确认", { exact: true })).toHaveCount(0);
+    await detail.getByRole("button", { name: "另有 1 条相关原帖", exact: false }).click();
+    await expect(detail.locator("article header small").last()).toHaveText("@thsottiaux");
+  } finally { codexAmendedConfirmationFixture = false; await page.close(); }
 });
 
 before(async () => {

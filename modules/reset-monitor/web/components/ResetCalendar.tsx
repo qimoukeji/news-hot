@@ -4,7 +4,7 @@ import type { ResetMonitorCalendarMark, ResetMonitorEvent, ResetMonitorDay } fro
 import { addDays } from "@aihot/contracts/time";
 import { IconChevronRight } from "@aihot/web/components/icons";
 import { PostCard } from "./PostCard";
-import { bjDate, bonusStatus, dayWord, durationText, stamp, windowText } from "./format";
+import { bjDate, bonusStatus, dayWord, durationText, eventTimePolicy, stamp, windowText } from "./format";
 import { BonusCreditDetails } from "./BonusCreditDetails";
 import { quotaScopeLabel } from "../../quota-scope.ts";
 import { monthDay } from "@aihot/web/lib/format";
@@ -45,21 +45,23 @@ function gridDays(month: string): string[] {
   return days.slice(35).every((d) => monthOf(d) !== month) ? days.slice(0, 35) : days;
 }
 
-function statusChip(e: ResetMonitorEvent, now: number, authorName: string, timePolicy: "predicted" | "explicit") {
+function statusChip(e: ResetMonitorEvent, now: number, timePolicy: "predicted" | "explicit") {
   const s = e.presentation?.status ?? (e.status === "confirmed" ? "confirmed" : "announced");
   if (e.type === "bonus_credit") return { text: bonusStatus(s), tone: s === "available" ? "text-ok-ink" : "text-amber-ink" };
-  if (s === "confirmed") return { text: e.confirmationBasis === "receipt_review" ? "已核实到账" : e.confirmationBasis === "source_post" ? `${authorName} 已确认` : "确认依据缺失", tone: e.confirmationBasis ? "text-ok-ink" : "text-amber-ink" };
+  if (s === "confirmed") return { text: e.confirmationBasis === "receipt_review" ? "已核实到账" : e.confirmationBasis === "source_post" ? "官方已确认" : "确认依据缺失", tone: e.confirmationBasis ? "text-ok-ink" : "text-amber-ink" };
   if (s === "likely_completed") return timePolicy === "predicted" ? { text: "应已生效 · 未见确认帖", tone: "text-ok-ink" } : { text: "已过原帖时间 · 等待确认", tone: "text-amber-ink" };
   if (s === "expired_unconfirmed") {
-    const through = (e.estimate ?? e.schedule)?.through;
-    return { text: through ? `晚于预计 ${durationText(now - Date.parse(through))} · 等待确认` : "晚于预计 · 等待确认", tone: "text-amber-ink" };
+    const through = (timePolicy === "explicit" ? e.schedule : e.estimate ?? e.schedule)?.through;
+    const label = timePolicy === "predicted" ? "预计" : "原帖时间";
+    return { text: through ? `晚于${label} ${durationText(now - Date.parse(through))} · 等待确认` : `晚于${label} · 等待确认`, tone: "text-amber-ink" };
   }
   if (s === "in_progress") return { text: "正在发放", tone: "text-amber-ink" };
   return { text: "已宣布 · 等待生效", tone: "text-amber-ink" };
 }
 
 export function ResetCalendar({ marks, events, today, historyFrom, now, avatar, selectedDate, version }: { selectedDate: string; version: string; marks: ResetMonitorCalendarMark[]; events: ResetMonitorEvent[]; today: string; historyFrom: string | null; now: number; avatar: string | null }) {
-  const { pagePath, siteApiPath, authorName, product, timePolicy, eventKinds } = useMonitor();
+  const profile = useMonitor();
+  const { pagePath, siteApiPath, product, eventKinds } = profile;
   const bonuses = eventKinds.includes("bonus_credit");
   const latest = useMemo(() => [...marks].sort((a, b) => (a.date < b.date ? 1 : -1))[0]?.date ?? today, [marks, today]);
   const initial = selectedDate;
@@ -101,7 +103,7 @@ export function ResetCalendar({ marks, events, today, historyFrom, now, avatar, 
   const summary = [
     [inMonth.filter((m) => m.type === "direct_reset" && m.state === "confirmed").length, "次已确认额度重置"],
     [inMonth.filter((m) => m.type === "reset_credit" && m.state === "confirmed").length, "次已确认发重置卡"],
-    [timePolicy === "predicted" ? inMonth.filter((m) => m.state === "likely").length : 0, "次预计已生效"],
+    [inMonth.filter((m) => m.type !== "bonus_credit" && m.state === "likely").length, "次预计已生效"],
     [inMonth.filter((m) => m.type !== "bonus_credit" && m.state === "pending").length, "次等待生效"],
     [new Set(inMonth.filter((m) => m.type === "bonus_credit" && !m.milestone).map(m => m.eventId)).size, "次奖励活动"],
     [inMonth.filter((m) => m.milestone === "claim_deadline").length, "个领取截止日"],
@@ -129,7 +131,7 @@ export function ResetCalendar({ marks, events, today, historyFrom, now, avatar, 
       <h2 id="calendar-title" className="text-[18px] font-bold text-ink">
         {bonuses ? "额度日历" : "重置日历"}
       </h2>
-      <p className="mt-1 text-[12.5px] text-ink-3">点日期查看当天的{bonuses ? "重置、重置卡、奖励活动及截止和到期时间" : "重置、发卡"}和 {authorName} 原帖。</p>
+      <p className="mt-1 text-[12.5px] text-ink-3">点日期查看当天的{bonuses ? "重置、重置卡、奖励活动及截止和到期时间" : "重置、发卡"}和官方原帖。</p>
 
       <noscript><nav aria-label="历史重置记录">{[...new Set(marks.map((m) => m.date))].sort().reverse().map((d) => <a key={d} href={`${pagePath}/history/${d}`} className="mr-3 inline-block">{d}</a>)}</nav></noscript>
       <div className="mt-4 overflow-hidden rounded-card border border-line-strong bg-surface lg:grid lg:grid-cols-[minmax(0,1.2fr)_minmax(280px,1fr)] xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,1fr)]">
@@ -221,7 +223,7 @@ export function ResetCalendar({ marks, events, today, historyFrom, now, avatar, 
                 <span className="size-3 rounded-mark bg-cal-key-confirmed" aria-hidden="true" />
                 {bonuses ? "重置已生效 / 奖励活动可领取" : "已生效（官方确认或到账核实）"}
               </li>
-              {timePolicy === "predicted" && <li className="inline-flex items-center gap-1.5">
+              {marks.some(mark => mark.type !== "bonus_credit" && mark.state === "likely") && <li className="inline-flex items-center gap-1.5">
                 <span className="size-3 rounded-mark border border-dashed border-ok-ink" aria-hidden="true" />
                 应已生效（按预计时间，未见确认帖）
               </li>}
@@ -248,7 +250,8 @@ export function ResetCalendar({ marks, events, today, historyFrom, now, avatar, 
           {selectedMarks.map((m, i) => {
             const e = eventById.get(m.eventId);
             if (!e) return null;
-            const chip = statusChip(e, now, authorName, timePolicy);
+            const timePolicy = eventTimePolicy(e, profile);
+            const chip = statusChip(e, now, timePolicy);
             const window = timePolicy === "explicit" ? e.schedule : e.estimate ?? e.schedule;
             const post = e.posts[0];
             return (
@@ -278,7 +281,7 @@ export function ResetCalendar({ marks, events, today, historyFrom, now, avatar, 
                 {!window?.from && e.status !== "confirmed" && <p className="mb-1 text-[13px] text-ink-4">时间未说明</p>}
                 {window && e.status !== "confirmed" && (
                   <p className="mb-1 text-[13px] font-medium leading-[1.5] text-ink">
-                    <span className="num">预计 {windowText(window.from, window.through, today)}</span>
+                    <span className="num">{timePolicy === "predicted" ? "预计" : "原帖时间"} {windowText(window.from, window.through, today)}</span>
                     {timePolicy === "predicted" && e.estimate?.reason && <span className="mt-0.5 block text-[12.5px] font-normal leading-[1.6] text-ink-3">{e.estimate.reason}</span>}
                   </p>
                 )}

@@ -131,15 +131,15 @@ test("a repeated cursor across a restart aborts without advancing the saved page
   assert.equal((await sql`SELECT id FROM monitor_posts`).length, 1);
 });
 
-test("normal scans and lookbacks ignore initialization progress and restart their own pages", async () => {
+test("normal scans and lookbacks refuse unfinished initialization before another paid request", async () => {
   fail = "bot:original:next";
   await assert.rejects(scoped(() => collectPosts({ initialRange })), /402/);
   const saved = await progress(); fail = "";
   await sql`INSERT INTO monitor_state (monitor_id,key,value) VALUES ('grok','cursor:socialdata',${sql.json({ checkpointVersion: 2, scannedThrough: initialRange.since })})`;
   for (const options of [{}, { lookbackHours: 24 }]) {
     calls.length = 0;
-    assert.equal((await scoped(() => collectPosts(options))).pages, 8);
-    assert.equal(calls[0]!.cursor, null);
+    await assert.rejects(scoped(() => collectPosts(options)), /unfinished initialization/);
+    assert.equal(calls.length, 0);
     assert.deepEqual(await progress(), saved);
   }
 });

@@ -29,7 +29,7 @@ test("shared model receipts carry a bonus classification into scoped facts witho
   assert.equal(recognition.propositions[0]!.kind, "bonus_credit");
   assert.equal(recognition.model, "default");
   assert.match(requests[0]!.messages[0].content, /bonus_credit/);
-  assert.match(requests[0]!.messages[0].content, /不能借领取截止句的 PT/);
+  assert.match(requests[0]!.messages[0].content, /各句不能互借时区、年份/);
   assert.match(requests[0]!.messages[1].content, /one time bonus credit/);
   const applied = await inMonitor(backendDefinition, () => applyRecognition(cloudBonus.id, recognition));
   assert.equal(applied.eventIds.length, 1);

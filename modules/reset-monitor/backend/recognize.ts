@@ -6,6 +6,7 @@ import { SITE } from "@aihot/site";
 import { modelFor } from "@aihot/backend/editorial/models";
 import { chatJson, MODELS } from "@aihot/backend/providers/llm";
 import { pacificParts } from "./time.ts";
+import { authorTimePolicy } from "./context.ts";
 import type { ResetMonitorEventKind, ResetMonitorBonusCredit } from "../contracts.ts";
 
 
@@ -23,6 +24,7 @@ export interface OpenEventInput {
   kind: ResetMonitorEventKind;
   status: "announced" | "confirmed";
   firstPostAt: string;
+  firstPostAuthor?: string;
   excerpt: string;
   schedule: string | null;
   scope?: string | null;
@@ -93,22 +95,22 @@ export const RecognitionSchema = z.object({
 export type Recognition = z.infer<typeof RecognitionSchema> & { model: string; promptVersion: string; receiptId: number };
 export type Proposition = z.infer<typeof PropositionSchema>;
 
-function describeTime(iso: string): string {
-  if (currentMonitor().timePolicy === "explicit") return iso;
+function describeTime(iso: string, author?: string): string {
+  if (authorTimePolicy(author) === "explicit") return iso;
   const p = pacificParts(new Date(iso));
   return `${iso}（太平洋时间 ${p.date} ${p.hm}）`;
 }
 
 export async function recognizePost(input: { id: string; author?: string; text: string; publishedAt: string; context: ContextInput[]; openEvents: OpenEventInput[]; roundId?: string; resume?: boolean }): Promise<Recognition> {
   const lines = [
-    `帖子 ${input.id}，作者 @${input.author ?? currentMonitor().authors[0]!.handle}，发布于 ${describeTime(input.publishedAt)}：`,
+    `帖子 ${input.id}，作者 @${input.author ?? currentMonitor().authors[0]!.handle}，时间策略 ${authorTimePolicy(input.author)}，发布于 ${describeTime(input.publishedAt, input.author)}：`,
     input.text,
     "",
     input.context.length ? "上下文（按关系列出）：" : "上下文：无",
-    ...input.context.map((c) => `- [${c.relation === "quote" ? "被引用" : "被回复"}] ${c.id} @${c.author}${c.publishedAt ? `，${describeTime(c.publishedAt)}` : ""}：${c.text}`),
+    ...input.context.map((c) => `- [${c.relation === "quote" ? "被引用" : "被回复"}] ${c.id} @${c.author}${c.publishedAt ? `，${describeTime(c.publishedAt, c.author)}` : ""}：${c.text}`),
     "",
     input.openEvents.length ? "待关联事件（最近的已宣布或刚确认的事件）：" : "待关联事件：无",
-    ...input.openEvents.map((e) => `- ${e.id}｜${e.kind}｜${e.status}｜首帖 ${describeTime(e.firstPostAt)}｜${e.schedule ?? "未给时间"}｜对象 ${e.scope ?? "未说明"}｜产品 ${e.productsZh ?? "未说明"}｜“${e.excerpt}”${e.bonusCredit ? `｜奖励详情 ${JSON.stringify(e.bonusCredit)}` : ""}`),
+    ...input.openEvents.map((e) => `- ${e.id}｜${e.kind}｜${e.status}｜首帖${e.firstPostAuthor ? ` @${e.firstPostAuthor}` : ""} ${describeTime(e.firstPostAt, e.firstPostAuthor)}｜${e.schedule ?? "未给时间"}｜对象 ${e.scope ?? "未说明"}｜产品 ${e.productsZh ?? "未说明"}｜“${e.excerpt}”${e.bonusCredit ? `｜奖励详情 ${JSON.stringify(e.bonusCredit)}` : ""}`),
   ];
   const model = await modelFor("monitor");
   const spec = MODELS[model]!;
@@ -119,7 +121,7 @@ export async function recognizePost(input: { id: string; author?: string; text: 
     attemptTag: input.roundId,
     retryFailed: input.resume,
     promptVersion: currentMonitor().promptVersion,
-    system: currentMonitor().prompt,
+    system: currentMonitor().buildPrompt?.(currentMonitor()) ?? currentMonitor().prompt,
     user: lines.join("\n"),
     schema: RecognitionSchema,
     temperature: 0.1,

@@ -71,7 +71,8 @@ test("failed initialization keeps saved posts and establishes no checkpoint unti
   assert.equal((await sql`SELECT id FROM monitor_posts`).length, 1);
   assert.equal((await sql`SELECT value FROM monitor_state WHERE key = 'cursor:socialdata'`).length, 0);
   const hits = queries.length;
-  await assert.rejects(monitorTick(), /not initialized/);
+  await assert.rejects(monitorTick(), /unfinished initialization/);
+  await assert.rejects(monitorTick({ lookbackHours: 24 }), /unfinished initialization/);
   assert.equal(queries.length, hits);
   recognized = unrelated;
   await monitorTick({ initialRange });

@@ -1,7 +1,17 @@
 // Beijing-time wording for the reset monitor. Inputs are ISO strings with +08:00.
 import { addDays } from "@aihot/contracts/time";
 import { monthDay } from "@aihot/web/lib/format";
-import type { ResetMonitorEventKind, ResetMonitorPresentationStatus } from "../../contracts.ts";
+import type { ResetMonitorEvent, ResetMonitorEventKind, ResetMonitorPresentationStatus } from "../../contracts.ts";
+import type { ResetMonitorWebDefinition } from "../../definition.ts";
+
+export function eventTimePolicy(event: ResetMonitorEvent, profile: ResetMonitorWebDefinition) {
+  return event.type === "bonus_credit" ? "explicit" : event.presentation?.timePolicy ?? profile.timePolicy;
+}
+
+export function sourceName(handle: string | undefined, profile: ResetMonitorWebDefinition): string {
+  if (!handle) return "官方";
+  return profile.authors.find(author => author.handle.toLowerCase() === handle.toLowerCase())?.name ?? `@${handle}`;
+}
 
 export function bjDate(iso: string): string {
   return iso.slice(0, 10);

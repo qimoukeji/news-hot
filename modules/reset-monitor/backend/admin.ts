@@ -72,7 +72,7 @@ export async function listMonitorEvents(
 
 export async function postRows(db: Db, id?: string) {
   return db`SELECT p.id,p.author,p.published_at,p.text,p.url,p.translation,p.processed_at,p.receipt_id,p.origin,
-    p.recognition->'propositions' AS propositions,(p.recognition->>'needsReview')::boolean AS needs_review,
+    p.recognition->'propositions' AS propositions,(${awaitingReviewCondition()}) AS needs_review,
     p.recognition->'held' AS held,
     (p.recognition->>'skipped')::boolean AS skipped,
     p.raw->'collectionFailure' AS collection_failure,
@@ -242,17 +242,23 @@ export async function updateMonitorEvent(
     if (resultingType === "bonus_credit") {
       delete presentation.receiptReview;
       presentation.timeInferred = false;
+      presentation.timePolicy = "explicit";
     }
     presentation.manualPatch = { ...presentation.manualPatch, ...patch };
     if (resultingType !== "bonus_credit") delete presentation.manualPatch.bonusCredit;
     const status = patch.status ?? before.status;
-    const estimate =
-      resultingType === "bonus_credit" || status === "confirmed"
-        ? null
-        : estimateFor({
-            schedule: schedule as Schedule | null,
-            announcedAt: before.created_at as Date,
-          });
+    let estimate = before.estimate;
+    if (resultingType === "bonus_credit" || status === "confirmed" || (presentation.timePolicy ?? currentMonitor().timePolicy) === "explicit") {
+      estimate = null;
+    } else if ("schedule" in patch || "status" in patch || "type" in patch) {
+      const [source] = await tx<{ author: string }[]>`SELECT p.author FROM monitor_event_posts l
+        JOIN monitor_posts p ON p.monitor_id=l.monitor_id AND p.id=l.post_id
+        WHERE l.monitor_id=${monitorId()} AND l.event_id=${id} ORDER BY p.published_at,p.id LIMIT 1`;
+      estimate = estimateFor({
+        schedule: schedule as Schedule | null,
+        announcedAt: before.created_at as Date,
+      }, presentation.timeAuthor ?? source?.author ?? "");
+    }
     const type = patch.type ?? before.type;
     const [after] =
       await tx`UPDATE monitor_events SET type=${type},status=${status},

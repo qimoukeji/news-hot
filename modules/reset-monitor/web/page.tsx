@@ -8,7 +8,7 @@ import type { ResetMonitorPageData } from "./loaders.server.ts";
 import { pageMeta } from "@aihot/web/lib/seo";
 import { PostCard } from "./components/PostCard";
 import { ResetCalendar } from "./components/ResetCalendar";
-import { bjDate, bjTime, bonusStatus, dayWord, durationText, stamp, typeName, windowText } from "./components/format";
+import { bjDate, bjTime, bonusStatus, dayWord, durationText, eventTimePolicy, sourceName, stamp, typeName, windowText } from "./components/format";
 import { BonusCreditDetails } from "./components/BonusCreditDetails";
 import { quotaScopeLabel } from "../quota-scope.ts";
 import { monthDay } from "@aihot/web/lib/format";
@@ -23,7 +23,9 @@ export function createPublicPage(profile: ResetMonitorWebProfile) {
     handle: { tab: "me", name: title } satisfies Screen,
     meta: () => pageMeta({ title, description: profile.description, path: profile.pagePath }),
     default: function ResetMonitorRoute() {
-      return <MonitorProvider profile={profile}><ResetMonitorPage /></MonitorProvider>;
+      const data = useLoaderData<ResetMonitorPageData>();
+      const liveProfile = data.monitor?.authors?.length ? { ...profile, authors: data.monitor.authors } : profile;
+      return <MonitorProvider profile={liveProfile}><ResetMonitorPage /></MonitorProvider>;
     },
   };
 }
@@ -69,14 +71,15 @@ function useVersionPolling(version: string, today: string, onChecked: (checkedAt
   }, [version, today, revalidator, siteApiPath]);
 }
 
-function scopeText(e: ResetMonitorEvent, authorName: string) {
-  const who = e.presentation?.audienceZh ?? e.presentation?.scopeLabel ?? `${authorName} 未说明适用范围`;
+function scopeText(e: ResetMonitorEvent) {
+  const who = e.presentation?.audienceZh ?? e.presentation?.scopeLabel ?? "原帖未说明适用范围";
   return [who, e.presentation?.productsZh, quotaScopeLabel(e.presentation?.quotaScope)].filter(Boolean).join(" · ");
 }
 
 /** The current announcement and its source evidence. */
 function Hero({ d, now }: { d: ResetMonitorSitePage; now: number }) {
-  const { product, authorName, timePolicy } = useMonitor();
+  const profile = useMonitor();
+  const { product } = profile;
   const e = d.current;
   const entrance = useEntrance();
   const shell = "cr-wash grid items-center gap-5 rounded-sheet border border-line-strong p-4 sm:p-6 lg:grid-cols-2 lg:gap-8 lg:p-8";
@@ -99,12 +102,12 @@ function Hero({ d, now }: { d: ResetMonitorSitePage; now: number }) {
           <p className="mt-2 text-[13px] leading-[1.75] text-ink-4">
             {last?.confirmedAt && !last.occurredOn && "确认帖日期不代表精确到账时间。"}
             {last?.confirmationBasis === "receipt_review"
-              ? `已通过账户核验。尚未收录 ${authorName} 对本轮的完成确认，实际到账时间以账户显示为准。`
-              : (timePolicy === "predicted" ? `不预测尚未宣布的下一次重置。${authorName} 一旦宣布，这里会显示预计生效时间与原帖。` : `不预测尚未宣布的下一次重置。${authorName} 一旦宣布，这里会显示原帖与已说明的生效时间。`)}
+              ? "已通过账户核验。尚未收录官方对本轮的完成确认，实际到账时间以账户显示为准。"
+              : "不预测尚未宣布的下一次重置。官方一旦宣布，这里会显示原帖与时间依据。"}
           </p>
           {d.outage && (
             <p className="mt-4 border-t border-line pt-4 text-[13px] leading-[1.75] text-ink-3">
-              线索：{dayWord(bjDate(d.outage.publishedAt!), d.today)} {bjTime(d.outage.publishedAt!)} {authorName} 确认 {product} 故障
+              线索：{dayWord(bjDate(d.outage.publishedAt!), d.today)} {bjTime(d.outage.publishedAt!)} {sourceName(d.outage.author, profile)} 确认 {product} 故障
               {d.outage.recoveredAt ? `，${bjTime(d.outage.recoveredAt)} 恢复` : ""}。故障不等于重置。
             </p>
           )}
@@ -121,6 +124,9 @@ function Hero({ d, now }: { d: ResetMonitorSitePage; now: number }) {
       </section>
     );
   }
+  const timePolicy = eventTimePolicy(e, profile);
+  const authorName = sourceName(e.posts[0]?.author, profile);
+  const timeLabel = timePolicy === "predicted" ? "预计" : "原帖时间";
   const status = e.presentation?.status ?? "announced";
   const window = timePolicy === "explicit" ? e.schedule : e.estimate ?? e.schedule;
   const estimateReason = timePolicy === "predicted" ? e.estimate?.reason : null;
@@ -129,9 +135,9 @@ function Hero({ d, now }: { d: ResetMonitorSitePage; now: number }) {
   const credit = e.type === "reset_credit";
   const headline = status === "in_progress" ? (credit ? "重置卡正在发放" : "额度重置正在进行") : credit ? "等待重置卡到账" : "等待额度重置生效";
   let timing: string | null = null;
-  if (status === "expired_unconfirmed" && through) timing = `已比预计晚 ${durationText(now - through)}，仍在等待确认`;
-  else if (status === "announced" && from && now < from) timing = `距预计时段还有 ${durationText(from - now)}`;
-  else if (status === "announced" && through && now < through) timing = "正处在预计时间段内";
+  if (status === "expired_unconfirmed" && through) timing = `已比${timeLabel}晚 ${durationText(now - through)}，仍在等待确认`;
+  else if (status === "announced" && from && now < from) timing = `距${timeLabel}还有 ${durationText(from - now)}`;
+  else if (status === "announced" && through && now < through) timing = `正处在${timeLabel}段内`;
   else if (status === "in_progress" && e.presentation?.reportedAt) timing = `${authorName} ${stamp(e.presentation.reportedAt)} 表示正在进行`;
   const outage = d.outage && d.outage.resetEventId === e.id ? d.outage : null;
   const post = e.posts[0];
@@ -148,7 +154,7 @@ function Hero({ d, now }: { d: ResetMonitorSitePage; now: number }) {
         <h2 className="mt-3 text-[20px] font-[650] leading-[1.25] text-ink sm:text-[24px]">{headline}</h2>
         {window?.from && (
           <p className="num mt-4 text-[24px] font-[650] leading-[1.3] tracking-[-0.01em] text-amber-ink lg:text-[clamp(24px,2.6vw,32px)]">
-            预计 {windowText(window.from, window.through, d.today).replace("–", " – ")}
+            {timeLabel} {windowText(window.from, window.through, d.today).replace("–", " – ")}
           </p>
         )}
         {!window?.from && <p className="mt-4 text-[15px] text-ink-3">时间未说明</p>}
@@ -160,10 +166,10 @@ function Hero({ d, now }: { d: ResetMonitorSitePage; now: number }) {
           </p>
         )}
         <ul className="mt-4 grid gap-2 border-t border-line pt-4 text-[13px] leading-[1.75] text-ink-3">
-          <li>适用范围：{scopeText(e, authorName)}</li>
+          <li>适用范围：{scopeText(e)}</li>
           {outage?.publishedAt && (
             <li>
-              起因：{dayWord(bjDate(outage.publishedAt), d.today)} {bjTime(outage.publishedAt)} {authorName} 确认 {product} 故障{outage.recoveredAt ? `，${bjTime(outage.recoveredAt)} 恢复` : ""}
+              起因：{dayWord(bjDate(outage.publishedAt), d.today)} {bjTime(outage.publishedAt)} {sourceName(outage.author, profile)} 确认 {product} 故障{outage.recoveredAt ? `，${bjTime(outage.recoveredAt)} 恢复` : ""}
             </li>
           )}
         </ul>
@@ -226,7 +232,7 @@ function ActiveBonuses({ events, avatar }: { events: ResetMonitorEvent[]; avatar
 
 function ResetMonitorPage() {
   const profile = useMonitor();
-  const { product, authorName, organization, timingHelp: TimingHelp } = profile;
+  const { product, organization, timingHelp: TimingHelp } = profile;
   const title = profile.title ?? `${product} 重置监控`;
   const bonuses = profile.eventKinds.includes("bonus_credit");
   const d = useLoaderData<ResetMonitorPageData>();
@@ -240,7 +246,8 @@ function ResetMonitorPage() {
       <header className="flex flex-col gap-1 pb-4 pt-3 lg:flex-row lg:items-end lg:justify-between lg:pt-1">
         <div>
           <h1 data-page-title="" className="text-[24px] font-semibold leading-[1.3] text-ink">{title}</h1>
-          <p className="mt-1.5 text-[13px] text-ink-3">{bonuses ? `${product} 额度重置、重置卡与奖励额度：适用条件、时间和 ${authorName} 原话` : `${product} 额度重置与重置卡发放：什么时候生效、给谁、${authorName} 原话`}</p>
+          <p className="mt-1.5 text-[13px] text-ink-3">{bonuses ? `${product} 额度重置、重置卡与奖励额度：适用条件、时间和官方原话` : `${product} 额度重置与重置卡发放：什么时候生效、给谁、官方原话`}</p>
+          <p className="mt-1 text-[12px] text-ink-4">监控账号：{profile.authors.map(author => `${author.name}（@${author.handle}）`).join("、")}</p>
         </div>
         <p className="text-[12px] text-ink-4">全部为北京时间 · UTC+8</p>
       </header>
@@ -251,7 +258,7 @@ function ResetMonitorPage() {
         <summary className="flex items-center justify-between gap-3 py-[18px] text-[13px] text-ink-3 transition-colors hover:text-ink">
           <span className="inline-flex items-center gap-1.5">
             <IconChevronRight size={13} className="text-ink-4 transition-transform duration-200 group-open:rotate-90" />
-            {profile.timePolicy === "predicted" ? "时间是怎么推算的？" : "时间与确认依据"}
+            时间与确认依据
           </span>
           <span className="text-[12px] text-ink-4">来源与规则</span>
         </summary>
@@ -273,6 +280,10 @@ function ResetMonitorPage() {
               <dt>最近采集</dt><dd>{stamp(m.lastCollectedAt)}</dd>
               <dt>最近完整核验</dt><dd>{stamp(m.lastVerifiedAt)}</dd>
               {m.pendingCount > 0 && <><dt>待处理帖子</dt><dd>{m.pendingCount}</dd></>}
+              {m.authors?.map(author => <div key={author.handle} className="col-span-2">
+                @{author.handle}：{author.collectedSince ? `${author.collectedSince.slice(0, 10)} ${bjTime(author.collectedSince)} 起采集，不包含此前历史` : "历史采集起点未记录"}
+              </div>)}
+              {m.scopeEffectiveAt && <div className="col-span-2">采集范围自 {m.scopeEffectiveAt.slice(0, 10)} {bjTime(m.scopeEffectiveAt)} 生效，不自动补采此前历史</div>}
             </dl>
           </details>
         ) : (

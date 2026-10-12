@@ -4,6 +4,7 @@ import { backendDefinition } from "../../grok-reset/backend-definition.ts";
 import { inMonitor } from "../backend/context.ts";
 import { advanceInitialCollection, initialCollection, InitialCollection } from "../backend/initial-collection.ts";
 import { initializationOptionsFromArgs } from "../initialize.ts";
+import { buildCollectionFilter } from "../collection-filter.ts";
 
 test("an empty final provider cursor completes initialization paging and remains resumable", () => {
   inMonitor(backendDefinition, () => {
@@ -47,4 +48,25 @@ test("collect-only CLI keeps explicit finite range validation", () => {
   assert.equal(initializationOptionsFromArgs([...args, "--collect-only"], now)?.collectOnly, true);
   assert.equal(initializationOptionsFromArgs(args, now)?.collectOnly, false);
   assert.throws(() => initializationOptionsFromArgs(["--collect-only"], now), /Both --since/);
+});
+
+test("fixed query versions also bind acceptance rules, with a one-time legacy signature upgrade", () => {
+  const config = { mode: "announcements_and_relevant_replies" as const, words: ["quota"], productWords: ["grok"],
+    queryGroups: { query: ["filter:replies quota"], version: "fixed-v3", reason: "Synthetic filter" } };
+  const definition = { ...backendDefinition, collectionFilter: buildCollectionFilter(config) };
+  const queries = ["from:bot filter:replies quota since_time:1 until_time:2"];
+  const saved = inMonitor(definition, () => initialCollection(queries, null));
+  const changed = { ...definition, collectionFilter: buildCollectionFilter({ ...config, words: ["quota", "bonus"] }) };
+  assert.throws(() => inMonitor(changed, () => initialCollection(queries, saved)), /different range/);
+  const { filterSignature: _signature, ...legacy } = saved;
+  const adopted = inMonitor(definition, () => initialCollection(queries, legacy));
+  assert.equal(adopted.filterSignature, saved.filterSignature);
+  assert.equal(adopted.pageWindow, saved.pageWindow);
+  assert.throws(() => inMonitor(changed, () => initialCollection(queries, adopted)), /different range/);
+  const supplemented = { ...definition, collectionFilter: buildCollectionFilter({ ...config,
+    queryGroups: { ...config.queryGroups, supplementalQueries: ["filter:replies bonus"] } }) };
+  const expanded = inMonitor(supplemented, () => initialCollection(queries, adopted, ["from:bot filter:replies bonus since_time:1 until_time:2"]));
+  assert.equal(expanded.pageWindow, saved.pageWindow);
+  assert.equal(expanded.filterSignature, saved.filterSignature);
+  assert.equal(expanded.queries.length, 2);
 });

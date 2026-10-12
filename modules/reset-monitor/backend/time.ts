@@ -1,4 +1,5 @@
 import { monitor as currentMonitor } from "./context.ts";
+import { authorTiming, authorTimePolicy } from "./context.ts";
 // Source time conversion and shared Beijing formatting. Each module supplies its time policy.
 
 const PACIFIC = "America/Los_Angeles";
@@ -121,8 +122,8 @@ export function wallTimeToUtc(date: string, time: string, timezone = PACIFIC): D
   return result;
 }
 
-export function resolveStatedTime(words: StatedWords, postAt: Date, sourceText?: string, inferred = false): StatedTime | null {
-  if (currentMonitor().timePolicy === "explicit" && inferred) return null;
-  return currentMonitor().timing.resolve(words, postAt, sourceText);
+export function resolveStatedTime(words: StatedWords, postAt: Date, sourceText?: string, inferred = false, author?: string): StatedTime | null {
+  if (authorTimePolicy(author) === "explicit" && inferred) return null;
+  return authorTiming(author).resolve(words, postAt, sourceText);
 }
-export function estimateFor(input: { schedule: Schedule | null; announcedAt: Date; model?: { earliestPacific: string; latestPacific: string; note: string } | null }): Estimate | null { return currentMonitor().timing.estimate(input); }
+export function estimateFor(input: { schedule: Schedule | null; announcedAt: Date; model?: { earliestPacific: string; latestPacific: string; note: string } | null }, author?: string): Estimate | null { return authorTiming(author).estimate(input); }

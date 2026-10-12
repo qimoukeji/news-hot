@@ -86,7 +86,7 @@ test("an account receipt can settle an unspecified reset as a card without an of
   assert.equal(event.estimate, null);
   const answer = codexAnswer(await codexResetPage());
   assert.match(answer, /人工核实到账/);
-  assert.match(answer, /不代表 Tibo 已发确认帖/);
+  assert.match(answer, /不代表官方已发确认帖/);
   assert.match(answer, /到账日期未确定/);
   const [originalPost] = await sql`SELECT recognition FROM monitor_posts WHERE id = ${id}`;
   assert.deepEqual(originalPost!.recognition.notify.map((n: { action: string }) => n.action), ["announce"], "manual verification does not add a confirmation push");

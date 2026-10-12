@@ -30,7 +30,7 @@ const fromLocal = (v: string) => (v ? `${v}:00+08:00` : null);
 const KIND: Record<string, string> = { direct_reset: "额度重置", reset_credit: "重置卡", bonus_credit: "奖励额度" };
 
 function EventCard({ e }: { e: AdminMonitorEvent }) {
-  const { adminApiPath, adminPath, authorName, eventKinds } = useMonitor();
+  const { adminApiPath, adminPath, eventKinds, timePolicy } = useMonitor();
   const { run, pending } = useAdminAction();
   const [dialog, setDialog] = useState<null | "edit" | "review" | "withdraw">(null);
   const [form, setForm] = useState(() => formOf(e));
@@ -49,7 +49,7 @@ function EventCard({ e }: { e: AdminMonitorEvent }) {
             {e.withdrawn && <Badge tone="bad">已撤回</Badge>}
             {!p.kindExplicit && <Badge>形式未明确</Badge>}
           </div>
-          <div className="mt-2 text-[15px] font-semibold text-ink">{e.schedule?.label ?? (e.estimate ? `${SITE.name} 估计 ${e.estimate.label}` : "没有给出时间")}</div>
+          <div className="mt-2 text-[15px] font-semibold text-ink">{e.schedule?.label ?? (e.type !== "bonus_credit" && (p.timePolicy ?? timePolicy) === "predicted" && e.estimate ? `${SITE.name} 估计 ${e.estimate.label}` : "没有给出时间")}</div>
           <div className="mt-0.5 text-[12.5px] text-ink-3">
             {p.audienceZh ?? e.scope ?? "适用对象未说明"}
             {p.productsZh ? ` · ${p.productsZh}` : ""}
@@ -133,7 +133,7 @@ function EventCard({ e }: { e: AdminMonitorEvent }) {
       <ReasonDialog
         open={dialog === "review"}
         title="根据回执核对确认"
-        description={`${authorName} 没有发“已完成”，但账户里已经看到重置或重置卡（读者截图或自有账号）。知道哪天生效就填北京时间日期，不确定就清空；不发通知。${authorName} 之后补发确认帖时，来源会自动改为官方确认，这条核对记录保留。`}
+        description="官方没有发“已完成”，但账户里已经看到重置或重置卡（读者截图或自有账号）。知道哪天生效就填北京时间日期，不确定就清空；不发通知。官方之后补发确认帖时，来源会自动改为官方确认，这条核对记录保留。"
         confirmLabel="确认"
         busy={pending === "review"}
         onClose={() => setDialog(null)}
@@ -180,8 +180,8 @@ function PostRow({ post }: { post: AdminMonitorPost }) {
         <span>@{post.author}</span>
         <a href={post.url} target="_blank" rel="noreferrer" className="num hover:text-accent">{bj(post.published_at, true)}</a>
         {post.skipped ? <Badge>已跳过</Badge> : post.relevant ? <Badge tone="accent">相关</Badge> : post.processed_at ? <Badge>无关</Badge> : <Badge tone="warn">待识别</Badge>}
-        {post.needs_review && !post.manual_review && <Badge tone="bad">需要复核</Badge>}
-        {post.manual_review && <Badge tone="ok" title={post.manual_review.reason}>人工复核完成</Badge>}
+        {post.needs_review && post.manual_review?.completed !== true && <Badge tone="bad">需要复核</Badge>}
+        {post.manual_review?.completed === true && <Badge tone="ok" title={post.manual_review.reason}>人工复核完成</Badge>}
         {post.collection_failure && <Badge tone="bad" title={post.collection_failure.error}>{post.collection_failure.phase === "context" ? "上下文采集失败" : "识别失败"}</Badge>}
         {post.links.map((l) => <Badge key={l.eventId} tone="info" title={l.eventId}>{l.stage}</Badge>)}
         <span className="ml-auto flex gap-1.5">

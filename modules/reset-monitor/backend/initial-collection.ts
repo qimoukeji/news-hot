@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { monitor } from "./context.ts";
+import { monitor, type ResetMonitorBackendDefinition } from "./context.ts";
 import { collectorName } from "../config.ts";
 
 // Provider accounts and credentials deliberately do not belong to this identity.
@@ -9,6 +9,7 @@ export const InitialCollection = z.object({
   version: z.literal(1),
   queries: z.array(z.string()).nonempty(),
   filterVersion: z.string().nullable(),
+  filterSignature: z.string().nullable().optional(),
   queryIndex: z.number().int().nonnegative(),
   cursor: z.string().min(1).nullable(),
   visitedCursors: z.array(z.string().min(1)),
@@ -20,24 +21,41 @@ export const InitialCollection = z.object({
   && new Set(s.visitedCursors).size === s.visitedCursors.length, "Invalid initialization page progress");
 export type InitialCollection = z.infer<typeof InitialCollection>;
 
-export function collectionQueries(since: number, until: number, supplemental = false): string[] {
-  const selected = supplemental ? monitor().collectionFilter?.supplementalQueries ?? [] : monitor().collectionFilter?.query ?? "";
+export function collectionQueries(since: number, until: number, supplemental = false, authorSince?: (handle: string) => number): string[] {
+  return collectionQueriesFor(monitor().collectionFilter, monitor().authors, since, until, supplemental, authorSince);
+}
+
+export function collectionQueriesFor(filter: ResetMonitorBackendDefinition["collectionFilter"], authors: readonly { handle: string }[],
+  since: number, until: number, supplemental = false, authorSince?: (handle: string) => number): string[] {
+  const selected = supplemental ? filter?.supplementalQueries ?? [] : filter?.query ?? "";
   const filters = typeof selected === "string" ? [selected] : selected;
-  return monitor().authors.flatMap(({ handle }) => filters.map(filter =>
-    `from:${handle.toLowerCase()}${filter ? ` ${filter}` : ""} since_time:${Math.floor(since / 1000)} until_time:${Math.floor(until / 1000)}`));
+  return authors.flatMap(({ handle }) => {
+    const start = authorSince?.(handle) ?? since;
+    if (start >= until) return [];
+    return filters.map(filter =>
+      `from:${handle.toLowerCase()}${filter ? ` ${filter}` : ""} since_time:${Math.floor(start / 1000)} until_time:${Math.floor(until / 1000)}`);
+  });
 }
 
 export function initialCollection(queries: string[], saved: unknown, supplementalQueries: string[] = []): InitialCollection {
-  const filterVersion = monitor().collectionFilter?.version ?? null;
+  const filter = monitor().collectionFilter;
+  const filterVersion = filter?.version ?? null;
+  const rules = filter?.configuration;
+  // Query identity is bound separately below. An explicit supplemental query may
+  // extend coverage without changing how returned posts are locally accepted.
+  const filterSignature = rules ? JSON.stringify({ mode: rules.mode, words: rules.words ?? [], phrases: rules.phrases ?? [],
+    productWords: rules.productWords ?? [], benefitWords: rules.benefitWords ?? [], chinese: rules.chinese ?? [], selfPhrases: rules.selfPhrases ?? [] })
+    : filter?.signature ?? null;
   const completeQueries = [...queries, ...supplementalQueries];
-  if (saved == null) return { version: 1, queries: completeQueries, filterVersion, queryIndex: 0, cursor: null, visitedCursors: [], pageWindow: randomUUID(), processingWindow: randomUUID() };
+  if (saved == null) return { version: 1, queries: completeQueries, filterVersion, filterSignature, queryIndex: 0, cursor: null, visitedCursors: [], pageWindow: randomUUID(), processingWindow: randomUUID() };
   const progress = InitialCollection.parse(saved);
   // The real first run used narrower queries. Append only the explicitly declared missing scope,
   // preserving the unfinished original query and cursor; later changes remain a hard error.
-  if (![queries, completeQueries].some(expected => JSON.stringify(progress.queries) === JSON.stringify(expected)) || progress.filterVersion !== filterVersion) {
+  if (![queries, completeQueries].some(expected => JSON.stringify(progress.queries) === JSON.stringify(expected)) || progress.filterVersion !== filterVersion
+    || progress.filterSignature !== undefined && progress.filterSignature !== filterSignature) {
     throw new Error("Initialization has saved progress for a different range, authors or collection filter; repeat the original range and configuration");
   }
-  return { ...progress, queries: completeQueries, processingWindow: progress.processingWindow ?? randomUUID() };
+  return { ...progress, queries: completeQueries, filterSignature, processingWindow: progress.processingWindow ?? randomUUID() };
 }
 
 export function advanceInitialCollection(progress: InitialCollection, nextCursor: string | null): InitialCollection {

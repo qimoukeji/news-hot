@@ -98,8 +98,11 @@ test("second account failure and model failure preserve posts without advancing 
   assert.deepEqual((await sql`SELECT value FROM monitor_state WHERE monitor_id='grok' AND key='cursor:socialdata'`)[0]!.value, previous);
 });
 
-test("an explicit collection filter preserves earlier excluded replies without purchasing their context or model result", async () => {
+test("an explicit collection filter screens legacy pending replies without purchasing their context or model result", async () => {
   await scoped(() => collectPosts({ lookbackHours: 1 }));
+  // Upgrade-era posts have no persisted acceptance decision. New posts keep their
+  // original collection decision when the operator later changes the filter.
+  await sql`UPDATE monitor_posts SET raw=raw-'collectionFilter' WHERE monitor_id='grok'`;
   const definition = { ...backendDefinition, collectionFilter: {
     query: "(-filter:replies OR quota)", version: "synthetic-scope-v1", reason: "Synthetic operator-selected scope",
     accepts: ({ text, isReply }: { text: string; isReply: boolean }) => !isReply || /\bquota\b/i.test(text),

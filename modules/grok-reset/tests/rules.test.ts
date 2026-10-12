@@ -64,7 +64,7 @@ test("explicit product wins; cross-account confirmation and repeated confirmatio
   const eventId = source.applied.eventIds[0]!;
   const patch: Partial<Proposition> = { action: "confirm", relatesTo: eventId,
     scope: { audienceSource: "Custom plan", plans: ["Custom plan"], audienceZh: null, productsZh: "Grok Bot" } };
-  const first = await record("grok", patch);
+  const first = await record("grok", patch, { source: `We have reset usage limits. https://x.com/bot/status/${source.id}` });
   const repeated = await record("bot", patch);
   assert.deepEqual(first.applied.eventIds, [eventId]);
   assert.deepEqual(repeated.applied.eventIds, [eventId]);
@@ -106,7 +106,10 @@ test("matching products across accounts still require explicit event evidence", 
   const ambiguous = await record("grok", patch);
   assert.deepEqual(ambiguous.applied.eventIds, []);
   assert.ok((await scoped(() => monitorPostDetail(ambiguous.id)))!.post.needs_review);
-  const explicit = await record("grok", { ...patch, relatesTo: source.applied.eventIds[0]! });
+  const namedOnly = await record("grok", { ...patch, relatesTo: source.applied.eventIds[0]! });
+  assert.deepEqual(namedOnly.applied.eventIds, []);
+  assert.ok((await scoped(() => monitorPostDetail(namedOnly.id)))!.post.needs_review);
+  const explicit = await record("grok", { ...patch, relatesTo: source.applied.eventIds[0]! }, { source: `We have reset usage limits. https://x.com/bot/status/${source.id}` });
   assert.deepEqual(explicit.applied.eventIds, source.applied.eventIds);
 });
 

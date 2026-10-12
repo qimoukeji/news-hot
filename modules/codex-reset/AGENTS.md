@@ -1,8 +1,8 @@
 # Codex 重置监控模块
 
-本模块负责 Tibo（`@thsottiaux`）的 Codex 额度重置与重置卡监控；框架通过 `site/modules/` 安装，不直接导入本模块。通用实现位于 `../reset-monitor/`；此目录保留 Codex 的配置、提示词、时间策略、薄入口、行为回归测试及不可改写的历史迁移。
+本模块负责站点配置的多账号 Codex 额度动态监控；初始账号为 Tibo（`@thsottiaux`），名单在 `site/reset-monitors.ts`。框架通过 `site/modules/` 安装。通用实现位于 `../reset-monitor/`；此目录保留产品专属语义、Tibo 作者时间策略、薄入口、行为回归测试及不可改写的历史迁移。
 
-`eventKinds` 仅启用 `direct_reset` 与 `reset_credit`，保留现有行为；共享引擎的 `bonus_credit` 由其他已声明模块使用，不自动改变 Codex 的识别范围。
+统一启用 `direct_reset`、`reset_credit` 与 `bonus_credit`。奖励与重置次数分开，API 赠金不属于产品奖励。Tibo 预测只用于配置显式绑定该策略的作者，其他账号缺时间不预测。
 
 ## 目录
 

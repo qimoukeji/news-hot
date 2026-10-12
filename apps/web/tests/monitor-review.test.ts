@@ -18,6 +18,7 @@ const draft: AdminMonitorReviewDraft = { decision: "related", translationZh: nul
 const writes: Array<{ path: string; body: any; csrf?: string }> = [];
 let web: WebServer;
 let browser: Browser;
+let manualReviewFixture = false;
 const api = createServer(async (req, res) => {
   const url = new URL(req.url!, "http://fixture");
   res.setHeader("Content-Type", "application/json");
@@ -36,7 +37,12 @@ const api = createServer(async (req, res) => {
   if (url.pathname === "/api/admin/monitor/events") return send(url.searchParams.get("filter") === "receipt_review"
     ? { ...meta, total:1, totalPages:1, events:[event("announced",true)] }
     : { ...meta, events: [event("confirmed"), event("announced", true)] });
-  if (url.pathname === "/api/admin/monitor/posts") return send({ ...meta, filter: url.searchParams.get("filter") ?? "relevant", rows: [post] });
+  if (url.pathname === "/api/admin/monitor/posts") {
+    const filter = url.searchParams.get("filter") ?? "relevant";
+    const rows: AdminMonitorPost[] = manualReviewFixture ? [false, true].map(completed => ({ ...post, id: completed ? "review-complete" : "review-held", text: completed ? "Completed review fixture" : "Held review fixture",
+      needs_review: !completed, manual_review: { completed, by: "Fixture admin", at: String(at), reason: completed ? "依据完整，人工复核完成" : "时间依据冲突，继续复核", decision: "events" } })) : [post];
+    return send({ ...meta, filter, rows: manualReviewFixture && filter === "review" ? rows.filter(row => row.needs_review) : rows });
+  }
   if (url.pathname === `/api/admin/monitor/posts/${post.id}`) return send({ post, context: [], originalRecognition: null, history: [], version: "v1", draft });
   res.statusCode = 404;
   send({ code: "not_found" });
@@ -78,7 +84,7 @@ test("pending review previews before submitting and supports events outside the 
   try {
     await page.goto(`${web.origin}/admin/monitor/posts/${post.id}/review`);
     await page.getByLabel("分类", { exact: true }).selectOption("events");
-    await expect(page.getByLabel("类型", { exact: true }).locator('option[value="bonus_credit"]')).toHaveCount(0);
+    await expect(page.getByLabel("类型", { exact: true }).locator('option[value="bonus_credit"]')).toHaveCount(1);
     await expect(page.getByLabel("关联目标事件").locator("option[value='outside-first-page']")).toHaveCount(1);
     await page.getByLabel("关联目标事件").selectOption("outside-first-page");
     await page.getByRole("button", { name: "预览影响", exact: true }).click();
@@ -96,4 +102,23 @@ test("pending review previews before submitting and supports events outside the 
   } catch (error) {
     throw new Error(`${String(error)}\nBrowser errors: ${browserErrors.join("; ")}\nPage: ${await page.locator("body").innerText()}\nServer: ${web.logs()}`, { cause: error });
   } finally { await page.close(); }
+});
+
+test("a held manual review stays pending while only a completed review has the completion badge", async () => {
+  manualReviewFixture = true;
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${web.origin}/admin/monitor?tab=posts&filter=all`);
+    const held = page.locator("article").filter({ hasText: "Held review fixture" });
+    const complete = page.locator("article").filter({ hasText: "Completed review fixture" });
+    await expect(held.getByText("需要复核", { exact: true })).toBeVisible();
+    await expect(held.getByText("人工复核完成", { exact: true })).toHaveCount(0);
+    await expect(complete.getByText("人工复核完成", { exact: true })).toBeVisible();
+    await expect(complete.getByText("需要复核", { exact: true })).toHaveCount(0);
+    await page.getByRole("link", { name: "需复核", exact: true }).click();
+    await expect(page.getByText("Held review fixture", { exact: true })).toBeVisible();
+    await expect(page.getByText("需要复核", { exact: true })).toBeVisible();
+    await expect(page.getByText("人工复核完成", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Completed review fixture", { exact: true })).toHaveCount(0);
+  } finally { manualReviewFixture = false; await page.close(); }
 });

@@ -6,6 +6,7 @@
   "exports": {
     ".": "./site.ts",
     "./models": "./models.ts",
+    "./reset-monitors": "./reset-monitors.ts",
     "./modules": "./modules/index.ts",
     "./modules/server": "./modules/server.ts",
     "./modules/web": "./modules/web.ts",

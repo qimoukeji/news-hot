@@ -2,6 +2,25 @@
 
 Codex、Claude、Grok 及后续 AI 的额度重置监控共用采集、事件处理、人工复核、公开投影、页面与数据库。此包是模块依赖，不在 `site/modules/` 中单独安装。各 AI 只提供信源、识别规则、时间策略及入口配置。
 
+账号、显示名、默认产品、作者时间策略、套餐和采集筛选集中配置在 `site/reset-monitors.ts`。三个监控统一支持额度重置、重置卡和奖励额度；识别模板、供应商适配、范围校验及复核共用实现，产品模块只保留专属语义和作者策略。
+
+```ts
+codex: {
+  authors: [
+    { handle: "thsottiaux", name: "Tibo", timePolicy: "tibo" },
+    { handle: "YourOfficialAccount", name: "官方账号" },
+  ],
+  plans: ["Plus", "Pro", "Business", "Enterprise"],
+  collection: { mode: "all" },
+},
+```
+
+账号不包含 `@`，名单非空且大小写不敏感，不允许重复。只有模块注册的作者时间策略才能使用；未配置时只认明确时间，不预测。`defaultProduct` 仅补缺失产品。配置不含密钥，修改后重启 API 和 worker；页面通过 HTTP 使用当前账号名单。新增账号必须由运营者确认其官方身份。
+
+可选筛选 `collection.mode='announcements_and_relevant_replies'` 接收全部非回复帖及匹配的回复帖，配置 `words`、`phrases`、`productWords`、`benefitWords`、`chinese`、`selfPhrases`。有产品词时要求产品词与相关词共同出现；`selfPhrases` 可独立匹配。未给产品词时按相关词接受。默认全量。`queryGroups` 仅用于显式查询拆分和保留已有初始化断点；不随意改写已经开始的查询。
+
+升级时先保留原账号名单运行一次，建立配置基线，再修改账号。已有部署历史起点未知时保留未知，原每日查漏仍覆盖最近 24 小时。新增及重新添加账号从首次扫描观察到配置的时间开始；起点在付费前保存，失败重跑不漂移，也不继承旧账号历史。移除账号不删除其历史帖子或事件。扩大筛选范围只从生效时间采集新范围；旧账号失败后尚未覆盖的窗口按当时的旧筛选规则补齐。公开 `monitor.authors[].collectedSince` 和 `monitor.scopeEffectiveAt` 分别表示账号与范围起点，`null` 表示旧历史起点未记录。状态使用现有 `monitor_state` JSON，无表结构变更。
+
 ## 安装与配置
 
 站点在 `site/modules/index.ts`、`server.ts`、`web.ts` 注册各 AI 模块，并声明对应 workspace 依赖。后端定义与模型、凭据不进入浏览器；公开 HTTP、Agent Markdown 和 MCP 都通过框架 publication 模块入口读取，页面查询不触发采集或模型调用。
@@ -50,13 +69,13 @@ Codex 使用 `-w @aihot/codex-reset`，Grok 使用 `-w @aihot/grok-reset`。起�
 
 仅有 X Article 链接、未保存正文时不请求识别模型，标为资料不完整且需复核；这不是已确定无关，也不成为事件。原帖、旧模型结果及复核理由保留，公开监控状态显示待复核数量。
 
-共享事件类型为 `direct_reset`（恢复已有用量计数）、`reset_credit`（可兑换的重置次数）和 `bonus_credit`（额外可消费的奖励额度）。各模块通过 `eventKinds` 声明启用范围，自动识别、后台编辑和人工复核均遵守该范围；Codex 保持原两类，Claude、Grok 启用三类。识别命题保留动作、对象、范围、原话与时间证据；同帖重复用 `duplicateOf` 关联前一个命题。解释、政策、未满足条件、玩笑和模糊暗示不能成为事件承诺，其他作者只作上下文。
+共享事件类型为 `direct_reset`（恢复已有用量计数）、`reset_credit`（可兑换的重置次数）和 `bonus_credit`（额外可消费的奖励额度），三个监控使用同一常量全部启用。识别命题保留动作、对象、范围、原话与时间证据；同帖重复用 `duplicateOf` 关联前一个命题。解释、政策、未满足条件、玩笑和模糊暗示不能成为事件承诺，未配置作者只作上下文。跨账号关联须有可核验的回复、引用或原帖链接，模型选择事件 ID 本身不是依据。
 
 奖励额度详情保存在现有事件的 `presentation.bonusCredit`：`amount`、`eligibility` 和 `claimMethod` 分别保留金额或用量、资格条件和领取方式的原话，缺失时为 `null`；`claimDeadline` 与 `expiresAt` 各自保留 `{source, at}`，其中 `at` 只保存由本条时间原话中的明确时间和时区换算出的时间，无法换算时为 `null`。领取截止不能当作生效时间，奖励到期不能借用领取截止的时区，未知金额、年份和时间不推测。官方活动可领取不代表个人已领取或已到账，不生成预计到账时间或重置次数。奖励额度的统计、日历和通知与原两类事件分别呈现，不计入重置及重置卡次数；个人账户回执核对仅用于原两类事件。
 
 多轮动作需要明确轮数和各轮归属；无法区分的同类确认或关联转人工复核，不能自行增加事件。同帖“another one”只继承能在原文核验的同类动作，明确解释同次补偿的“instead granted”保留重复关联而不增事件。进展补全未知字段，明确更正才能替换已有范围，局部到账不能改为全员到账。关联只能使用模型获得的事件 ID；回复／引用的历史事件优先提供，另外最多八个近期候选。短回复继承父帖相对日期时需要可核验的 `timeSourceId`，不能引用未来帖子。
 
-时间策略由各 AI 模块提供；原话截止时间不能被预测延长，预计时间经过不代表完成。公开确认统计只计有确认依据的事件，日期须为确认时间或实际生效日，不使用预计时间或创建时间；奖励活动单独统计，日历使用官方可领取的确认时间，不使用领取截止或奖励到期时间。人工账户核验与官方原帖确认是两类证据，不能宣称所有账户到账。
+时间策略由产品模块注册，通过账号配置显式绑定；识别、入库和人工复核使用实际作者及时间来源。新事件保存 `presentation.timePolicy` 与提供当前时间依据的 `presentation.timeAuthor`，后续明确时间更新时一起更新；人工编辑事件时，未修改时间则保留已有预测，修改时间则使用提供该时间的作者策略。历史事件未保存时按原规则读取，不回填。原话截止时间不能被预测延长，预计时间经过不代表完成。公开确认统计只计有确认依据的事件，日期须为确认时间或实际生效日，不使用预计时间或创建时间；奖励活动单独统计，日历使用官方可领取的确认时间，不使用领取截止或奖励到期时间。人工账户核验与官方原帖确认是两类证据，不能宣称所有账户到账。
 
 事件、帖子及关联目标每页 10 条，分页在列表下方，显示总数和页数。帖子可筛相关、无关、需复核、待识别及全部，待识别不计无关。事件“需回执核对”仅显示原两类中未撤回、未确认且无确认关联的事件。
 
@@ -71,11 +90,11 @@ Codex 使用 `-w @aihot/codex-reset`，Grok 使用 `-w @aihot/grok-reset`。起�
 新增 AI 监控：
 
 1. 先建模块 `AGENTS.md`，定义信源、产品、套餐与时间识别边界。
-2. 创建模块配置与后端策略：使用独立 `monitorId`、非空 `authors` 列表（账号与显示名）、路由及扫描环境变量，在 `eventKinds` 中明确启用事件类型，编写识别提示词和明确的时间策略；识别共用 `MONITOR_MODEL`，浏览器定义不包含凭据。需监控奖励额度时启用 `bonus_credit` 并提供该 AI 的识别规则和样本，无需修改引擎或增加表。
+2. 创建模块配置与后端策略：使用独立 `monitorId`、非空 `authors` 列表（账号与显示名）、路由及扫描环境变量，使用共享三类型常量、提示词模板及明确时间解析，只添加产品特有规则；识别共用 `MONITOR_MODEL`，浏览器定义不包含凭据。为奖励提供产品专属边界和样本，无需修改引擎或增加表。
 3. 使用 `createMonitorModule`、`createMonitorServer`、`initializeMonitor` 和共享网页接入工厂生成薄入口。需要区别额度周期时提供 `quotaScope` 策略；专属非重置规则通过 `excludeProposition` 返回排除原因，保留原始模型结果及命题编号，不限制人工复核。不要复制采集、数据库、归组、复核或页面实现，也不要为新 AI 新建数据表。
 4. 在站点三份模块清单、依赖、Docker package 清单、导航与配置示例安装；补充真实规则样本的离线测试和使用说明。
 5. 验证同 ID 隔离、公开只读、后台权限、失败检查点及 API／Agent／MCP 后，再确认真实初始化范围。
 
 新增供应商在共享 `backend/providers/` 实现 `Collector.searchTweets` 和 `getTweet`，转换成统一 `Tweet` 后注册；付费请求必须经过回执、预算及安全阀，原响应先存回执再校验，错误中止本轮。TwitterAPI.io 接口依据：[搜索与游标](https://docs.twitterapi.io/api-reference/endpoint/tweet_advanced_search)、[按 ID 读取帖子](https://docs.twitterapi.io/api-reference/endpoint/get_tweet_by_ids)。
 
-多作者监控按 `authors` 顺序完整分页采集相同时间窗口，所有作者的采集、上下文和识别成功才推进检查点。公开帖子补充 `author` 与 `authorAvatar`，按实际作者展示；原页面 `authorAvatar` 仍表示第一个信源的头像。模块可提供 `defaultProductForAuthor` 与 `scopeConflicts`，产品默认值只补缺失字段，不覆盖已有事件或人工字段。`requireCrossAuthorEvidence` 要求跨账号关联明确指向事件，不能只靠时间和产品相近。
+多作者监控按 `authors` 顺序按账号起点及筛选范围分段完整分页采集，所有作者的采集、上下文和识别成功才推进检查点。公开帖子补充 `author` 与 `authorAvatar`，按实际作者展示；页面多账号分别展示，不使用首个账号头像代表全部信源。模块可提供 `defaultProductForAuthor` 与 `scopeConflicts`，产品默认值只补缺失字段，不覆盖已有事件或人工字段。`requireCrossAuthorEvidence` 要求跨账号关联明确指向事件，不能只靠时间和产品相近。

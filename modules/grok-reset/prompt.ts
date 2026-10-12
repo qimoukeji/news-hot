@@ -1,14 +1,10 @@
-import { SITE } from "@aihot/site";
+import definition from "./definition.ts";
+import { buildResetMonitorPrompt } from "@aihot/reset-monitor/prompt";
+import type { ResetMonitorDefinition } from "@aihot/reset-monitor/definition";
 
-export const promptVersion = "grok-reset-2026-10-10.1";
-export const prompt = `你是 ${SITE.name} 的 Grok 额度动态识别器。主信源为 @bot 与 @grok，两者均可独立提供官方依据。输入会标明实际主帖作者。其他作者只能作上下文，不能成为官方承诺。
-读取主帖、回复及引用，输出严格 JSON。只记录明确的额度重置、可兑换重置次数和一次性奖励额度。
-direct_reset=恢复已有产品使用计数；reset_credit=用户可兑换的重置次数；bonus_credit=额外可消费的一次性奖励额度，不是重置计数或重置次数。奖励活动可领取不表示个人已领取或到账。
-普通限额提升、日常自动重置规则、API 赠金、API credits、模型发布、政策解释、玩笑与模糊暗示不生成事件。不能因 @grok 回答一般产品问题就把解释当成官方动作。明确重置与无关内容混合时逐命题提取，不能整帖丢弃。
-适用产品沿用 scope.productsZh，套餐沿用 scope.plans 与 audienceSource。原帖明确的 Grok Bot、Grok、Imagine 或多个产品忠实保留；未说明产品填 null，由代码按作者补默认产品。套餐、额度周期、受影响用户等条件不得推测。不能把 Grok Bot 与 Grok 普通额度关联为同一事件。Cursor 套餐仅在原文明确适用于 Grok Bot 时记录，不把 Cursor 其他产品额度变成 Grok 事件。
-announce=明确承诺将做；progress=进行中；confirm=明确完成或奖励活动已可领取；amend=更正或补充；withdraw=撤回。role=action/answer/explanation/policy/uncertain，仅明确动作或直接回答唯一事件问题可 real=true。歧义、无法确定关联目标、回顾确认缺少发生时间时 needsReview=true；单纯缺时间不需要复核。
-同一事件的两个账号公告、回复、后续确认应关联输入中的同一事件 ID，不增加轮次。仅作者或时间相近不证明同一事件，多个可能目标留复核。relatesTo 只能使用输入的事件 ID，不能自造或使用帖子 ID。excerpt 必须是主帖自己的原句，不能借父帖引文冒充。重复命题 duplicateOf 指向之前命题的零起始编号；明确另一次动作才增加 count。
-bonus_credit 的 count 永远 1；amount、eligibility、claimMethod、usageTerms 分别保存奖励用量、资格、领取方法与使用细则的原话，缺失为 null。claimDeadline 与 expiresAt 分别保存对应原句 source、statedTime、timeSourceId，at 始终 null，由代码换算。领取截止与奖励到期不是活动生效时间，不能相互借时区或补年份。后续领取提醒与细则关联既有活动，不创建新活动；已核验主信源线程的解释可作为 real=false、role=explanation 的 amend，不能单独创建或确认活动。
-时间只按原文。expectedLanding=null、timeInferred=false。明确相对小时或分钟才填 relativeHours；soon/few hours 不猜数字。钟点必须有明示 UTC/GMT/PT/PST/PDT/数字偏移，缺时区保留原话、statedTime=null。date 仅使用明确年份的日期；单点 exact、around approximate、by/within deadline、明确区间 window。timeSourceId 指向实际说出时间的主帖或有有效日期的直接父帖；奖励时间上下文只接受 @bot 或 @grok。时间经过不代表完成。
-整条相关主帖及上下文忠实翻译成中文，保留换行、账号和链接。故障与恢复可记录 outage/recovery，但恢复服务不等于恢复额度。
-只输出 JSON：{"relevant":bool,"translationZh":string|null,"contextZh":[{"id":string,"textZh":string}],"outage":"outage"|"recovery"|null,"needsReview":bool,"propositions":[{"kind":"direct_reset"|"reset_credit"|"bonus_credit","kindExplicit":bool,"action":"announce"|"progress"|"confirm"|"amend"|"withdraw","real":bool,"count":number,"role":"action"|"answer"|"explanation"|"policy"|"uncertain","timeSourceId":string|null,"duplicateOf":number|null,"relatesTo":string|null,"excerpt":string,"excerptZh":string,"statedTime":{"precision":"exact"|"approximate"|"deadline"|"date"|"window","relativeHours":number|null,"period":null,"clock":string|null,"clockThrough":string|null,"dayOffset":number|null,"timezone":string|null,"date":string|null}|null,"timeInferred":false,"expectedLanding":null,"scope":{"audienceSource":string|null,"plans":string[]|null,"audienceZh":string|null,"productsZh":string|null},"bonusCredit":{"amount":string|null,"eligibility":string|null,"claimMethod":string|null,"usageTerms":string|null,"claimDeadline":{"source":string,"at":null,"statedTime":object|null,"timeSourceId":string|null}|null,"expiresAt":{"source":string,"at":null,"statedTime":object|null,"timeSourceId":string|null}|null}|null}]}`;
+export const promptVersion = "grok-reset-2026-10-12.1";
+export const productRules = `原文明示 Grok Bot、Grok、Imagine 或多个产品时忠实保留；没说明产品填 null，由代码根据配置作者补默认产品。
+不能把 Grok Bot 与 Grok 普通额度关联为同一事件。Cursor 套餐只在原文明确适用于 Grok Bot 时记录，不把 Cursor 其他产品额度变成 Grok 事件。
+官方一次性产品奖励额度是 bonus_credit，API 赠金不属于本监控；两个账号公告不证明两次重置或两次奖励，必须按同一事件证据关联。`;
+export const buildPrompt = (current: ResetMonitorDefinition) => buildResetMonitorPrompt(current, productRules);
+export const prompt = buildPrompt(definition);

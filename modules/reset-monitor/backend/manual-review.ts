@@ -12,6 +12,8 @@ import { eventRows, postRows } from "./admin.ts";
 import { quotedInPost } from "./assemble.ts";
 import { eventDisplayLabel, eventLabel } from "../event-kind.ts";
 import { BonusCreditInput } from "./bonus-input.ts";
+import { authorTimePolicy } from "./context.ts";
+import { resolve as resolveExplicitTime } from "./explicit-time.ts";
 import {
   estimateFor,
   manualSchedule,
@@ -138,7 +140,7 @@ async function load(db: Db, id: string): Promise<State | null> {
   const links =
     await db`SELECT * FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS monitor_event_posts ORDER BY event_id,post_id`;
   const sources =
-    await db`SELECT id,published_at,text,url,recognition,outage,activity,raw,context FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE id IN (SELECT post_id FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS monitor_event_posts) OR outage IS NOT NULL OR recognition->>'outage' IS NOT NULL ORDER BY id`;
+    await db`SELECT id,author,published_at,text,url,recognition,outage,activity,raw,context FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE id IN (SELECT post_id FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS monitor_event_posts) OR outage IS NOT NULL OR recognition->>'outage' IS NOT NULL ORDER BY id`;
   return {
     post,
     events,
@@ -190,7 +192,9 @@ function defaultDraft(state: State): Draft {
               ? source?.publishedAt
               : post.published_at;
           const t = sourceAt
-            ? resolveStatedTime(p.statedTime, new Date(sourceAt), source?.originalText ?? post.text, !!p.timeInferred)
+            ? p.kind === "bonus_credit"
+              ? resolveExplicitTime(p.statedTime, new Date(sourceAt), source?.originalText ?? post.text)
+              : resolveStatedTime(p.statedTime, new Date(sourceAt), source?.originalText ?? post.text, !!p.timeInferred, post.author)
             : null;
           if (t) schedule = scheduleFrom(t);
         }
@@ -446,6 +450,8 @@ function recompute(
   let schedule: Schedule | null = null;
   let progress = false;
   let timeInferred = false;
+  let timingAuthor = evidence[0]?.source?.author ?? "";
+  let timePolicy: "explicit" | "predicted" = base.presentation?.timePolicy ?? (before ? currentMonitor().timePolicy : authorTimePolicy(timingAuthor));
   let reportedAt: null | string = null;
   let occurredOn: null | string = null;
   for (const { link, source, claim: p } of claims) {
@@ -480,6 +486,8 @@ function recompute(
     if (quota) quotaScope = quota;
     if (p.schedule) {
       timeInferred = false;
+      timingAuthor = source!.author;
+      timePolicy = authorTimePolicy(timingAuthor);
       schedule = manualSchedule(
         p.schedule.precision,
         new Date(p.schedule.from),
@@ -494,11 +502,15 @@ function recompute(
           ? timeSource?.publishedAt
           : source!.published_at;
       const t = sourceAt
-        ? resolveStatedTime(p.statedTime, new Date(sourceAt), timeSource?.originalText ?? source!.text, !!p.timeInferred)
+        ? p.kind === "bonus_credit"
+          ? resolveExplicitTime(p.statedTime, new Date(sourceAt), timeSource?.originalText ?? source!.text)
+          : resolveStatedTime(p.statedTime, new Date(sourceAt), timeSource?.originalText ?? source!.text, !!p.timeInferred, source!.author)
         : null;
       if (t) {
         schedule = scheduleFrom(t);
-        timeInferred = currentMonitor().timePolicy === "explicit" ? false : !!p.timeInferred;
+        timingAuthor = source!.author;
+        timePolicy = authorTimePolicy(timingAuthor);
+        timeInferred = timePolicy === "explicit" ? false : !!p.timeInferred;
       }
     }
     if (link.action === "progress") {
@@ -526,6 +538,8 @@ function recompute(
     ...(currentMonitor().quotaScope ? { quotaScope } : {}),
     inProgress: status === "announced" && progress,
     timeInferred,
+    timePolicy,
+    timeAuthor: timingAuthor,
     reportedAt,
   };
   for (const k of ["scopeLabel", "audienceZh", "productsZh"])
@@ -539,6 +553,7 @@ function recompute(
   if (kind === "bonus_credit") {
     presentation.bonusCredit = "bonusCredit" in manual ? manual.bonusCredit : bonusCredit;
     presentation.timeInferred = false;
+    presentation.timePolicy = "explicit";
     delete presentation.receiptReview;
     occurredOn = null;
   } else {
@@ -573,7 +588,7 @@ function recompute(
     estimate:
       kind === "bonus_credit" || status === "confirmed"
         ? null
-        : estimateFor({ schedule, announcedAt: new Date(base.created_at) }),
+        : estimateFor({ schedule, announcedAt: new Date(base.created_at) }, timingAuthor),
     presentation,
     confirmed_at: confirmedAt,
     occurred_on:

@@ -37,7 +37,7 @@ export function PostCard({ post, stage, avatar, compact = false }: { post: CardP
   const { authors } = useMonitor();
   const author = post.author;
   const authorName = authors.find((a) => a.handle.toLowerCase() === author.toLowerCase())?.name ?? author;
-  const authorAvatar = post.authorAvatar ?? (authors.length === 1 ? avatar : null);
+  const authorAvatar = post.authorAvatar ?? (authors.length === 1 && authors[0]?.handle.toLowerCase() === author.toLowerCase() ? avatar : null);
   const [showOriginal, setShowOriginal] = useState(false);
   const hasTranslation = !!post.translation;
   return (

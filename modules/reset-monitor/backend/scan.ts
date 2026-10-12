@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, authorHandles, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, authorHandles, authorNameFor, purpose as requestPurpose, auditAction, auditSubject, type ResetMonitorBackendDefinition } from "./context.ts";
 // Each round stores successful pages and advances coverage only after context and recognition finish.
 import { randomUUID } from "node:crypto";
 import { config } from "@aihot/backend/config";
@@ -15,7 +15,8 @@ import { recognizePost, type ContextInput, type OpenEventInput } from "./recogni
 import { bjIso, resetsSnapshot, monitorPageUrl } from "./read.ts";
 import { cursorKey, watermarksKey } from "../config.ts";
 import { sourceContentIssue, markIncompleteSource } from "./source-completeness.ts";
-import { advanceInitialCollection, collectionQueries, initialCollection, initialCollectionKey } from "./initial-collection.ts";
+import { advanceInitialCollection, collectionQueries, collectionQueriesFor, initialCollection, initialCollectionKey } from "./initial-collection.ts";
+import { authorCollectionSince, collectionSegments, prepareCollectionCoverage } from "./collection-coverage.ts";
 
 const PUSH_MAX_AGE_MS = 36 * 3600_000;
 
@@ -75,21 +76,22 @@ async function contextOf(t: SdTweet, subject: string, withReplies = true, roundI
   }
   return out;
 }
-async function storePost(t: SdTweet, db: Db = sql) {
-  if (!includedInCollection(t)) return 0;
+async function storePost(t: SdTweet, db: Db = sql, filter: ResetMonitorBackendDefinition["collectionFilter"] | null = currentMonitor().collectionFilter) {
+  if (!includedInCollection(t, filter)) return 0;
   const context = await contextOf(t, `x:${t.id_str}`, false);
   const handle = currentMonitor().authors.find((a) => a.handle.toLowerCase() === t.user.screen_name.toLowerCase())!.handle;
   const inserted = await db`
     INSERT INTO monitor_posts (monitor_id, id, author, published_at, text, url, context, raw, origin)
     VALUES (${monitorId()}, ${t.id_str}, ${handle}, ${new Date(t.tweet_created_at)}, ${tweetText(t)}, ${`https://x.com/${handle}/status/${t.id_str}`},
       ${db.json(context.map(c => ({ id: c.id, author: c.author, relation: c.relation, text: null, originalText: c.text, url: c.url })) as never)},
-      ${db.json({ tweet: t, context, contextPending: !!t.in_reply_to_status_id_str } as never)}, 'live')
+      ${db.json({ tweet: t, context, contextPending: !!t.in_reply_to_status_id_str,
+        collectionFilter: { version: filter?.version ?? null, signature: filter?.signature ?? null, accepted: true } } as never)}, 'live')
     ON CONFLICT (monitor_id, id) DO NOTHING`;
   return inserted.count;
 }
 
-function includedInCollection(t: SdTweet): boolean {
-  return currentMonitor().collectionFilter?.accepts({ text: tweetText(t), isReply: !!(t.in_reply_to_status_id_str || t.in_reply_to_screen_name) }) ?? true;
+function includedInCollection(t: SdTweet, filter: ResetMonitorBackendDefinition["collectionFilter"] | null = currentMonitor().collectionFilter): boolean {
+  return filter?.accepts({ text: tweetText(t), isReply: !!(t.in_reply_to_status_id_str || t.in_reply_to_screen_name) }) ?? true;
 }
 
 /** Preserve posts collected before an operator narrowed the scope, without buying their context or recognition. */
@@ -97,15 +99,17 @@ export async function screenPendingPosts(): Promise<number> {
   const filter = currentMonitor().collectionFilter;
   if (!filter) return 0;
   const posts = await sql<{ id: string; raw: { tweet?: SdTweet } | null }[]>`SELECT id,raw FROM monitor_posts
-    WHERE monitor_id = ${monitorId()} AND lower(author) = ANY(${authorHandles()}::text[]) AND processed_at IS NULL`;
+    WHERE monitor_id = ${monitorId()} AND lower(author) = ANY(${authorHandles()}::text[]) AND processed_at IS NULL
+      AND recognition IS NULL AND NOT coalesce(raw,'{}'::jsonb) ? 'collectionFilter'`;
   const excluded = posts.filter(p => p.raw?.tweet && !includedInCollection(p.raw.tweet)).map(p => p.id);
   if (!excluded.length) return 0;
-  const basis = { version: filter.version, reason: filter.reason };
+  const basis = { version: filter.version, reason: filter.reason, accepted: false };
   const changed = await sql`UPDATE monitor_posts SET
     recognition = ${sql.json({ relevant: false, needsReview: false, propositions: [], collectionFilter: basis })},
     raw = (coalesce(raw,'{}'::jsonb) - 'collectionFailure') || ${sql.json({ contextPending: false, collectionFilter: basis })},
     processed_at = now()
-    WHERE monitor_id = ${monitorId()} AND id IN ${sql(excluded)} AND processed_at IS NULL`;
+    WHERE monitor_id = ${monitorId()} AND id IN ${sql(excluded)} AND processed_at IS NULL
+      AND recognition IS NULL AND NOT coalesce(raw,'{}'::jsonb) ? 'collectionFilter'`;
   return changed.count;
 }
 
@@ -133,6 +137,10 @@ export async function collectPendingContext(limit = Infinity, roundId: string = 
 
 /** Collect every page within the fixed window. This function never advances successful coverage. */
 export async function collectPosts(opts: ScanOptions = {}): Promise<{ stored: number; pages: number }> {
+  if (!opts.initialRange) {
+    const [unfinished] = await sql`SELECT key FROM monitor_state WHERE monitor_id=${monitorId()} AND key LIKE 'initial:%' LIMIT 1`;
+    if (unfinished) throw new Error("Monitor has unfinished initialization; complete the original range and configuration before scanning or lookback");
+  }
   if (process.env.COLLECT_ENABLED !== "true") return { stored: 0, pages: 0 };
   const started = opts.startedAt ?? new Date();
   const cursor = await getState<Cursor>(cursorKey());
@@ -150,14 +158,28 @@ export async function collectPosts(opts: ScanOptions = {}): Promise<{ stored: nu
   const until = range ? Date.parse(range.until) : started.getTime();
   const roundId = opts.roundId ?? randomUUID();
   const purpose = opts.lookbackHours !== undefined ? requestPurpose("lookback") : requestPurpose("scan");
-  const originalQueries = collectionQueries(since, until);
-  const supplementalQueries = collectionQueries(since, until, true);
+  // Explicit initialization owns its requested historical range. Scheduled scans observe
+  // configuration changes first, so new accounts and scopes cannot backfill silently.
+  // Legacy checkpoints are a successful upper bound, not a historical lower bound:
+  // preserve their 24-hour lookback instead of claiming a known collection start.
+  const coverage = range ? null : await prepareCollectionCoverage(started.toISOString(), null, checkpoint);
+  const originalQueries = range ? collectionQueries(since, until) : [];
+  const supplementalQueries = range ? collectionQueries(since, until, true) : [];
   let progress = range ? initialCollection(originalQueries, await getState(initialCollectionKey()), supplementalQueries) : null;
-  const queries = progress?.queries ?? [...originalQueries, ...supplementalQueries];
-  if (progress) await setState(initialCollectionKey(), progress);
+  type QueryScope = { query: string; since: number; until: number; filter: ResetMonitorBackendDefinition["collectionFilter"]; historical: boolean };
+  const jobs: QueryScope[] = progress ? progress.queries.map(query => ({ query, since, until, filter: currentMonitor().collectionFilter, historical: false }))
+    : currentMonitor().authors.flatMap(author => collectionSegments(coverage!, authorCollectionSince(coverage!, author.handle, since), until)
+      // Search boundaries have second precision. Round the upper bound outwards and
+      // enforce the exact segment locally so a subsecond scope change cannot leave a gap.
+      .flatMap(segment => [false, true].flatMap(supplemental => collectionQueriesFor(segment.filter, [author], segment.since, Math.ceil(segment.until / 1000) * 1000, supplemental)
+        .map(query => ({ ...segment, query, historical: segment.until < until })))));
+  if (progress) {
+    await prepareCollectionCoverage(started.toISOString(), new Date(since).toISOString(), undefined, true);
+    await setState(initialCollectionKey(), progress);
+  }
   let stored = 0; let pages = 0;
-  for (let index = progress?.queryIndex ?? 0; index < queries.length; index++) {
-      const query = queries[index]!;
+  for (let index = progress?.queryIndex ?? 0; index < jobs.length; index++) {
+      const job = jobs[index]!; const query = job.query;
       const handle = query.split(" ")[0]!.slice(5);
       let cursorPage: string | null = progress?.cursor ?? null;
       const visited = new Set<string>();
@@ -165,12 +187,14 @@ export async function collectPosts(opts: ScanOptions = {}): Promise<{ stored: nu
         shutdownSignal.signal.throwIfAborted();
         const res = await searchTweets(query, { purpose, subject: `x:${handle}`, window: progress?.pageWindow ?? roundId, cursor: cursorPage, resume: !!progress });
         pages++;
-        const posts = res.tweets.filter(t => !t.retweeted_status && t.user.screen_name.toLowerCase() === handle);
+        const posts = res.tweets.filter(t => !t.retweeted_status && t.user.screen_name.toLowerCase() === handle
+          && (range || Date.parse(t.tweet_created_at) >= job.since
+            && (job.historical ? Date.parse(t.tweet_created_at) < job.until : Date.parse(t.tweet_created_at) <= job.until)));
         if (progress) {
           const next = advanceInitialCollection(progress, res.nextCursor);
           const inserted = await sql.begin(async tx => {
             let count = 0;
-            for (const t of posts) count += await storePost(t, tx);
+            for (const t of posts) count += await storePost(t, tx, job.filter ?? null);
             await completeReceipt(tx, res.receiptId);
             await setState(initialCollectionKey(), next, tx);
             return count;
@@ -178,7 +202,7 @@ export async function collectPosts(opts: ScanOptions = {}): Promise<{ stored: nu
           stored += inserted;
           progress = next;
         } else {
-          for (const t of posts) stored += await storePost(t);
+          for (const t of posts) stored += await storePost(t, sql, job.filter ?? null);
           await completeReceipt(sql, res.receiptId);
         }
         cursorPage = res.nextCursor;
@@ -195,10 +219,11 @@ export async function openEvents(before: Date, context: ContextInput[]): Promise
   const fromContext = contextIds.length ? sql`EXISTS (
     SELECT 1 FROM monitor_event_posts source WHERE source.monitor_id = ${monitorId()} AND source.event_id = e.id AND source.post_id IN ${sql(contextIds)}
   )` : sql`false`;
-  const rows = await sql<{ id: string; type: OpenEventInput["kind"]; status: OpenEventInput["status"]; schedule: { label: string } | null; scope: string | null; products: string | null; bonus_credit: OpenEventInput["bonusCredit"]; first_at: Date; excerpt: string }[]>`
+  const rows = await sql<{ id: string; type: OpenEventInput["kind"]; status: OpenEventInput["status"]; schedule: { label: string } | null; scope: string | null; products: string | null; bonus_credit: OpenEventInput["bonusCredit"]; first_at: Date; first_author: string; excerpt: string }[]>`
     WITH candidates AS (
     SELECT e.id, e.type, e.status, e.schedule, e.presentation->>'scopeLabel' AS scope, e.presentation->>'productsZh' AS products, e.presentation->'bonusCredit' AS bonus_credit, min(p.published_at) AS first_at,
       (SELECT ep.original_text FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS ep JOIN (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS pp ON pp.id = ep.post_id WHERE ep.event_id = e.id ORDER BY pp.published_at, pp.id LIMIT 1) AS excerpt,
+      (array_agg(p.author ORDER BY p.published_at,p.id))[1] AS first_author,
       ${fromContext} AS from_context
     FROM (SELECT * FROM monitor_events WHERE monitor_id = ${monitorId()}) AS e JOIN (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS l ON l.event_id = e.id JOIN (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS p ON p.id = l.post_id
     WHERE NOT e.withdrawn AND e.created_at <= ${before} AND (${fromContext}
@@ -212,7 +237,7 @@ export async function openEvents(before: Date, context: ContextInput[]): Promise
     SELECT * FROM candidates WHERE from_context OR id IN (
       SELECT id FROM candidates WHERE NOT from_context ORDER BY (type='bonus_credit') DESC, first_at DESC, id LIMIT 8
     ) ORDER BY from_context DESC, (type='bonus_credit') DESC, first_at DESC, id`;
-  return rows.map((r) => ({ id: r.id, kind: r.type, status: r.status, firstPostAt: r.first_at.toISOString(), excerpt: r.excerpt, schedule: r.schedule?.label ?? null, scope: r.scope, productsZh: r.products,
+  return rows.map((r) => ({ id: r.id, kind: r.type, status: r.status, firstPostAt: r.first_at.toISOString(), firstPostAuthor: r.first_author, excerpt: r.excerpt, schedule: r.schedule?.label ?? null, scope: r.scope, productsZh: r.products,
     ...(r.type === "bonus_credit" ? { bonusCredit: r.bonus_credit } : {}) }));
 }
 
@@ -220,14 +245,14 @@ type NotifyAction = "announce" | "confirm" | "amend" | "withdraw";
 
 const KIND_NAME = (type: string) => (type === "reset_credit" ? "重置卡发放" : `${currentMonitor().product} 额度重置`);
 const bonusHeadline: Record<NotifyAction, string> = { announce: "奖励额度活动：官方已宣布", confirm: "奖励额度活动可领取（不表示个人已到账）", amend: "奖励额度活动：条件有更新", withdraw: "奖励额度活动：官方已撤回" };
-const headline = (action: NotifyAction, type: string, status?: string) => type === "bonus_credit"
+const headline = (action: NotifyAction, type: string, status?: string, author?: string) => type === "bonus_credit"
   ? action !== "withdraw" && status === "expired" ? "奖励额度活动：奖励已到期" : action !== "withdraw" && status === "claim_closed" ? "奖励额度活动：领取已截止" : action === "confirm" && status !== "available" ? "奖励额度活动：开放依据待核实" : bonusHeadline[action]
-  : HEADLINE[action](KIND_NAME(type));
-const HEADLINE: Record<NotifyAction, (kind: string) => string> = {
-  announce: (k) => `${k}：${currentMonitor().authorName} 已宣布`,
-  confirm: (k) => `${k}已完成（${currentMonitor().authorName} 确认）`,
+  : HEADLINE[action](KIND_NAME(type), author ? authorNameFor(author) : currentMonitor().authorName);
+const HEADLINE: Record<NotifyAction, (kind: string, author: string) => string> = {
+  announce: (k, author) => `${k}：${author} 已宣布`,
+  confirm: (k, author) => `${k}已完成（${author} 确认）`,
   amend: (k) => `${k}：安排有更新`,
-  withdraw: (k) => `${k}：${currentMonitor().authorName} 撤回了预告`,
+  withdraw: (k, author) => `${k}：${author} 撤回了预告`,
 };
 const bjStamp = (iso: string) => `${iso.slice(5, 16).replace("T", " ")}`;
 interface PushPost {
@@ -258,7 +283,7 @@ function resetPostCard(post: PushPost, entries: Array<{ eventId: string; action:
   const primary = described[0]!;
   const lines: string[] = [];
   for (const [i, d] of described.entries()) {
-    if (i > 0) lines.push(`**${headline(d.action, d.type, d.e?.presentation?.status)}**`);
+    if (i > 0) lines.push(`**${headline(d.action, d.type, d.e?.presentation?.status, post.author)}**`);
     if (d.type === "bonus_credit") {
       const bonus = d.e?.presentation?.bonusCredit;
       if (d.action === "confirm") lines.push(`**活动状态**：${d.e?.presentation?.status === "expired" ? "奖励已到期" : d.e?.presentation?.status === "claim_closed" ? "领取已截止" : d.e?.presentation?.status === "available" ? "符合资格者可领取" : "开放依据待核实"}，不表示个人已领取或到账。`);
@@ -277,11 +302,11 @@ function resetPostCard(post: PushPost, entries: Array<{ eventId: string; action:
   const scoped = described.find((d) => d.e)?.e;
   if (scoped) lines.push(`**适用范围**：${scoped.presentation?.audienceZh ?? scoped.presentation?.scopeLabel ?? "未说明"}${scoped.presentation?.productsZh ? ` · ${scoped.presentation.productsZh}` : ""}`);
   const outage = snapshot.outage && described.some((d) => d.eventId === snapshot.outage!.resetEventId) ? snapshot.outage : null;
-  if (outage?.publishedAt) lines.push(`**起因**：${bjStamp(outage.publishedAt)} ${currentMonitor().authorName} 确认 ${currentMonitor().product} 故障${outage.recoveredAt ? `，${bjStamp(outage.recoveredAt).slice(6)} 恢复` : ""}`);
+  if (outage?.publishedAt) lines.push(`**起因**：${bjStamp(outage.publishedAt)} 官方确认 ${currentMonitor().product} 故障${outage.recoveredAt ? `，${bjStamp(outage.recoveredAt).slice(6)} 恢复` : ""}`);
   const words = post.text;
   // A short reply needs the question it answers.
   const parent = post.originalText.length <= 120 ? post.context.find((c) => (c.text ?? c.originalText).replace(/[^\p{L}\p{N}]/gu, "").length >= 8) : undefined;
-  const title = headline(primary.action, primary.type, primary.e?.presentation?.status);
+  const title = headline(primary.action, primary.type, primary.e?.presentation?.status, post.author);
   const tone = primary.action === "confirm" ? "turquoise" : primary.action === "withdraw" ? "grey" : "orange";
   return {
     header: { title: { tag: "plain_text", content: title }, template: tone },
