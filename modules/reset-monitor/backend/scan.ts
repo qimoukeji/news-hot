@@ -1,12 +1,13 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, authorHandles, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
 // Each round stores successful pages and advances coverage only after context and recognition finish.
 import { randomUUID } from "node:crypto";
 import { config } from "@aihot/backend/config";
-import { sql } from "@aihot/backend/db";
+import { sql, type Db } from "@aihot/backend/db";
 import type { ResetMonitorContextPost } from "../contracts.ts";
 import { SITE } from "@aihot/site";
 import { shutdownSignal } from "@aihot/backend/lib/shutdown";
 import { getTweet, searchTweets, tweetText, type Tweet as SdTweet } from "./providers/collectors.ts";
+import type { SearchResult } from "@aihot/backend/providers/socialdata";
 import { completeReceipt, retireMonitorUnknownReceipts } from "@aihot/backend/providers/receipts";
 import { deliverContent } from "@aihot/backend/notify/deliver";
 import { applyRecognition } from "./assemble.ts";
@@ -14,6 +15,7 @@ import { recognizePost, type ContextInput, type OpenEventInput } from "./recogni
 import { bjIso, resetsSnapshot, monitorPageUrl } from "./read.ts";
 import { cursorKey, watermarksKey } from "../config.ts";
 import { sourceContentIssue, markIncompleteSource } from "./source-completeness.ts";
+import { advanceInitialCollection, collectionQueries, initialCollection, initialCollectionKey } from "./initial-collection.ts";
 
 const PUSH_MAX_AGE_MS = 36 * 3600_000;
 
@@ -21,11 +23,11 @@ async function getState<T>(key: string): Promise<T | null> {
   const [row] = await sql<{ value: T }[]>`SELECT value FROM (SELECT * FROM monitor_state WHERE monitor_id = ${monitorId()}) AS monitor_state WHERE key = ${key}`;
   return row?.value ?? null;
 }
-async function setState(key: string, value: unknown) {
-  await sql`INSERT INTO monitor_state (monitor_id, key, value) VALUES (${monitorId()}, ${key}, ${sql.json(value as never)}) ON CONFLICT (monitor_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
+async function setState(key: string, value: unknown, db: Db = sql) {
+  await db`INSERT INTO monitor_state (monitor_id, key, value) VALUES (${monitorId()}, ${key}, ${db.json(value as never)}) ON CONFLICT (monitor_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
 }
-async function touchWatermarks(patch: Record<string, string>) {
-  await sql`INSERT INTO monitor_state (monitor_id, key, value) VALUES (${monitorId()}, ${watermarksKey()}, ${sql.json(patch)})
+async function touchWatermarks(patch: Record<string, string>, db: Db = sql) {
+  await db`INSERT INTO monitor_state (monitor_id, key, value) VALUES (${monitorId()}, ${watermarksKey()}, ${db.json(patch)})
     ON CONFLICT (monitor_id, key) DO UPDATE SET value = monitor_state.value || EXCLUDED.value, updated_at = now()`;
 }
 
@@ -57,7 +59,7 @@ async function recordPostFailure(id: string, phase: "context" | "recognition", e
   } })} WHERE monitor_id = ${monitorId()} AND (id = ${id} AND processed_at IS NULL) `;
 }
 
-async function contextOf(t: SdTweet, subject: string, withReplies = true, roundId?: string): Promise<Array<ContextInput & { url: string }>> {
+async function contextOf(t: SdTweet, subject: string, withReplies = true, roundId?: string, resume = false): Promise<Array<ContextInput & { url: string }>> {
   const out: Array<ContextInput & { url: string }> = [];
   const push = (x: SdTweet, relation: "reply" | "quote") =>
     out.push({ id: x.id_str, author: x.user.screen_name, relation, text: tweetText(x), publishedAt: new Date(x.tweet_created_at).toISOString(), url: `https://x.com/i/status/${x.id_str}` });
@@ -65,7 +67,7 @@ async function contextOf(t: SdTweet, subject: string, withReplies = true, roundI
   let parentId = withReplies ? t.in_reply_to_status_id_str ?? null : null;
   for (let depth = 0; parentId && depth < 2; depth++) {
     const [stored] = await sql<{ tweet: SdTweet | null }[]>`SELECT raw->'tweet' AS tweet FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE id = ${parentId}`;
-    const parent = stored?.tweet ?? await getTweet(parentId, { purpose: requestPurpose("context"), subject, roundId });
+    const parent = stored?.tweet ?? await getTweet(parentId, { purpose: requestPurpose("context"), subject, roundId, resume });
     if (!parent) break; // a definitive missing post is valid unavailable context, not a transport failure
     push(parent, "reply");
     if (parent.quoted_status && depth === 0) push(parent.quoted_status, "quote");
@@ -73,29 +75,52 @@ async function contextOf(t: SdTweet, subject: string, withReplies = true, roundI
   }
   return out;
 }
-async function storePost(t: SdTweet) {
+async function storePost(t: SdTweet, db: Db = sql) {
+  if (!includedInCollection(t)) return 0;
   const context = await contextOf(t, `x:${t.id_str}`, false);
-  const inserted = await sql`
+  const handle = currentMonitor().authors.find((a) => a.handle.toLowerCase() === t.user.screen_name.toLowerCase())!.handle;
+  const inserted = await db`
     INSERT INTO monitor_posts (monitor_id, id, author, published_at, text, url, context, raw, origin)
-    VALUES (${monitorId()}, ${t.id_str}, ${author()}, ${new Date(t.tweet_created_at)}, ${tweetText(t)}, ${`https://x.com/${author()}/status/${t.id_str}`},
-      ${sql.json(context.map(c => ({ id: c.id, author: c.author, relation: c.relation, text: null, originalText: c.text, url: c.url })) as never)},
-      ${sql.json({ tweet: t, context, contextPending: !!t.in_reply_to_status_id_str } as never)}, 'live')
+    VALUES (${monitorId()}, ${t.id_str}, ${handle}, ${new Date(t.tweet_created_at)}, ${tweetText(t)}, ${`https://x.com/${handle}/status/${t.id_str}`},
+      ${db.json(context.map(c => ({ id: c.id, author: c.author, relation: c.relation, text: null, originalText: c.text, url: c.url })) as never)},
+      ${db.json({ tweet: t, context, contextPending: !!t.in_reply_to_status_id_str } as never)}, 'live')
     ON CONFLICT (monitor_id, id) DO NOTHING`;
   return inserted.count;
 }
 
+function includedInCollection(t: SdTweet): boolean {
+  return currentMonitor().collectionFilter?.accepts({ text: tweetText(t), isReply: !!(t.in_reply_to_status_id_str || t.in_reply_to_screen_name) }) ?? true;
+}
+
+/** Preserve posts collected before an operator narrowed the scope, without buying their context or recognition. */
+export async function screenPendingPosts(): Promise<number> {
+  const filter = currentMonitor().collectionFilter;
+  if (!filter) return 0;
+  const posts = await sql<{ id: string; raw: { tweet?: SdTweet } | null }[]>`SELECT id,raw FROM monitor_posts
+    WHERE monitor_id = ${monitorId()} AND lower(author) = ANY(${authorHandles()}::text[]) AND processed_at IS NULL`;
+  const excluded = posts.filter(p => p.raw?.tweet && !includedInCollection(p.raw.tweet)).map(p => p.id);
+  if (!excluded.length) return 0;
+  const basis = { version: filter.version, reason: filter.reason };
+  const changed = await sql`UPDATE monitor_posts SET
+    recognition = ${sql.json({ relevant: false, needsReview: false, propositions: [], collectionFilter: basis })},
+    raw = (coalesce(raw,'{}'::jsonb) - 'collectionFailure') || ${sql.json({ contextPending: false, collectionFilter: basis })},
+    processed_at = now()
+    WHERE monitor_id = ${monitorId()} AND id IN ${sql(excluded)} AND processed_at IS NULL`;
+  return changed.count;
+}
+
 /** A failure aborts context collection; the next scheduled round gets independent request keys. */
-export async function collectPendingContext(limit = Infinity, roundId = randomUUID()): Promise<{ completed: number }> {
+export async function collectPendingContext(limit = Infinity, roundId: string = randomUUID(), resume = false): Promise<{ completed: number }> {
   const result = { completed: 0 };
   if (process.env.COLLECT_ENABLED !== "true") return result;
   const posts = await sql<{ id: string; raw: { tweet: SdTweet } }[]>`
     SELECT id, raw FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts
-    WHERE author = ${author()} AND processed_at IS NULL AND raw->>'contextPending' = 'true'
+    WHERE lower(author) = ANY(${authorHandles()}::text[]) AND processed_at IS NULL AND raw->>'contextPending' = 'true'
     ORDER BY published_at, id ${Number.isFinite(limit) ? sql`LIMIT ${limit}` : sql``}`;
   for (const p of posts) {
     shutdownSignal.signal.throwIfAborted();
     let context: Array<ContextInput & { url: string }>;
-    try { context = await contextOf(p.raw.tweet, `x:${p.id}`, true, roundId); }
+    try { context = await contextOf(p.raw.tweet, `x:${p.id}`, true, roundId, resume); }
     catch (error) { await recordPostFailure(p.id, "context", error); throw error; }
     await sql`UPDATE monitor_posts SET
       context = ${sql.json(context.map(c => ({ id: c.id, author: c.author, relation: c.relation, text: null, originalText: c.text, url: c.url })) as never)},
@@ -123,24 +148,44 @@ export async function collectPosts(opts: ScanOptions = {}): Promise<{ stored: nu
   if (checkpoint && (!Number.isFinite(Date.parse(checkpoint)) || Date.parse(checkpoint) > started.getTime())) throw new Error("Monitor success checkpoint must be a valid past time");
   const since = opts.lookbackHours !== undefined ? started.getTime() - opts.lookbackHours * 3600_000 : range ? Date.parse(range.since) : Date.parse(checkpoint!);
   const until = range ? Date.parse(range.until) : started.getTime();
-  const query = `from:${author()} since_time:${Math.floor(since / 1000)} until_time:${Math.floor(until / 1000)}`;
   const roundId = opts.roundId ?? randomUUID();
   const purpose = opts.lookbackHours !== undefined ? requestPurpose("lookback") : requestPurpose("scan");
-  let cursorPage: string | null = null;
+  const originalQueries = collectionQueries(since, until);
+  const supplementalQueries = collectionQueries(since, until, true);
+  let progress = range ? initialCollection(originalQueries, await getState(initialCollectionKey()), supplementalQueries) : null;
+  const queries = progress?.queries ?? [...originalQueries, ...supplementalQueries];
+  if (progress) await setState(initialCollectionKey(), progress);
   let stored = 0; let pages = 0;
-  const visited = new Set<string>();
-  do {
-    shutdownSignal.signal.throwIfAborted();
-    const res = await searchTweets(query, { purpose, subject: `x:${author()}`, window: roundId, cursor: cursorPage });
-    pages++;
-    for (const t of res.tweets) {
-      if (!t.retweeted_status && t.user.screen_name.toLowerCase() === author().toLowerCase()) stored += await storePost(t);
-    }
-    await completeReceipt(sql, res.receiptId);
-    cursorPage = res.nextCursor;
-    if (cursorPage && visited.has(cursorPage)) throw new Error("Collection returned a repeated page cursor; coverage remains incomplete");
-    if (cursorPage) visited.add(cursorPage);
-  } while (cursorPage);
+  for (let index = progress?.queryIndex ?? 0; index < queries.length; index++) {
+      const query = queries[index]!;
+      const handle = query.split(" ")[0]!.slice(5);
+      let cursorPage: string | null = progress?.cursor ?? null;
+      const visited = new Set<string>();
+      do {
+        shutdownSignal.signal.throwIfAborted();
+        const res = await searchTweets(query, { purpose, subject: `x:${handle}`, window: progress?.pageWindow ?? roundId, cursor: cursorPage, resume: !!progress });
+        pages++;
+        const posts = res.tweets.filter(t => !t.retweeted_status && t.user.screen_name.toLowerCase() === handle);
+        if (progress) {
+          const next = advanceInitialCollection(progress, res.nextCursor);
+          const inserted = await sql.begin(async tx => {
+            let count = 0;
+            for (const t of posts) count += await storePost(t, tx);
+            await completeReceipt(tx, res.receiptId);
+            await setState(initialCollectionKey(), next, tx);
+            return count;
+          });
+          stored += inserted;
+          progress = next;
+        } else {
+          for (const t of posts) stored += await storePost(t);
+          await completeReceipt(sql, res.receiptId);
+        }
+        cursorPage = res.nextCursor;
+        if (cursorPage && visited.has(cursorPage)) throw new Error("Collection returned a repeated page cursor; coverage remains incomplete");
+        if (cursorPage) visited.add(cursorPage);
+      } while (cursorPage);
+  }
   await touchWatermarks({ lastCollectedAt: started.toISOString() });
   return { stored, pages };
 }
@@ -150,9 +195,9 @@ export async function openEvents(before: Date, context: ContextInput[]): Promise
   const fromContext = contextIds.length ? sql`EXISTS (
     SELECT 1 FROM monitor_event_posts source WHERE source.monitor_id = ${monitorId()} AND source.event_id = e.id AND source.post_id IN ${sql(contextIds)}
   )` : sql`false`;
-  const rows = await sql<{ id: string; type: OpenEventInput["kind"]; status: OpenEventInput["status"]; schedule: { label: string } | null; scope: string | null; bonus_credit: OpenEventInput["bonusCredit"]; first_at: Date; excerpt: string }[]>`
+  const rows = await sql<{ id: string; type: OpenEventInput["kind"]; status: OpenEventInput["status"]; schedule: { label: string } | null; scope: string | null; products: string | null; bonus_credit: OpenEventInput["bonusCredit"]; first_at: Date; excerpt: string }[]>`
     WITH candidates AS (
-    SELECT e.id, e.type, e.status, e.schedule, e.presentation->>'scopeLabel' AS scope, e.presentation->'bonusCredit' AS bonus_credit, min(p.published_at) AS first_at,
+    SELECT e.id, e.type, e.status, e.schedule, e.presentation->>'scopeLabel' AS scope, e.presentation->>'productsZh' AS products, e.presentation->'bonusCredit' AS bonus_credit, min(p.published_at) AS first_at,
       (SELECT ep.original_text FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS ep JOIN (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS pp ON pp.id = ep.post_id WHERE ep.event_id = e.id ORDER BY pp.published_at, pp.id LIMIT 1) AS excerpt,
       ${fromContext} AS from_context
     FROM (SELECT * FROM monitor_events WHERE monitor_id = ${monitorId()}) AS e JOIN (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS l ON l.event_id = e.id JOIN (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS p ON p.id = l.post_id
@@ -167,7 +212,7 @@ export async function openEvents(before: Date, context: ContextInput[]): Promise
     SELECT * FROM candidates WHERE from_context OR id IN (
       SELECT id FROM candidates WHERE NOT from_context ORDER BY (type='bonus_credit') DESC, first_at DESC, id LIMIT 8
     ) ORDER BY from_context DESC, (type='bonus_credit') DESC, first_at DESC, id`;
-  return rows.map((r) => ({ id: r.id, kind: r.type, status: r.status, firstPostAt: r.first_at.toISOString(), excerpt: r.excerpt, schedule: r.schedule?.label ?? null, scope: r.scope,
+  return rows.map((r) => ({ id: r.id, kind: r.type, status: r.status, firstPostAt: r.first_at.toISOString(), excerpt: r.excerpt, schedule: r.schedule?.label ?? null, scope: r.scope, productsZh: r.products,
     ...(r.type === "bonus_credit" ? { bonusCredit: r.bonus_credit } : {}) }));
 }
 
@@ -187,6 +232,8 @@ const HEADLINE: Record<NotifyAction, (kind: string) => string> = {
 const bjStamp = (iso: string) => `${iso.slice(5, 16).replace("T", " ")}`;
 interface PushPost {
   post_id: string;
+  author: string;
+  url: string;
   published_at: Date;
   text: string;
   originalText: string;
@@ -241,11 +288,11 @@ function resetPostCard(post: PushPost, entries: Array<{ eventId: string; action:
     elements: [
       { tag: "div", text: { tag: "lark_md", content: lines.join("\n") } },
       parent ? { tag: "div", text: { tag: "lark_md", content: `${parent.relation === "quote" ? "引用" : "回复"} @${parent.author}：${(parent.text ?? parent.originalText).slice(0, 160)}` } } : null,
-      words ? { tag: "div", text: { tag: "lark_md", content: `> ${words.replace(/\n/g, "\n> ")}` } } : null,
+      words ? { tag: "div", text: { tag: "lark_md", content: `@${post.author}：\n> ${words.replace(/\n/g, "\n> ")}` } } : null,
       {
         tag: "action",
         actions: [
-          { tag: "button", text: { tag: "plain_text", content: "查看原帖" }, url: `https://x.com/${author()}/status/${post.post_id}`, type: "default" },
+          { tag: "button", text: { tag: "plain_text", content: "查看原帖" }, url: post.url, type: "default" },
           { tag: "button", text: { tag: "plain_text", content: currentMonitor().title ? `打开${currentMonitor().title}` : "打开重置监控" }, url: monitorPageUrl(), type: "primary" },
         ],
       },
@@ -254,10 +301,10 @@ function resetPostCard(post: PushPost, entries: Array<{ eventId: string; action:
 }
 
 /** Process all pending posts in publication order. Failed recognition aborts the round. */
-export async function processPending(limit = Infinity, roundId = randomUUID()): Promise<{ processed: number; failed: number }> {
+export async function processPending(limit = Infinity, roundId: string = randomUUID(), resume = false): Promise<{ processed: number; failed: number }> {
   if (!config.modelCallsEnabled) return { processed: 0, failed: 0 };
-  const posts = await sql<{ id: string; text: string; published_at: Date; raw: { contextPending?: boolean; context?: Array<ContextInput & { url: string }> } | null }[]>`
-    SELECT id, text, published_at, raw FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE processed_at IS NULL AND author = ${author()}
+  const posts = await sql<{ id: string; author: string; text: string; published_at: Date; raw: { contextPending?: boolean; context?: Array<ContextInput & { url: string }> } | null }[]>`
+    SELECT id, author, text, published_at, raw FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE processed_at IS NULL AND lower(author) = ANY(${authorHandles()}::text[])
     ORDER BY published_at, id ${Number.isFinite(limit) ? sql`LIMIT ${limit}` : sql``}`;
   let processed = 0;
   for (const p of posts) {
@@ -271,7 +318,7 @@ export async function processPending(limit = Infinity, roundId = randomUUID()): 
       continue;
     }
     try {
-      const rec = await recognizePost({ id: p.id, text: p.text, publishedAt: p.published_at.toISOString(), context: p.raw?.context ?? [], openEvents: await openEvents(p.published_at, p.raw?.context ?? []), roundId });
+      const rec = await recognizePost({ id: p.id, author: p.author, text: p.text, publishedAt: p.published_at.toISOString(), context: p.raw?.context ?? [], openEvents: await openEvents(p.published_at, p.raw?.context ?? []), roundId, resume });
       await applyRecognition(p.id, rec);
     } catch (error) { await recordPostFailure(p.id, "recognition", error); throw error; }
     await sql`UPDATE monitor_posts SET raw = raw - 'collectionFailure' WHERE monitor_id = ${monitorId()} AND (id = ${p.id} AND raw ? 'collectionFailure') `;
@@ -289,10 +336,10 @@ export async function processPending(limit = Infinity, roundId = randomUUID()): 
  */
 export async function flushResetPushes(): Promise<number> {
   const posts = await sql<PushPost[]>`
-    SELECT p.id AS post_id, p.published_at, p.recognition->'notify' AS notify,
+    SELECT p.id AS post_id, p.author, p.url, p.published_at, p.recognition->'notify' AS notify,
       coalesce(p.translation, p.text) AS text, p.text AS "originalText", p.context
     FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS p
-    WHERE p.processed_at IS NOT NULL AND p.author = ${author()} AND p.published_at > ${new Date(Date.now() - PUSH_MAX_AGE_MS)}
+    WHERE p.processed_at IS NOT NULL AND lower(p.author) = ANY(${authorHandles()}::text[]) AND p.published_at > ${new Date(Date.now() - PUSH_MAX_AGE_MS)}
       AND jsonb_array_length(coalesce(p.recognition->'notify', '[]'::jsonb)) > 0
     ORDER BY p.published_at, p.id`;
   if (!posts.length) return 0;
@@ -337,7 +384,8 @@ export async function flushResetPushes(): Promise<number> {
 }
 
 /** One scheduled run owns the checkpoint; a concurrent trigger skips instead of queuing. */
-export async function monitorTick(opts: { lookbackHours?: number; initialRange?: { since: string; until: string } } = {}) {
+export async function monitorTick(opts: { lookbackHours?: number; initialRange?: { since: string; until: string }; collectOnly?: boolean } = {}) {
+  if (opts.collectOnly && !opts.initialRange) throw new Error("collectOnly requires a finite initialization range");
   const connection = await sql.reserve();
   try {
     const [lock] = await connection<{ acquired: boolean }[]>`SELECT pg_try_advisory_lock(hashtext(${currentMonitor().names.tick})) AS acquired`;
@@ -346,22 +394,29 @@ export async function monitorTick(opts: { lookbackHours?: number; initialRange?:
     finally { await connection`SELECT pg_advisory_unlock(hashtext(${currentMonitor().names.tick}))`; }
   } finally { connection.release(); }
 }
-async function tick(opts: { lookbackHours?: number; initialRange?: { since: string; until: string } }) {
+async function tick(opts: { lookbackHours?: number; initialRange?: { since: string; until: string }; collectOnly?: boolean }) {
   const started = new Date(); const roundId = randomUUID();
   await cleanupMonitorCollectionState();
   await touchWatermarks({ lastAttemptAt: started.toISOString() });
   const collected = await collectPosts({ ...opts, startedAt: started, roundId });
-  const context = await collectPendingContext(Infinity, roundId);
-  const result = await processPending(Infinity, roundId);
-  const [pending] = await sql<{ n: number }[]>`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS n FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE author = ${author()}`;
+  const screened = await screenPendingPosts();
+  if (opts.collectOnly) return { ...collected, screened, collectOnly: true, verifiedAt: null };
+  const progress = opts.initialRange ? await getState<{ processingWindow: string }>(initialCollectionKey()) : null;
+  const processingWindow = progress?.processingWindow ?? roundId;
+  const context = await collectPendingContext(Infinity, processingWindow, !!opts.initialRange);
+  const result = await processPending(Infinity, processingWindow, !!opts.initialRange);
+  const [pending] = await sql<{ n: number }[]>`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS n FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE lower(author) = ANY(${authorHandles()}::text[])`;
   const complete = process.env.COLLECT_ENABLED === "true" && config.modelCallsEnabled && !pending?.n;
   if (!complete) throw new Error(`Monitor round incomplete: ${pending?.n ?? 0} posts pending; collection and model calls must be enabled`);
   // Business review does not mean the transport or recognition failed.
   if (opts.lookbackHours === undefined) {
     const through = opts.initialRange ? new Date(Math.floor(Date.parse(opts.initialRange.until) / 1000) * 1000).toISOString() : started.toISOString();
-    await setState(cursorKey(), { checkpointVersion: 2, scannedThrough: through });
-    await touchWatermarks({ lastVerifiedAt: started.toISOString() });
+    await sql.begin(async tx => {
+      await setState(cursorKey(), { checkpointVersion: 2, scannedThrough: through }, tx);
+      await touchWatermarks({ lastVerifiedAt: started.toISOString() }, tx);
+      if (opts.initialRange) await tx`DELETE FROM monitor_state WHERE monitor_id = ${monitorId()} AND key = ${initialCollectionKey()}`;
+    });
   }
   const pushed = await flushResetPushes();
-  return { ...collected, ...result, context, pushed, pending: 0, verifiedAt: opts.lookbackHours === undefined ? bjIso(started) : null };
+  return { ...collected, ...result, ...(screened ? { screened } : {}), context, pushed, pending: 0, verifiedAt: opts.lookbackHours === undefined ? bjIso(started) : null };
 }

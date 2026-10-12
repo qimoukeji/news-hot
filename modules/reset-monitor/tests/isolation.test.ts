@@ -20,7 +20,7 @@ import type { Recognition } from "../backend/recognize.ts";
 import type { AdminMonitorReviewDraft, ResetMonitorSnapshot } from "../contracts.ts";
 
 const third: ResetMonitorBackendDefinition = {
-  ...claude, monitorId: "testai", moduleName: "testai-reset", product: "TestAI", author: "TestAI", authorName: "TestAI",
+  ...claude, monitorId: "testai", moduleName: "testai-reset", product: "TestAI", authors: [{ handle: "TestAI", name: "TestAI" }], authorName: "TestAI",
   pagePath: "/testai-reset", adminPath: "/admin/testai-reset", adminApiPath: "/api/admin/testai-reset",
   siteApiPath: "/api/site/testai-reset", publicApiPath: "/api/v1/testai-resets", agentPath: "/testai-resets",
   mcpTool: "get_testai_resets", names: monitorNames("testai"),
@@ -31,7 +31,7 @@ const text = (definition: ResetMonitorBackendDefinition, action = "announce") =>
 
 async function addPost(definition: ResetMonitorBackendDefinition, id: string, source = text(definition), publishedAt = at) {
   await sql`INSERT INTO monitor_posts (monitor_id,id,author,published_at,text,url)
-    VALUES (${definition.monitorId},${id},${definition.author},${publishedAt},${source},${`https://x.com/${definition.author}/status/${id}`})`;
+    VALUES (${definition.monitorId},${id},${definition.authors[0]!.handle},${publishedAt},${source},${`https://x.com/${definition.authors[0]!.handle}/status/${id}`})`;
 }
 function recognition(definition: ResetMonitorBackendDefinition, action: "announce" | "confirm" = "announce"): Recognition {
   return { relevant: true, translationZh: `${definition.product} 的原帖译文`, contextZh: [], outage: null, needsReview: false,

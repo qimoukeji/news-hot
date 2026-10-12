@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
 // Review is a read-only plan followed by one version-checked transaction. No model or provider calls.
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";

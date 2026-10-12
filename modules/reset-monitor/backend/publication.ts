@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
 import type { ResetMonitorPageData, ResetMonitorSitePage, ResetMonitorDay } from "../contracts.ts";
 import { resetPage } from "./read.ts";
 

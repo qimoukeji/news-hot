@@ -1,5 +1,5 @@
 import type { Tx } from "@aihot/backend/db";
-import { monitorId, author } from "./context.ts";
+import { monitorId, isAuthor } from "./context.ts";
 import type { ContextInput, Proposition } from "./recognize.ts";
 
 /** Association uses saved official ancestry, never an unverified context quotation. */
@@ -9,7 +9,7 @@ export async function trustedThreadEvents(tx: Tx, context: ContextInput[], postA
   let frontier = context;
   for (let depth = 0; depth < 8 && frontier.length; depth++) {
     const inputs = frontier.filter((c) => !seen.has(c.id) && ["reply", "quote"].includes(c.relation)
-      && c.author.replace(/^@/, "").toLowerCase() === author().toLowerCase()
+      && isAuthor(c.author)
       && c.publishedAt && Number.isFinite(Date.parse(c.publishedAt)) && Date.parse(c.publishedAt) <= postAt.getTime());
     if (!inputs.length) break;
     inputs.forEach((c) => seen.add(c.id));
@@ -18,7 +18,7 @@ export async function trustedThreadEvents(tx: Tx, context: ContextInput[], postA
     frontier = [];
     for (const row of rows) {
       const input = inputs.find((c) => c.id === row.id)!;
-      if (row.author.toLowerCase() !== author().toLowerCase() || row.text !== input.text
+      if (!isAuthor(row.author) || row.author.toLowerCase() !== input.author.replace(/^@/, "").toLowerCase() || row.text !== input.text
         || row.published_at.getTime() !== Date.parse(input.publishedAt!) || row.published_at > postAt) continue;
       verified.push(row.id);
       frontier.push(...(row.raw?.context ?? []).filter((c) => c.publishedAt && Date.parse(c.publishedAt) <= row.published_at.getTime()));

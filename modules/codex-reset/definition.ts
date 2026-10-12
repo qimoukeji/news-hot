@@ -2,7 +2,7 @@ import type { ResetMonitorDefinition } from "@aihot/reset-monitor/definition";
 
 export const definition: ResetMonitorDefinition = {
   monitorId: "codex", moduleName: "codex-reset", product: "Codex", organization: "OpenAI",
-  author: "thsottiaux", authorName: "Tibo", pagePath: "/codex-reset", adminPath: "/admin/monitor",
+  authors: [{ handle: "thsottiaux", name: "Tibo" }], authorName: "Tibo", pagePath: "/codex-reset", adminPath: "/admin/monitor",
   adminApiPath: "/api/admin/monitor", siteApiPath: "/api/site/codex-reset",
   publicApiPath: "/api/v1/codex-resets", agentPath: "/codex-resets", mcpTool: "get_codex_resets",
   timePolicy: "predicted",

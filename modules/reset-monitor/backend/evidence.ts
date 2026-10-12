@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
 // Checks action evidence and time provenance; model recognition remains the source of propositions.
 import type { ContextInput, Proposition } from "./recognize.ts";
 

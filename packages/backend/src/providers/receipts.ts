@@ -3,8 +3,8 @@
 // 1. A logical request has a stable key bound to task, input revision, provider, model, prompt and config.
 // 2. Before calling, a placeholder row and an attempt row are persisted; budgets count attempts.
 // 3. The raw response is saved before any business write; recovery reuses a received response.
-// 4. Monitor requests fail without recovery; their attempts retain unknown billing outcomes.
-//    Other callers retain the default recovery in operations/recover.ts.
+// 4. Monitor attempts retain unknown billing outcomes; initialization resumes never buy them again.
+//    Only definite failures can resume under one key. Other callers retain operations/recover.ts.
 import { sql, type Db } from "../db.ts";
 import { sha256, stableJson } from "../lib/ids.ts";
 import { shutdownSignal } from "../lib/shutdown.ts";
@@ -23,6 +23,11 @@ export class BudgetExceededError extends Error {
 }
 
 export class ReceiptBusyError extends Error {}
+
+/** The attempt was reserved, but stopped before any request reached the provider. */
+export class ProviderNotSentError extends Error {
+  receiptId?: number;
+}
 
 export class ReceiptFailedError extends Error {
   readonly receiptId: number;
@@ -79,6 +84,10 @@ export interface ReceiptRequest {
   requestSummary?: Record<string, unknown>;
   /** Distinguishes an explicit re-run (e.g. admin "re-evaluate") from recovery of the same request. */
   attemptTag?: string;
+  /** An explicit initialization resume may retry definite failures under the same persisted key. */
+  retryFailed?: boolean;
+  /** Initialization context lookups may reuse old answers to the exact same input across round tags. */
+  reuseReceivedAcrossAttempts?: boolean;
 }
 
 export interface ReceiptResult {
@@ -125,6 +134,18 @@ async function checkBudget(tx: Db, service: string): Promise<void> {
   if (c.day >= budget.per_day) throw new BudgetExceededError(service, "day", 3600);
 }
 
+/** Recheck the stop controls immediately before sending an already-reserved attempt. */
+export async function assertRequestCanSend(service: string): Promise<void> {
+  if (shutdownSignal.signal.aborted) throw new ProviderNotSentError("Request stopped before sending", { cause: shutdownSignal.signal.reason });
+  const [budget] = await sql<{ per_minute: number; per_hour: number; per_day: number }[]>`
+    SELECT per_minute, per_hour, per_day FROM budgets WHERE service = ${service}`;
+  // Reservation already counted this attempt. Rechecking counts would reject the last allowed one.
+  if (budget && (budget.per_minute <= 0 || budget.per_hour <= 0 || budget.per_day <= 0)) {
+    throw new ProviderNotSentError(budgetMessage(service, "stopped"));
+  }
+  if (shutdownSignal.signal.aborted) throw new ProviderNotSentError("Request stopped before sending", { cause: shutdownSignal.signal.reason });
+}
+
 /**
  * Runs a paid request at most once per logical key and returns its raw response.
  * A caller persisting business results completes the receipt in the same transaction.
@@ -138,6 +159,27 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
     const [existing] = await tx<ReceiptRow[]>`
       SELECT id, status, response, created_at, updated_at, attempts, error FROM receipts WHERE logical_key = ${logicalKey} FOR UPDATE`;
     if (existing?.status === "received" || existing?.status === "completed") return { kind: "reuse" as const, row: existing };
+    if (!existing && req.reuseReceivedAcrossAttempts) {
+      const prefix = [req.service, req.purpose, req.model ?? "-", sha256(stableJson(req.identity)), ""].join(":");
+      const [received] = await tx<ReceiptRow[]>`
+        SELECT id, status, response, created_at, updated_at, attempts, error FROM receipts
+        WHERE left(logical_key, ${prefix.length}) = ${prefix} AND subject IS NOT DISTINCT FROM ${req.subject ?? null}
+          AND status IN ('received', 'completed')
+        ORDER BY updated_at DESC, id DESC LIMIT 1 FOR UPDATE`;
+      if (received) return { kind: "reuse" as const, row: received };
+      const [unresolved] = await tx<ReceiptRow[]>`
+        SELECT id, status, response, created_at, updated_at, attempts, error FROM receipts r
+        WHERE left(logical_key, ${prefix.length}) = ${prefix} AND subject IS NOT DISTINCT FROM ${req.subject ?? null}
+          AND (status IN ('pending', 'unknown') OR EXISTS (
+            SELECT 1 FROM receipt_attempts a WHERE a.receipt_id = r.id AND a.status = 'unknown'))
+        ORDER BY updated_at DESC, id DESC LIMIT 1 FOR UPDATE`;
+      if (unresolved?.status === "pending") {
+        if (Date.now() - unresolved.updated_at.getTime() < PENDING_STALE_MS) return { kind: "busy" as const, row: unresolved };
+        await markUnknown(tx, unresolved.id, "placeholder went stale without a recorded result", isMonitorRequest(req.purpose));
+      }
+      // A new processing window cannot make an unresolved old lookup safe to buy again.
+      if (unresolved) return { kind: "unknown" as const, row: unresolved };
+    }
     // Finish business writes from saved answers during shutdown, but never reserve or send the
     // next paid page/batch. An answer already in flight still saves below, without this check.
     shutdownSignal.signal.throwIfAborted();
@@ -147,9 +189,14 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
         await markUnknown(tx, existing.id, "placeholder went stale without a recorded result", isMonitorRequest(req.purpose));
         return { kind: "unknown" as const, row: existing };
       }
+      if (req.retryFailed) {
+        const unknownAttempts = await tx`SELECT 1 FROM receipt_attempts WHERE receipt_id = ${existing.id} AND status = 'unknown' LIMIT 1`;
+        // Older monitor receipts were retired to failed while their billing outcome stayed unknown.
+        if (existing.status === "unknown" || unknownAttempts.length) return { kind: "unknown" as const, row: existing };
+      }
       if (isMonitorRequest(req.purpose)) {
         if (existing.status === "unknown") await tx`UPDATE receipts SET status = 'failed', updated_at = now() WHERE id = ${existing.id}`;
-        return { kind: "failed" as const, row: existing };
+        if (!req.retryFailed) return { kind: "failed" as const, row: existing };
       }
       if (existing.status === "unknown") return { kind: "unknown" as const, row: existing };
       // failed: the provider did not take the request, or its answer was unusable; a new attempt is allowed.
@@ -180,17 +227,19 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
   const started = Date.now();
   let outcome: CallOutcome;
   try {
+    await assertRequestCanSend(req.service);
     outcome = await call();
   } catch (error) {
-    const status = error instanceof ProviderRejectedError ? "failed" : "unknown";
+    const notAccepted = error instanceof ProviderRejectedError || error instanceof ProviderNotSentError;
+    const status = notAccepted ? "failed" : "unknown";
     const receiptStatus = isMonitorRequest(req.purpose) ? "failed" : status;
     // "unknown": the request may have reached the provider (timeout, reset): do not re-send automatically.
-    const message = (error instanceof ProviderRejectedError ? error.message : String(error)).slice(0, 2000);
+    const message = (notAccepted ? error.message : String(error)).slice(0, 2000);
     await sql.begin(async (tx) => {
       await tx`UPDATE receipts SET status = ${receiptStatus}, error = ${message}, updated_at = now() WHERE id = ${receiptId}`;
       await tx`UPDATE receipt_attempts SET status = ${status}, error = ${message}, latency_ms = ${Date.now() - started}, finished_at = now() WHERE id = ${attemptId}`;
     });
-    if (error instanceof ProviderRejectedError) error.receiptId = receiptId;
+    if (notAccepted) error.receiptId = receiptId;
     // The first transport failure needs the same durable identity as a later unknown-result retry.
     if (status === "unknown") throw new ReceiptUnknownError(receiptId, message, { cause: error });
     throw error;

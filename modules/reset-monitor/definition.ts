@@ -6,7 +6,7 @@ export interface ResetMonitorWebDefinition {
   moduleName: string;
   product: string;
   organization: string;
-  author: string;
+  authors: readonly { handle: string; name: string }[];
   authorName: string;
   pagePath: string;
   adminPath: string;

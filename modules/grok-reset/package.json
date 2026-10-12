@@ -1,0 +1,8 @@
+{
+  "name": "@aihot/grok-reset",
+  "private": true,
+  "type": "module",
+  "scripts": { "initialize": "node --env-file-if-exists=../../.env scripts/initialize.ts" },
+  "exports": { "./module": "./module.ts", "./server": "./server.ts", "./web": "./web.tsx", "./contracts": "./contracts.ts" },
+  "dependencies": { "@aihot/reset-monitor": "*", "@aihot/backend": "*", "@aihot/contracts": "*", "@aihot/site": "*" }
+}

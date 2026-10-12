@@ -12,7 +12,7 @@ MONITOR_MODEL=default
 # 也可使用 twitterapi_io，凭据与 Codex 共用 TWITTERAPI_IO_API_KEY。
 ```
 
-默认 SocialData、每 15 分钟扫描，识别与 Codex 共用 `MONITOR_MODEL`；填 `default` 或未配置时使用 `LLM_*`，也可填具名模型预设。后台“重置监控识别”的选择对两个模块同时生效。每天北京时间 04:40 查漏最近 24 小时；任务名为 `claude-reset.tick` 和 `claude-reset.lookback`。修改后重启 API 和 worker。
+默认 SocialData、每 15 分钟扫描，识别与 Codex、Grok 共用 `MONITOR_MODEL`；填 `default` 或未配置时使用 `LLM_*`，也可填具名模型预设。后台“重置监控识别”的选择对所有重置监控模块同时生效。每天北京时间 04:40 查漏最近 24 小时；任务名为 `claude-reset.tick` 和 `claude-reset.lookback`。修改后重启 API 和 worker。
 
 开发保持 `COLLECT_ENABLED=false`、`MODEL_CALLS_ENABLED=false` 和推送安全阀关闭。采集凭据、预算、代理与 Codex 共用，执行锁、成功检查点、事件、回执用途和通知各自独立。初始化先确认真实有限范围，再执行：
 
@@ -20,7 +20,7 @@ MONITOR_MODEL=default
 npm run initialize -w @aihot/claude-reset -- --since 2026-10-08T00:00:00Z --until 2026-10-09T00:00:00Z
 ```
 
-此命令会实际采集和识别，要求明确开启采集与模型安全阀、配置凭据与预算。起止时间必须带时区且 `since < until <= 当前时间`；失败保留帖子但不写成功检查点。Docker 命令、详细采集规则和人工复核见 [共享引擎说明](../reset-monitor/README.md)。
+此命令会实际采集和识别，要求明确开启采集与模型安全阀、配置凭据与预算。起止时间必须带时区且 `since < until <= 当前时间`；首次初始化失败保留帖子和分页断点，以相同范围及配置重跑可继续，更换同供应商账号不重采已提交页；整轮完成前不写成功检查点。普通扫描和查漏不使用分页断点。Docker 命令、详细采集规则和人工复核见 [共享引擎说明](../reset-monitor/README.md)。
 
 ## 识别与时间
 

@@ -2,7 +2,7 @@ import type { ResetMonitorDefinition } from "@aihot/reset-monitor/definition";
 
 export const definition: ResetMonitorDefinition = {
   monitorId: "claude", moduleName: "claude-reset", product: "Claude", organization: "Anthropic",
-  author: "ClaudeDevs", authorName: "ClaudeDevs", pagePath: "/claude-reset", adminPath: "/admin/claude-reset",
+  authors: [{ handle: "ClaudeDevs", name: "ClaudeDevs" }], authorName: "ClaudeDevs", pagePath: "/claude-reset", adminPath: "/admin/claude-reset",
   adminApiPath: "/api/admin/claude-reset", siteApiPath: "/api/site/claude-reset",
   publicApiPath: "/api/v1/claude-resets", agentPath: "/claude-resets", mcpTool: "get_claude_resets",
   timePolicy: "explicit", title: "Claude 额度动态", eventKinds: ["direct_reset", "reset_credit", "bonus_credit"],

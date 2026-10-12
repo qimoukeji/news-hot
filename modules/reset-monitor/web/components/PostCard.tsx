@@ -8,6 +8,8 @@ import { stamp } from "./format";
 
 export interface CardPost {
   id: string;
+  author: string;
+  authorAvatar: string | null;
   publishedAt: string | null;
   translation: string | null;
   original: string;
@@ -32,13 +34,16 @@ function Context({ c, original }: { c: ResetMonitorContextPost; original: boolea
 
 /** A monitored post: Chinese translation first, context below, the English original one tap away. */
 export function PostCard({ post, stage, avatar, compact = false }: { post: CardPost; stage?: string; avatar?: string | null; compact?: boolean }) {
-  const { author, authorName } = useMonitor();
+  const { authors } = useMonitor();
+  const author = post.author;
+  const authorName = authors.find((a) => a.handle.toLowerCase() === author.toLowerCase())?.name ?? author;
+  const authorAvatar = post.authorAvatar ?? (authors.length === 1 ? avatar : null);
   const [showOriginal, setShowOriginal] = useState(false);
   const hasTranslation = !!post.translation;
   return (
     <article className={`min-w-0 rounded-card border border-line-strong bg-surface ${compact ? "px-4 py-3" : "p-4 sm:px-6"}`}>
       <header className="flex items-center gap-2.5">
-        <SourceAvatar name={authorName} avatarUrl={avatar} size={36} />
+        <SourceAvatar name={authorName} avatarUrl={authorAvatar} size={36} />
         <span className="min-w-0 flex-1 leading-tight">
           <strong className="block text-[13px] font-semibold text-ink">{authorName}</strong>
           <small className="block text-[12px] text-ink-4">@{author}</small>

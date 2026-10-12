@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
 // Administrative reads and corrections. Manual post decisions use the same atomic review planner.
 import type { BeforeJson } from "@aihot/contracts/admin";
 import type { AdminMonitorEvents, AdminMonitorPosts } from "../contracts.ts";
@@ -38,7 +38,7 @@ export async function eventRows(db: Db, ids?: string[]) {
   return db`SELECT e.*,
     (${receiptReviewCondition(db)}) AS "canReceiptReview",
     coalesce((SELECT jsonb_agg(jsonb_build_object('postId',l.post_id,'stage',l.stage,'action',l.action,
-      'text',l.text,'originalText',l.original_text,'publishedAt',p.published_at,'url',p.url) ORDER BY p.published_at,p.id)
+      'author',p.author,'text',l.text,'originalText',l.original_text,'publishedAt',p.published_at,'url',p.url) ORDER BY p.published_at,p.id)
       FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS l JOIN (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS p ON p.id=l.post_id WHERE l.event_id=e.id),'[]'::jsonb) AS posts
     FROM (SELECT * FROM monitor_events WHERE monitor_id = ${monitorId()}) AS e WHERE ${ids ? db`e.id IN ${db(ids)}` : db`true`} ORDER BY e.created_at DESC,e.id DESC`;
 }
@@ -71,7 +71,7 @@ export async function listMonitorEvents(
 }
 
 export async function postRows(db: Db, id?: string) {
-  return db`SELECT p.id,p.published_at,p.text,p.url,p.translation,p.processed_at,p.receipt_id,p.origin,
+  return db`SELECT p.id,p.author,p.published_at,p.text,p.url,p.translation,p.processed_at,p.receipt_id,p.origin,
     p.recognition->'propositions' AS propositions,(p.recognition->>'needsReview')::boolean AS needs_review,
     p.recognition->'held' AS held,
     (p.recognition->>'skipped')::boolean AS skipped,

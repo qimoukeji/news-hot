@@ -290,7 +290,7 @@ export function ResetCalendar({ marks, events, today, historyFrom, now, avatar, 
                 </p>
                 {post && (
                   <div className="mb-2 mt-3">
-                    <PostCard compact avatar={avatar} stage={post.stage} post={{ id: post.id, publishedAt: post.publishedAt, translation: post.fullText ?? post.text, original: post.fullOriginalText ?? post.originalText, context: post.context, url: post.url }} />
+                    <PostCard compact avatar={avatar} stage={post.stage} post={{ id: post.id, author: post.author, authorAvatar: post.authorAvatar, publishedAt: post.publishedAt, translation: post.fullText ?? post.text, original: post.fullOriginalText ?? post.originalText, context: post.context, url: post.url }} />
                   </div>
                 )}
                 {e.posts.length > 1 && <EarlierPosts posts={e.posts.slice(1)} avatar={avatar} />}
@@ -330,7 +330,7 @@ function EarlierPosts({ posts, avatar }: { posts: ResetMonitorEvent["posts"]; av
       {open && (
         <div className="mt-2 space-y-2">
           {posts.map((p) => (
-            <PostCard key={p.id} compact avatar={avatar} stage={p.stage} post={{ id: p.id, publishedAt: p.publishedAt, translation: p.fullText ?? p.text, original: p.fullOriginalText ?? p.originalText, context: p.context, url: p.url }} />
+            <PostCard key={p.id} compact avatar={avatar} stage={p.stage} post={{ id: p.id, author: p.author, authorAvatar: p.authorAvatar, publishedAt: p.publishedAt, translation: p.fullText ?? p.text, original: p.fullOriginalText ?? p.originalText, context: p.context, url: p.url }} />
           ))}
         </div>
       )}

@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, authorHandles, isAuthor, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
 // Turns a recognized post into monitor facts: events (announce → progress → confirm, amend,
 // withdraw), the post's activity role and outage links. Code decides what
 // a proposition may change; the model's wording never confirms anything on its own.
@@ -113,7 +113,17 @@ function quotaConflicts(a: unknown, p: Proposition): boolean {
 }
 
 function claimScopesConflict(a: Proposition, b: Proposition): boolean {
-  return scopeConflicts(propositionScope(a), propositionScope(b)) || quotaConflicts(currentMonitor().quotaScope?.(a.scope, a), b);
+  return scopeConflicts(propositionScope(a), propositionScope(b)) || quotaConflicts(currentMonitor().quotaScope?.(a.scope, a), b)
+    || !!currentMonitor().scopeConflicts?.(a.scope, b.scope);
+}
+
+function eventScopeConflicts(e: EventRow, p: Proposition): boolean {
+  const label = e.presentation?.scopeLabel;
+  return !!currentMonitor().scopeConflicts?.({
+    audienceSource: typeof label === "string" ? label : null,
+    plans: typeof label === "string" ? label.split(/,\s*/) : null, audienceZh: null,
+    productsZh: typeof e.presentation?.productsZh === "string" ? e.presentation.productsZh : null,
+  }, p.scope);
 }
 
 function mergeRepeatedScope(original: Proposition, repeated: Proposition) {
@@ -124,14 +134,14 @@ function mergeRepeatedScope(original: Proposition, repeated: Proposition) {
 }
 
 /** Only fields stated in a follow-up are merged; missing fields cannot erase earlier evidence. */
-async function enrichEvent(tx: Tx, id: string, p: Proposition, previous: Record<string, unknown> | null = null, supplement = false) {
+async function enrichEvent(tx: Tx, id: string, p: Proposition, previous: Record<string, unknown> | null = null, supplement = false, defaultedProduct = false) {
   const patch: Record<string, unknown> = {};
   const scope = propositionScope(p);
   // Progress and completion describe delivery, not a revision of who was promised the reset.
   const keepKnownScope = (p.action === "progress" || p.action === "confirm") && !!previous?.scopeLabel;
   if (scope && !keepKnownScope) Object.assign(patch, { scopeKnown: true, scopeLabel: scope });
   if (p.scope.audienceZh && !keepKnownScope) patch.audienceZh = p.scope.audienceZh;
-  if (p.scope.productsZh) patch.productsZh = p.scope.productsZh;
+  if (p.scope.productsZh && (!defaultedProduct || !previous?.productsZh)) patch.productsZh = p.scope.productsZh;
   if (p.kind === "bonus_credit" && p.bonusCredit) {
     patch.bonusCredit = { amount: null, eligibility: null, claimMethod: null, usageTerms: null, claimDeadline: null, expiresAt: null,
       ...(previous?.bonusCredit as object ?? {}), ...Object.fromEntries(Object.entries(p.bonusCredit).filter(([, value]) => value !== null)) };
@@ -156,14 +166,14 @@ async function enrichEvent(tx: Tx, id: string, p: Proposition, previous: Record<
     scope = CASE WHEN ${!keepKnownScope && !!legacyScope(p)} THEN ${legacyScope(p)} ELSE scope END WHERE monitor_id = ${monitorId()} AND (id = ${id}) `;
 }
 
-async function findTarget(tx: Tx, p: Proposition, postAt: Date): Promise<{ target: EventRow | null; needsReview: boolean }> {
+async function findTarget(tx: Tx, p: Proposition, postAt: Date, postAuthor: string): Promise<{ target: EventRow | null; needsReview: boolean }> {
   if (p.relatesTo) {
     const [e] = await tx<EventRow[]>`SELECT id, type, status, schedule, presentation, created_at FROM (SELECT * FROM monitor_events WHERE monitor_id = ${monitorId()}) AS monitor_events WHERE id = ${p.relatesTo} AND NOT withdrawn`;
     // "The second reset has landed" can complete its explicitly named announcement.
     // A new announcement or a further reset after completion is independent of the named old round.
     if (e && p.count === 1 && newRound(p.excerpt) && (p.action === "announce" || p.action === "confirm" && e.status === "confirmed")) return { target: null, needsReview: false };
     const kindCompatible = e && (e.type === p.kind || e.type !== "bonus_credit" && p.kind !== "bonus_credit" && (!p.kindExplicit || e.presentation?.kindExplicit === false));
-    if (e && kindCompatible && e.created_at <= postAt && (p.action === "amend"
+    if (e && kindCompatible && e.created_at <= postAt && !eventScopeConflicts(e, p) && (p.action === "amend"
       || !scopeConflicts(e.presentation?.scopeLabel as string | null, propositionScope(p)) && !quotaConflicts(e.presentation?.quotaScope, p))) return { target: e, needsReview: false };
     return { target: null, needsReview: true };
   }
@@ -176,8 +186,15 @@ async function findTarget(tx: Tx, p: Proposition, postAt: Date): Promise<{ targe
     WHERE (type = ${p.kind} OR presentation->>'kindExplicit' = 'false' OR ${!p.kindExplicit}) AND NOT withdrawn AND created_at <= ${postAt}
       AND type <> 'bonus_credit' AND (status = 'announced' OR ${p.action === "confirm"} AND confirmation_basis = 'receipt_review' AND confirmed_at IS NULL)
     ORDER BY created_at DESC`;
-  const eligible = rows.filter((e) => isOpen(e, postAt, 12 * HOUR) && !scopeConflicts(e.presentation?.scopeLabel as string | null, propositionScope(p)) && !quotaConflicts(e.presentation?.quotaScope, p));
-  return { target: eligible.length === 1 ? eligible[0]! : null, needsReview: eligible.length > 1 };
+  const eligible = rows.filter((e) => isOpen(e, postAt, 12 * HOUR) && !scopeConflicts(e.presentation?.scopeLabel as string | null, propositionScope(p)) && !quotaConflicts(e.presentation?.quotaScope, p) && !eventScopeConflicts(e, p));
+  if (eligible.length === 1 && currentMonitor().requireCrossAuthorEvidence) {
+    const [sameAuthor] = await tx`SELECT 1 FROM monitor_event_posts ep
+      JOIN monitor_posts p ON p.monitor_id = ep.monitor_id AND p.id = ep.post_id
+      WHERE ep.monitor_id = ${monitorId()} AND ep.event_id = ${eligible[0]!.id} AND lower(p.author) = ${postAuthor.toLowerCase()} LIMIT 1`;
+    if (!sameAuthor) return { target: null, needsReview: true };
+  }
+  return { target: eligible.length === 1 ? eligible[0]! : null, needsReview: eligible.length > 1
+    || eligible.length === 0 && rows.some((e) => isOpen(e, postAt, 12 * HOUR) && eventScopeConflicts(e, p)) };
 }
 
 /** Text compared loosely: case, quotes, dashes, links, emoji and spacing aside. */
@@ -230,8 +247,8 @@ async function createEvent(tx: Tx, p: Proposition, postId: string, index: number
  */
 export async function applyRecognition(postId: string, rec: Recognition): Promise<Applied> {
   return sql.begin(async (tx) => {
-    const [post] = await tx<{ published_at: Date; text: string; raw: { context?: ContextInput[] } | null; context: Array<Record<string, unknown>>; processed_at: Date | null }[]>`
-      SELECT published_at, text, raw, context, processed_at FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE id = ${postId} FOR UPDATE`;
+    const [post] = await tx<{ author: string; published_at: Date; text: string; raw: { context?: ContextInput[] } | null; context: Array<Record<string, unknown>>; processed_at: Date | null }[]>`
+      SELECT author, published_at, text, raw, context, processed_at FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE id = ${postId} FOR UPDATE`;
     if (!post) throw new Error(`monitor post ${postId} not found`);
     if (post.processed_at) return { eventIds: [], notify: [] };
     const postAt = post.published_at;
@@ -245,12 +262,13 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
       SELECT e.id,e.type FROM monitor_events e WHERE e.monitor_id=${monitorId()} AND e.id=ANY(${namedIds}::text[])
         AND e.type='bonus_credit' AND NOT e.withdrawn AND e.created_at<=${postAt}
         AND EXISTS (SELECT 1 FROM monitor_event_posts l JOIN monitor_posts p ON p.monitor_id=l.monitor_id AND p.id=l.post_id
-          WHERE l.monitor_id=e.monitor_id AND l.event_id=e.id AND lower(p.author)=lower(${author()}) AND p.published_at<=${postAt})` : [];
+          WHERE l.monitor_id=e.monitor_id AND l.event_id=e.id AND lower(p.author)=ANY(${authorHandles()}::text[]) AND p.published_at<=${postAt})` : [];
     const threadRelated = new Set<Proposition>();
     const ambiguousThread = new Set<Proposition>();
     const exclusions: Array<{ index: number; reason: string }> = [];
     const excluded = new Set<Proposition>();
     const unknownTime = new Set<Proposition>();
+    const defaultedProducts = new Set<Proposition>();
     rec = { ...rec, propositions: rec.propositions.map((p, index) => {
       const refersToCampaign = /\b(?:the|your|this)\s+(?:credit|bonus|promo|promotion)|\bcan still claim\b|\/claim-credit\b/i.test(p.excerpt);
       const newCampaign = /\b(?:another|second|new|additional)\s+(?:(?:one[ -]time|bonus|reward|promotional|cloud)\s+)*(?:credit|campaign|promotion)|\banother\s+(?:bonus|reward)\b/i.test(p.excerpt);
@@ -276,6 +294,13 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
       if (p.kind === "bonus_credit") p = { ...p, count: 1, expectedLanding: null, timeInferred: false, bonusCredit: bonusCreditOf(p, input),
         statedTime: bonusOpeningTime(p) ? p.statedTime : null };
       const resolved = timeSource(p, input);
+      if (!resolved.proposition.scope.productsZh) {
+        const product = currentMonitor().defaultProductForAuthor?.(post.author);
+        if (product) {
+          resolved.proposition = { ...resolved.proposition, scope: { ...resolved.proposition.scope, productsZh: product } };
+          defaultedProducts.add(resolved.proposition);
+        }
+      }
       if (supplement) threadRelated.add(resolved.proposition);
       if (supplement && (targets.length > 1 && !p.relatesTo || p.relatesTo && !targets.some((event) => event.id === p.relatesTo))) ambiguousThread.add(resolved.proposition);
       if (resolved.needsReview) unknownTime.add(resolved.proposition);
@@ -313,7 +338,7 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
           return false;
         }
         const earlier = claimed.slice(0, claimed.indexOf(p)).filter((q) => !held.includes(q) && q.duplicateOf == null);
-        if (earlier.some((q) => q.kind === p.kind && q.action === p.action && q.count === p.count && q.relatesTo === p.relatesTo && loose(q.excerpt) === loose(p.excerpt))) return false;
+          if (earlier.some((q) => q.kind === p.kind && q.action === p.action && q.count === p.count && q.relatesTo === p.relatesTo && !claimScopesConflict(q, p) && loose(q.excerpt) === loose(p.excerpt))) return false;
         // The deployed recognizer once counted the explanation of a 500k-user compensation twice.
         // An explicit "instead granted" explanation restates the compensation and supplies its condition.
         // Without that evidence, different wording/scopes alone do not prove one or two rounds.
@@ -333,7 +358,12 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
         return true;
       })
       // Several rounds only when the monitored author states the number.
-      .map((p) => (p.count > 1 && !STATED_COUNT.test(p.excerpt) ? { ...p, count: 1 } : p));
+      .map((p) => {
+        if (p.count <= 1 || STATED_COUNT.test(p.excerpt)) return p;
+        const single = { ...p, count: 1 };
+        if (defaultedProducts.has(p)) defaultedProducts.add(single);
+        return single;
+      });
     const applied: Applied = { eventIds: [], notify: [] };
     // Events this post itself created, by kind: a later sentence repeating the same reset joins it.
     const createdHere = new Map<Proposition["kind"], { id: string; label: string | null; claim: Proposition }>();
@@ -341,11 +371,11 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
 
     for (const [index, p] of accepted.entries()) {
       const here = createdHere.get(p.kind);
-      if (here && !p.relatesTo && p.count === 1 && (p.action === "announce" || p.action === "progress") && !ANOTHER.test(p.excerpt) && !quotaConflicts(currentMonitor().quotaScope?.(here.claim.scope, here.claim), p)) {
+      if (here && !p.relatesTo && p.count === 1 && (p.action === "announce" || p.action === "progress") && !ANOTHER.test(p.excerpt) && !claimScopesConflict(here.claim, p)) {
         const stated = usableTime(p, postAt, originalContext, post.text);
         if (!stated || scheduleFrom(stated).label === here.label) continue;
       }
-      const resolution = await findTarget(tx, p, postAt);
+        const resolution = await findTarget(tx, p, postAt, post.author);
       if (resolution.needsReview) { held.push(p); reasons.set(p, p.relatesTo ? "指定关联事件不存在或与明确事实冲突" : "存在多个可能的关联事件"); continue; }
       const target = resolution.target;
       // A single event id cannot identify every round in a multi-round statement.
@@ -359,7 +389,7 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
       if (p.role === "explanation" && !threadRelated.has(p)) {
         // Completion embedded in an explanation can only close the known round quoted in this thread.
         if (!target || target.status !== "announced") continue;
-        const sourceIds = originalContext.filter((c) => c.author.replace(/^@/, "").toLowerCase() === author().toLowerCase()).map((c) => c.id);
+        const sourceIds = originalContext.filter((c) => isAuthor(c.author)).map((c) => c.id);
         const [source] = await tx`SELECT event_id FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS monitor_event_posts WHERE event_id = ${target.id} AND post_id = ANY(${sourceIds}::text[]) LIMIT 1`;
         if (!source) continue;
       }
@@ -454,7 +484,7 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
         if (target.status === "announced" || p.kind === "bonus_credit") applied.notify.push({ eventId, action: "withdraw", postId });
       }
       changed.push(p);
-      if (p.action !== "withdraw") await enrichEvent(tx, eventId, p, target?.presentation, threadRelated.has(p));
+      if (p.action !== "withdraw") await enrichEvent(tx, eventId, p, target?.presentation, threadRelated.has(p), defaultedProducts.has(p));
       await link(tx, eventId, postId, p);
       if (!applied.eventIds.includes(eventId)) applied.eventIds.push(eventId);
     }

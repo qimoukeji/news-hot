@@ -7,4 +7,4 @@ export const collectPosts = bindMonitor(backendDefinition, shared.collectPosts);
 export const processPending = bindMonitor(backendDefinition, shared.processPending);
 export const flushResetPushes = bindMonitor(backendDefinition, shared.flushResetPushes);
 export const monitorTick = bindMonitor(backendDefinition, shared.monitorTick);
-export const AUTHOR = backendDefinition.author;
+export const AUTHOR = backendDefinition.authors[0]!.handle;

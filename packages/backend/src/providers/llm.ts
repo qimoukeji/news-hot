@@ -6,7 +6,7 @@ import type { z } from "zod";
 import { PRESETS } from "@aihot/site/models";
 import { config, credential } from "../config.ts";
 import { sha256 } from "../lib/ids.ts";
-import { assertAccepted, paidRequest, ProviderRejectedError, rejectReceivedResponse } from "./receipts.ts";
+import { assertAccepted, assertRequestCanSend, paidRequest, ProviderRejectedError, rejectReceivedResponse } from "./receipts.ts";
 
 export interface ModelSpec {
   key: string;
@@ -84,6 +84,7 @@ export interface ChatJsonOptions<S extends z.ZodType> {
   /** Capability defaults for extra fields; explicit model configuration wins and participates in receipt identity. */
   extra?: Record<string, unknown>;
   attemptTag?: string;
+  retryFailed?: boolean;
   timeoutMs?: number;
   /** false: the model answers in its own text format (no JSON mode); `parse` turns it into the schema's input. */
   json?: boolean;
@@ -183,8 +184,10 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
       identity: { model: spec.model, promptVersion: opts.promptVersion, system: sha256(opts.system), user: sha256(userText), temperature, maxTokens, extra: Object.keys(extra).length ? extra : null },
       requestSummary: { promptVersion: opts.promptVersion, systemHash: sha256(opts.system), userHash: sha256(userText), userChars: userText.length, temperature, maxTokens, timeoutMs },
       attemptTag: opts.attemptTag,
+      retryFailed: opts.retryFailed,
     },
     async () => {
+      await assertRequestCanSend(spec.service);
       const started = Date.now();
       let res: Response;
       try {

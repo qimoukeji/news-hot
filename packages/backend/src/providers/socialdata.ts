@@ -1,7 +1,7 @@
 // SocialData (X search). Paid per request: every call goes through receipts and the budget.
 import { credential } from "../config.ts";
 import { guardedFetch } from "../lib/http-fetch.ts";
-import { assertAccepted, isMonitorRequest, paidRequest, rejectReceivedResponse, type CallOutcome, type ReceiptRequest, type ReceiptResult } from "./receipts.ts";
+import { assertAccepted, assertRequestCanSend, isMonitorRequest, paidRequest, rejectReceivedResponse, type CallOutcome, type ReceiptRequest, type ReceiptResult } from "./receipts.ts";
 
 export interface SdUser {
   name: string;
@@ -66,6 +66,7 @@ async function get<T>(path: string, request: Omit<ReceiptRequest, "service">,
   const key = credential("collectors", "SOCIALDATA_API_KEY");
   if (!key) throw new Error("SOCIALDATA_API_KEY is not configured");
   return paidRequest({ service: "socialdata", ...request }, async () => {
+    await assertRequestCanSend("socialdata");
     const res = await guardedFetch(`${apiBase()}${path}`, {
       headers: { authorization: `Bearer ${key}`, accept: "application/json" },
       timeoutMs: read.timeoutMs,
@@ -93,12 +94,12 @@ function validateMonitorTweet(tweet: SdTweet, depth = 0) {
  * Searches recent tweets. `window` makes the receipt identity time-bucketed so a retry in the same
  * bucket reuses the stored response instead of paying again.
  */
-export async function searchTweets(query: string, opts: { purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null }): Promise<SearchResult> {
+export async function searchTweets(query: string, opts: { purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null; resume?: boolean }): Promise<SearchResult> {
   const type = opts.type ?? "Latest";
   const sp = new URLSearchParams({ query, type });
   if (opts.cursor) sp.set("cursor", opts.cursor);
   const receipt = await get<{ tweets?: SdTweet[] }>(`/twitter/search?${sp}`,
-    { purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window }, requestSummary: { query, type } },
+    { purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window }, requestSummary: { query, type }, retryFailed: opts.resume },
     {
       // Deeper pages of a search over two dozen accounts can take well over 20 seconds.
       timeoutMs: 60_000,
@@ -169,9 +170,9 @@ export async function getArticle(tweetId: string, opts: { purpose: string; subje
 }
 
 /** One tweet by id (context for replies and quotes). Saved answers are reused without another call. */
-export async function getTweet(id: string, opts: { purpose: string; subject: string; roundId?: string }): Promise<SdTweet | null> {
+export async function getTweet(id: string, opts: { purpose: string; subject: string; roundId?: string; resume?: boolean }): Promise<SdTweet | null> {
   const receipt = await get<SdTweet>(`/twitter/tweets/${encodeURIComponent(id)}`,
-    { purpose: opts.purpose, subject: opts.subject, identity: { tweet: id }, requestSummary: { tweet: id }, attemptTag: opts.roundId },
+    { purpose: opts.purpose, subject: opts.subject, identity: { tweet: id }, requestSummary: { tweet: id }, attemptTag: opts.roundId, retryFailed: opts.resume },
     { ...LOOKUP, missing: { tweets: 0 }, settle: (json) => ({ response: json, usage: { tweets: 1 }, cost: objectsCost(1) }) });
   const tweet = (receipt.response as SdTweet | null) ?? null;
   if (tweet && isMonitorRequest(opts.purpose)) {

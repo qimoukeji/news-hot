@@ -22,7 +22,7 @@ function event(): ResetMonitorEvent {
   return { id, type: "bonus_credit", label: "奖励额度", displayLabel: "一次性云会话奖励额度", status: "confirmed", title: "一次性云会话奖励额度",
     presentation: { status, scopeKnown: true, scopeLabel: "Pro, Max", kindExplicit: true, timeInferred: false, audienceZh: "符合条件的 Pro、Max 用户", productsZh: "Claude Code 云会话", bonusCredit: bonus },
     estimate: null, scope: "Pro, Max", createdAt: at, updatedAt: at, confirmedAt: at, occurredOn: null, confirmationBasis: "source_post", schedule: null,
-    posts: [{ id, publishedAt: at, stage: "活动开放", text: "符合条件的用户可以领取云会话奖励额度。", originalText: source, fullText: null, fullOriginalText: null, context: [], url: "https://example.org/bonus" }], url: "https://example.org/bonus" };
+    posts: [{ id, author: "ClaudeDevs", authorAvatar: null, publishedAt: at, stage: "活动开放", text: "符合条件的用户可以领取云会话奖励额度。", originalText: source, fullText: null, fullOriginalText: null, context: [], url: "https://example.org/bonus" }], url: "https://example.org/bonus" };
 }
 function adminEvent(): AdminMonitorEvent {
   const e = event();
@@ -57,7 +57,7 @@ const api = createServer(async (req, res) => {
   }
   if (path === "/api/admin/claude-reset/events" || path === "/api/admin/claude-reset/events/options") return send({ page: 1, pageSize: 10, total: 1, totalPages: 1, events: [adminEvent()] });
   if (path === `/api/admin/claude-reset/posts/${id}`) {
-    const detail: AdminMonitorPostDetail = { post: { id, text: source, published_at: at as Timestamp, url: "https://example.org/bonus", translation: null, processed_at: null, receipt_id: null, origin: "live", propositions: null, needs_review: true, held: null, skipped: null, relevant: true, outage: null, links: [] },
+    const detail: AdminMonitorPostDetail = { post: { id, author: "ClaudeDevs", text: source, published_at: at as Timestamp, url: "https://example.org/bonus", translation: null, processed_at: null, receipt_id: null, origin: "live", propositions: null, needs_review: true, held: null, skipped: null, relevant: true, outage: null, links: [] },
       context: [], originalRecognition: null, history: [], version: "v1", draft: { decision: "related", translationZh: null, contextZh: [], outage: null, propositions: [] } };
     return send(detail);
   }

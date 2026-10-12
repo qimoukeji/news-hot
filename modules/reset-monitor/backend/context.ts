@@ -9,6 +9,16 @@ export interface ResetMonitorBackendDefinition extends ResetMonitorDefinition {
   prompt: string;
   promptVersion: string;
   plans: readonly string[];
+  collectionFilter?: {
+    query: string | readonly string[];
+    supplementalQueries?: readonly string[];
+    version: string;
+    reason: string;
+    accepts: (post: { text: string; isReply: boolean }) => boolean;
+  };
+  defaultProductForAuthor?: (author: string) => string | null;
+  scopeConflicts?: (a: Proposition["scope"], b: Proposition["scope"]) => boolean;
+  requireCrossAuthorEvidence?: boolean;
   quotaScope?: (scope: { audienceSource: string | null; productsZh: string | null }, evidence?: { excerpt: string; kind: Proposition["kind"] }) => string | null;
   excludeProposition?: (proposition: Proposition, sourceText: string, association?: { trustedEventKinds: readonly Proposition["kind"][] }) => string | null;
   names: {
@@ -40,7 +50,8 @@ export function monitor(): ResetMonitorBackendDefinition {
 }
 
 export const monitorId = () => monitor().monitorId;
-export const author = () => monitor().author;
+export const authorHandles = () => monitor().authors.map((a) => a.handle.toLowerCase());
+export const isAuthor = (handle: string) => authorHandles().includes(handle.replace(/^@/, "").toLowerCase());
 export const purpose = (phase: "scan" | "lookback" | "context" | "recognize") => `${monitor().names.purposePrefix}.${phase}`;
 export const auditAction = (action: string) => `${monitor().names.auditActionPrefix}.${action}`;
 export const auditSubject = (kind: "post" | "event", id: string) => `${monitor().names.auditSubjectPrefix}-${kind}:${id}`;
@@ -51,9 +62,16 @@ export function bindMonitor<A extends unknown[], R>(definition: ResetMonitorBack
 
 export function validateDefinition(definition: ResetMonitorBackendDefinition) {
   if (!/^[a-z][a-z0-9-]*$/.test(definition.monitorId)) throw new Error("Invalid reset monitor ID");
-  if (!/^[A-Za-z0-9_]{1,15}$/.test(definition.author)) throw new Error("Invalid X monitor author");
+  if (!definition.authors.length || definition.authors.some((a) => !/^[A-Za-z0-9_]{1,15}$/.test(a.handle) || !a.name.trim())
+    || new Set(definition.authors.map((a) => a.handle.toLowerCase())).size !== definition.authors.length) throw new Error("Invalid X monitor authors");
   if (!definition.eventKinds.length || new Set(definition.eventKinds).size !== definition.eventKinds.length
     || definition.eventKinds.some((kind) => !["direct_reset", "reset_credit", "bonus_credit"].includes(kind))) throw new Error("Invalid reset monitor event kinds");
+  if (definition.collectionFilter) {
+    const queries = typeof definition.collectionFilter.query === "string" ? [definition.collectionFilter.query] : definition.collectionFilter.query;
+    if (!queries.length || [...queries, ...(definition.collectionFilter.supplementalQueries ?? [])].some(query => !query.trim()) || !definition.collectionFilter.version.trim() || !definition.collectionFilter.reason.trim()) {
+      throw new Error("Invalid reset monitor collection filter");
+    }
+  }
   for (const path of [definition.pagePath, definition.adminPath, definition.adminApiPath, definition.siteApiPath, definition.publicApiPath, definition.agentPath]) {
     if (!/^\/[A-Za-z0-9/_-]+$/.test(path)) throw new Error(`Invalid reset monitor path: ${path}`);
   }

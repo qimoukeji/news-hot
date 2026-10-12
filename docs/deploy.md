@@ -262,9 +262,9 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 ## 重置监控
 
-本站安装 [Codex 模块](../modules/codex-reset/README.md)和 [Claude 模块](../modules/claude-reset/README.md)，共用 [重置监控引擎](../modules/reset-monitor/README.md)。共享包不单独注册站点入口；各 AI 模块在 `site/modules/` 三份清单和 workspace 依赖中安装。Docker 构建包含两个 AI 模块及共享包的 package 清单。
+本站安装 [Codex 模块](../modules/codex-reset/README.md)、[Claude 模块](../modules/claude-reset/README.md)和 [Grok 模块](../modules/grok-reset/README.md)，共用 [重置监控引擎](../modules/reset-monitor/README.md)。共享包不单独注册站点入口；各 AI 模块在 `site/modules/` 三份清单和 workspace 依赖中安装。Docker 构建包含三个 AI 模块及共享包的 package 清单。
 
-两个模块默认每 15 分钟扫描、每天北京时间 04:40 查漏最近 24 小时。Claude 默认 SocialData，使用 `CLAUDE_RESET_PROVIDER`、`CLAUDE_RESET_SCAN_MINUTES`；两模块识别共用 `MONITOR_MODEL`，填 `default` 或未配置时使用 `LLM_*`，也可填具名模型预设。后台“重置监控识别”共用 `monitor` 能力，后台选择优先于环境变量。供应商凭据与请求预算共用，TwitterAPI.io 为遵守免费套餐限制，在进程内固定间隔 5.5 秒，不提供环境变量配置；执行锁、检查点、通知与数据库记录按监控隔离。开发与验证保持采集、模型及推送安全阀关闭。
+各模块默认每 15 分钟扫描、每天北京时间 04:40 查漏最近 24 小时。Claude 默认 SocialData，使用 `CLAUDE_RESET_PROVIDER`、`CLAUDE_RESET_SCAN_MINUTES`；所有模块识别共用 `MONITOR_MODEL`，填 `default` 或未配置时使用 `LLM_*`，也可填具名模型预设。后台“重置监控识别”共用 `monitor` 能力，后台选择优先于环境变量。供应商凭据与请求预算共用，TwitterAPI.io 为遵守免费套餐限制，在进程内固定间隔 5.5 秒，不提供环境变量配置；执行锁、检查点、通知与数据库记录按监控隔离。开发与验证保持采集、模型及推送安全阀关闭。
 
 ### 共享表升级
 
@@ -303,4 +303,14 @@ npm run initialize -w @aihot/claude-reset -- --since 2026-10-08T00:00:00Z --unti
 
 Docker 在相同环境中执行 `docker compose run --rm worker npm run initialize -w @aihot/claude-reset -- --since <已确认的ISO时间> --until <已确认的ISO时间>`，Codex 替换 workspace 名。命令不修改配置，实际采集并调用模型；必须明确启用 `COLLECT_ENABLED=true`、`MODEL_CALLS_ENABLED=true`，配置供应商和模型凭据、预算，推送按既有授权配置。
 
-每页成功即保存，所有分页、必要上下文和识别完成才写成功截止时间。失败保留材料、不写成功检查点，不提高预算或自动缩短范围；普通下一轮从上次成功时间重新查询。监控回执失败即中止，不自动恢复或放行，队列零重试；未知请求仍保留计费未知。框架其他用途的恢复机制不适用于重置监控。人工审核待处理不妨碍技术流程成功，人工更正不发送事件通知。
+首次初始化支持分页断点：每页帖子、回执完成状态和下一页游标在同一事务写入现有 `monitor_state`，无需新表或迁移。失败后保持原起止参数、作者顺序、查询与筛选版本，重新执行相同初始化命令即可继续，跳过已提交页及完成查询；更换同一供应商的账号或密钥仍可续采。断点按监控及提供商隔离，不复用其他提供商游标；范围或采集配置变化会在付费前报错。全部分页完成后，上下文或识别失败不会重采搜索页；所有步骤成功才原子写成功截止时间并清理初始化断点。
+
+仅采集主帖时给初始化命令加 `--collect-only`，只要求采集安全阀开启，不需要模型开关或凭据；它不会补采上下文、调用模型、推送或推进成功检查点。首次初始化的上下文及识别使用持久请求标识，业务写入失败后复用有效响应。明确拒绝、未发送或无效响应可在下次显式续跑时重试；有计费未知尝试则保持阻断，不能换标识静默重购。节流队列和间隔支持停止，真正发送前再次检查停止状态及预算停用，保留已经发出的响应。
+
+模块扩大已开始的筛选范围时可声明额外补采查询，追加到原查询之后并保留旧游标。原查询的时间、顺序和筛选版本不能替换；补采尚未完成时不算覆盖完整。升级代码不自动执行补采、不修改现有业务数据或凭据，也不自动恢复已暂停任务。
+
+失败保留材料、不写成功检查点，不提高预算或自动缩短范围。普通增量扫描和每日查漏不使用分页断点，普通下一轮从上次成功时间重新查询。监控回执失败即中止，不自动恢复或放行，队列零重试；未知请求仍保留计费未知，不能保证这类请求未扣费。框架其他用途的恢复机制不适用于重置监控。人工审核待处理不妨碍技术流程成功，人工更正不发送事件通知。
+
+### Grok 额度动态
+
+Grok 使用 `GROK_RESET_PROVIDER` 和 `GROK_RESET_SCAN_MINUTES`，默认 SocialData 与 15 分钟，识别共用 `MONITOR_MODEL`。依次采集 `@bot` 与 `@grok`，原文未说明产品时分别默认 Grok Bot 和 Grok 普通额度；原文明示优先。不新增数据库迁移或改写历史数据。首次真实启用先确认有限起止时间，再执行 `npm run initialize -w @aihot/grok-reset -- --since <ISO> --until <ISO>`；详见 [Grok 模块](../modules/grok-reset/README.md)。

@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
 import type { ResetMonitorPageData, ResetMonitorEvent } from "../contracts.ts";
 import { answer, stamp, NO_INTERNALS } from "@aihot/backend/publication/agent";
 import { siteUrl } from "@aihot/backend/publication/links";

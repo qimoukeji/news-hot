@@ -105,6 +105,22 @@ test("initialization CLI validates a finite explicit range and performs the comp
   assert.equal((await sql`SELECT value FROM monitor_state WHERE key = 'cursor:socialdata'`)[0]!.value.checkpointVersion, 2);
 });
 
+test("collect-only CLI needs no model credentials and retains the unfinished initialization", async () => {
+  collected = { tweets: [{ ...tweet(), in_reply_to_status_id_str: "101" }] };
+  const initialRange = range();
+  const hits = model.hits();
+  const command = fileURLToPath(new URL("../scripts/initialize.ts", import.meta.url));
+  const result = await promisify(execFile)(process.execPath, [command, "--since", initialRange.since, "--until", initialRange.until, "--collect-only"], {
+    env: { ...process.env, ALLOW_PRIVATE_NETWORK_FETCH: "true", MODEL_CALLS_ENABLED: "false", DEEPSEEK_API_KEY: "", LLM_API_KEY: "" }, timeout: 20_000,
+  });
+  assert.equal(JSON.parse(result.stdout).collectOnly, true);
+  assert.equal(model.hits(), hits);
+  assert.equal((await sql`SELECT processed_at FROM monitor_posts WHERE id='100'`)[0]!.processed_at, null);
+  assert.equal((await sql`SELECT key FROM monitor_state WHERE key='initial:socialdata'`).length, 1);
+  assert.equal((await sql`SELECT key FROM monitor_state WHERE key='cursor:socialdata'`).length, 0);
+  assert.equal((await sql`SELECT id FROM receipts WHERE purpose IN ('monitor.context','monitor.recognize')`).length, 0);
+});
+
 async function existingEvent(id: string, source: string, at: Date, withdrawn = false) {
   await sql`INSERT INTO monitor_posts (id, author, published_at, text, url, processed_at) VALUES (${source}, 'thsottiaux', ${at}, 'All reset for everyone.', ${`https://x.com/i/status/${source}`}, ${at}) ON CONFLICT (monitor_id, id) DO NOTHING`;
   await sql`INSERT INTO monitor_events (id, type, status, title, created_at, updated_at, confirmed_at, confirmation_basis, withdrawn)

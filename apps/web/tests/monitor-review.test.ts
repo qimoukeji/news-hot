@@ -8,7 +8,7 @@ import { startWebServer, type WebServer } from "./web-server.ts";
 
 const at = "2026-10-09T08:00:00.000Z" as Timestamp;
 const meta = { page: 1, pageSize: 10, total: 11, totalPages: 2 };
-const post: AdminMonitorPost = { id: "manual-fixture", published_at: at, text: "All reset for everyone.", url: "https://example.org/post", translation: null,
+const post: AdminMonitorPost = { id: "manual-fixture", author: "thsottiaux", published_at: at, text: "All reset for everyone.", url: "https://example.org/post", translation: null,
   processed_at: null, receipt_id: null, origin: "live", propositions: null, needs_review: false, held: null, skipped: null,
   relevant: null, outage: null, links: [] };
 const event = (id: string, canReceiptReview = false): AdminMonitorEvent => ({ id, type: "direct_reset", status: canReceiptReview ? "announced" : "confirmed",

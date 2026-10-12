@@ -4,7 +4,7 @@ import { quotedInPost } from "./assemble.ts";
 import { resolve } from "./explicit-time.ts";
 import { scheduleFrom } from "./time.ts";
 import { beijingDate, beijingTime } from "@aihot/contracts/time";
-import { author } from "./context.ts";
+import { isAuthor } from "./context.ts";
 
 /** Dates supplied directly by the model are ignored; each time needs its own literal source. */
 export function bonusCreditOf(p: Proposition, input: { id: string; text: string; publishedAt: Date; context: ContextInput[] }): ResetMonitorBonusCredit | null {
@@ -13,7 +13,7 @@ export function bonusCreditOf(p: Proposition, input: { id: string; text: string;
   const time = (value: NonNullable<Proposition["bonusCredit"]>["claimDeadline"]): ResetMonitorBonusTime | null => {
     if (!value) return null;
     const source = !value.timeSourceId || value.timeSourceId === input.id ? input : input.context.find((c) => c.id === value.timeSourceId
-      && ["reply", "quote"].includes(c.relation) && c.author.replace(/^@/, "").toLowerCase() === author().toLowerCase());
+      && ["reply", "quote"].includes(c.relation) && isAuthor(c.author));
     if (!source || !quotedInPost(value.source, source.text)) return null;
     const at = source.publishedAt ? new Date(source.publishedAt) : null;
     if (!at || !Number.isFinite(at.getTime()) || at > input.publishedAt) return { source: value.source, at: null };

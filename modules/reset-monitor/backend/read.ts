@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
+import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
 // The public snapshot and monitor page read the
 // same events. Announcement, in-progress, confirmation and "should have landed" stay distinct;
 // passing an announced time never turns into a confirmation.
@@ -46,6 +46,8 @@ interface EventRow {
 
 interface PostRow {
   id: string;
+  author: string;
+  avatar: string | null;
   published_at: Date;
   text: string;
   translation: string | null;
@@ -134,7 +136,7 @@ async function loadAll(now: number, from?: number) {
     const links = await db<LinkRow[]>`SELECT event_id, post_id, stage, action, text, original_text FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS monitor_event_posts
       WHERE event_id = ANY(${events.map((e) => e.id)}::text[])`;
     const posts = await db<PostRow[]>`
-      SELECT id, published_at, text, translation, url, context, activity, outage FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts
+      SELECT id, author, raw->'tweet'->'user'->>'profile_image_url_https' AS avatar, published_at, text, translation, url, context, activity, outage FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts
       WHERE (activity IS NOT NULL AND ${from === undefined ? db`true` : db`published_at >= ${new Date(from)}`})
         OR (outage IS NOT NULL AND ${from === undefined ? db`true` : db`published_at >= ${new Date(now - OUTAGE_VISIBLE_MS)}`})
         OR id = ANY(${links.map((l) => l.post_id)}::text[])`;
@@ -169,6 +171,8 @@ function eventJson(e: EventRow, links: LinkRow[], posts: Map<string, PostRow>, n
     .sort((a, b) => b.post.published_at.getTime() - a.post.published_at.getTime() || (a.l.post_id < b.l.post_id ? 1 : -1))
     .map(({ l, post }) => ({
       id: post.id,
+      author: post.author,
+      authorAvatar: post.avatar ? proxiedImage(post.avatar, "avatar") : null,
       publishedAt: bjIso(post.published_at),
       stage: l.stage,
       text: l.text,
@@ -269,6 +273,8 @@ async function snapshotWithRevision(now: number, from?: number): Promise<{ snaps
       const action = ["confirm", "announce", "amend", "withdraw", "progress"].find((a) => currentLinks.some((l) => l.action === a)) ?? null;
       return ({
       id: p.id,
+      author: p.author,
+      authorAvatar: p.avatar ? proxiedImage(p.avatar, "avatar") : null,
       publishedAt: bjIso(p.published_at),
       eventIds: eventIds.length ? eventIds : p.activity!.kind === "related" ? p.activity!.eventIds.filter((id) => activeIds.has(id)) : [],
       kind: eventIds.length ? "event_update" as const : "related" as const,
@@ -285,6 +291,8 @@ async function snapshotWithRevision(now: number, from?: number): Promise<{ snaps
   const outage = outagePost
     ? {
         postId: outagePost.id,
+        author: outagePost.author,
+        authorAvatar: outagePost.avatar ? proxiedImage(outagePost.avatar, "avatar") : null,
         publishedAt: bjIso(outagePost.published_at),
         text: outagePost.translation,
         originalText: outagePost.text,
@@ -355,7 +363,7 @@ export async function resetPage(now = Date.now()): Promise<ResetMonitorPageData>
   // The monitored account's avatar, from its latest collected post.
   const [authorRow] = await sql<{ avatar: string | null }[]>`
     SELECT raw->'tweet'->'user'->>'profile_image_url_https' AS avatar FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts
-    WHERE author = ${author()} AND raw->'tweet'->'user' ? 'profile_image_url_https' ORDER BY published_at DESC LIMIT 1`;
+    WHERE lower(author) = ${currentMonitor().authors[0]!.handle.toLowerCase()} AND raw->'tweet'->'user' ? 'profile_image_url_https' ORDER BY published_at DESC LIMIT 1`;
   const lastLanded = snap.events.filter((e) => landedAt(e) !== null && landedAt(e)! <= now)
     .sort((a, b) => landedAt(b)! - landedAt(a)!)[0];
   return {

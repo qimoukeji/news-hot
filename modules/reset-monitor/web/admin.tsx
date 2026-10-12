@@ -73,6 +73,7 @@ function EventCard({ e }: { e: AdminMonitorEvent }) {
               <div className="num text-[11.5px] text-ink-4 sm:mt-1">{bj(post.publishedAt)}</div>
             </div>
             <div className="min-w-0">
+              <div className="text-[12px] text-ink-3">@{post.author}</div>
               <div className="text-ink">{post.text}</div>
               <a className="text-[12px] text-ink-4 hover:text-accent" href={post.url} target="_blank" rel="noreferrer">{post.originalText}</a>
             </div>
@@ -176,6 +177,7 @@ function PostRow({ post }: { post: AdminMonitorPost }) {
   return (
     <article className="rounded-panel bg-surface p-4 ring-1 ring-line">
       <div className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-ink-3">
+        <span>@{post.author}</span>
         <a href={post.url} target="_blank" rel="noreferrer" className="num hover:text-accent">{bj(post.published_at, true)}</a>
         {post.skipped ? <Badge>已跳过</Badge> : post.relevant ? <Badge tone="accent">相关</Badge> : post.processed_at ? <Badge>无关</Badge> : <Badge tone="warn">待识别</Badge>}
         {post.needs_review && !post.manual_review && <Badge tone="bad">需要复核</Badge>}

@@ -29,6 +29,8 @@ export interface ResetMonitorContextPost {
 
 export interface ResetMonitorPost {
   id: string;
+  author: string;
+  authorAvatar: string | null;
   publishedAt: string | null;
   stage: string;
   text: string;
@@ -74,6 +76,8 @@ export interface ResetMonitorEvent {
 
 export interface ResetMonitorActivity {
   id: string;
+  author: string;
+  authorAvatar: string | null;
   publishedAt: string | null;
   eventIds: string[];
   kind: "event_update" | "related";
@@ -96,6 +100,8 @@ export interface ResetMonitorMonitor {
 
 export interface ResetMonitorOutage {
   postId: string;
+  author: string;
+  authorAvatar: string | null;
   publishedAt: string | null;
   text: string | null;
   originalText: string;
@@ -153,6 +159,7 @@ import type { Timestamp } from "@aihot/contracts/admin";
 
 export interface AdminMonitorEventPost {
   postId: string;
+  author: string;
   stage: string;
   action: string;
   text: string;
@@ -194,6 +201,7 @@ export interface AdminMonitorEvents extends AdminMonitorPagination {
 
 export interface AdminMonitorPost {
   id: string;
+  author: string;
   published_at: Timestamp;
   text: string;
   url: string;

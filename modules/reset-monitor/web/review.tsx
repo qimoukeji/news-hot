@@ -131,7 +131,7 @@ function MonitorReview({ loaderData: detail }: { loaderData: AdminMonitorPostDet
     <ol className="mb-5 flex flex-wrap gap-3 text-[13px] text-ink-3"><li>1 查看依据</li><li>2 编辑判断</li><li>3 预览影响</li><li>4 提交</li></ol>
     <div className="space-y-4">
       <Card title="原帖与上下文" right={<a href={detail.post.url} target="_blank" rel="noreferrer" className="text-accent">打开原帖</a>}>
-        <p className="text-[12px] text-ink-3">{bj(detail.post.published_at, true)} · {detail.post.id}</p>
+        <p className="text-[12px] text-ink-3">@{detail.post.author} · {bj(detail.post.published_at, true)} · {detail.post.id}</p>
         <p className="mt-2 whitespace-pre-wrap text-[14px] leading-relaxed">{detail.post.text}</p>
         {detail.post.translation && <p className="mt-2 whitespace-pre-wrap text-[13px] text-ink-3">{detail.post.translation}</p>}
         {detail.post.source_issue && <p role="status" className="mt-3 text-[13px] text-amber">资料不完整：{detail.post.source_issue}</p>}

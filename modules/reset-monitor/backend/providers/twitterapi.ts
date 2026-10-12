@@ -1,9 +1,9 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "../context.ts";
+import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "../context.ts";
 import { z } from "zod";
 import { credential } from "@aihot/backend/config";
 import { sql } from "@aihot/backend/db";
 import { guardedFetch } from "@aihot/backend/lib/http-fetch";
-import { assertAccepted, paidRequest, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
+import { assertAccepted, assertRequestCanSend, paidRequest, ProviderNotSentError, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
 import type { Tweet, SearchOptions, LookupOptions } from "./collectors.ts";
 import { pacedTwitterApiRequest } from "./twitterapi-pacing.ts";
 
@@ -53,14 +53,17 @@ export async function ensureTwitterApiBudget() {
   if (!budget) throw new Error("Configure a twitterapi_io budget before collection");
 }
 
-async function request(path: string, opts: { purpose: string; subject: string; identity: unknown; summary: Record<string, unknown>; roundId?: string }) {
-  if (process.env.COLLECT_ENABLED !== "true") throw new Error("COLLECT_ENABLED is disabled");
+async function request(path: string, opts: { purpose: string; subject: string; identity: unknown; summary: Record<string, unknown>; roundId?: string; resume?: boolean; reuseReceivedAcrossAttempts?: boolean }) {
+  if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
   const key = credential("collectors", "TWITTERAPI_IO_API_KEY");
   if (!key) throw new Error("TWITTERAPI_IO_API_KEY is not configured");
   const base = (credential("collectors", "TWITTERAPI_IO_BASE_URL") ?? "https://api.twitterapi.io").replace(/\/$/, "");
   await ensureTwitterApiBudget();
   const receipt = await paidRequest({ service: "twitterapi_io", purpose: opts.purpose, subject: opts.subject,
-    identity: { base, input: opts.identity }, requestSummary: opts.summary, attemptTag: opts.roundId }, () => pacedTwitterApiRequest(async () => {
+    identity: { base, input: opts.identity }, requestSummary: opts.summary, attemptTag: opts.roundId, retryFailed: opts.resume,
+    reuseReceivedAcrossAttempts: opts.reuseReceivedAcrossAttempts }, () => pacedTwitterApiRequest(async () => {
+    await assertRequestCanSend("twitterapi_io");
+    if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
     const res = await guardedFetch(`${base}${path}`, { route: "egress", headers: { "X-API-Key": key, accept: "application/json" }, timeoutMs: 60_000, maxBytes: 12 * 1024 * 1024 });
     const text = res.text();
     assertAccepted("twitterapi_io", res.status, text.replaceAll(key, "[redacted]"));
@@ -86,6 +89,6 @@ export function searchTweets(query: string, opts: SearchOptions) {
     identity: { query, queryType, cursor: opts.cursor ?? null, window: opts.window }, summary: { query, queryType } });
 }
 export async function getTweet(id: string, opts: LookupOptions): Promise<Tweet | null> {
-  const page = await request(`/twitter/tweets?${new URLSearchParams({ tweet_ids: id })}`, { ...opts, identity: { id }, summary: { id } });
+  const page = await request(`/twitter/tweets?${new URLSearchParams({ tweet_ids: id })}`, { ...opts, identity: { id }, summary: { id }, reuseReceivedAcrossAttempts: opts.resume });
   return page.tweets.find(t => t.id_str === id) ?? null;
 }

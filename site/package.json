@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@aihot/codex-reset": "*",
-    "@aihot/claude-reset": "*"
+    "@aihot/claude-reset": "*",
+    "@aihot/grok-reset": "*"
   }
 }

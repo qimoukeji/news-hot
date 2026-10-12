@@ -1,4 +1,4 @@
-import { monitor as currentMonitor, monitorId, author, purpose as requestPurpose, auditAction, auditSubject } from "../context.ts";
+import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "../context.ts";
 // Collection adapters share the post shape used by recognition and stored context.
 import * as socialdata from "@aihot/backend/providers/socialdata";
 import * as twitterapi from "./twitterapi.ts";

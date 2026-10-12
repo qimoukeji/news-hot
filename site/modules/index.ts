@@ -3,6 +3,7 @@
 // pages' parts. Each list keeps the order its entries appear in on the site.
 import codexReset from "@aihot/codex-reset/module";
 import claudeReset from "@aihot/claude-reset/module";
+import grokReset from "@aihot/grok-reset/module";
 import type { ModuleDeclaration } from "@aihot/contracts/modules";
 
-export const MODULES: readonly ModuleDeclaration[] = [codexReset, claudeReset];
+export const MODULES: readonly ModuleDeclaration[] = [codexReset, claudeReset, grokReset];

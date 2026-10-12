@@ -6,7 +6,7 @@ import timers from "node:timers/promises";
 import { config } from "@aihot/backend/config";
 import { closeDb, sql } from "@aihot/backend/db";
 import { collectPosts, collectPendingContext, processPending } from "../../codex-reset/backend/scan.ts";
-import { paidRequest, ReceiptUnknownError, ProviderRejectedError, BudgetExceededError } from "@aihot/backend/providers/receipts";
+import { paidRequest, ReceiptUnknownError, ProviderRejectedError, ProviderNotSentError, BudgetExceededError } from "@aihot/backend/providers/receipts";
 import { autoReleaseUnknownReceipts } from "@aihot/backend/operations/recover";
 import { searchTweets, getTweet, tweetText } from "../../codex-reset/backend/providers/collectors.ts";
 import { normalizeTweet } from "../../codex-reset/backend/providers/twitterapi.ts";
@@ -98,6 +98,18 @@ test("TwitterAPI.io pagination and lookups use receipts; replay does not repurch
   const [receipt] = await sql`SELECT service, response FROM receipts WHERE id = ${first.receiptId}`;
   assert.equal(receipt!.service, "twitterapi_io");
   assert.equal(receipt!.response.tweets[0].id, "101");
+});
+
+test("initial context resumes a received lookup from the old round without repurchasing it", async () => {
+  answer = () => ({ tweets: [post("100")], has_next_page: false });
+  const opts = { purpose: "monitor.context", subject: "x:101" };
+  assert.equal((await getTweet("100", { ...opts, roundId: "old-initial-round" }))?.id_str, "100");
+  process.env.TWITTERAPI_IO_API_KEY = "synthetic-new-account";
+  try {
+    assert.equal((await getTweet("100", { ...opts, roundId: "persistent-initial-round", resume: true }))?.id_str, "100");
+    assert.equal(calls.length, 1);
+    assert.equal((await sql`SELECT id FROM receipts WHERE purpose='monitor.context'`).length, 1);
+  } finally { process.env.TWITTERAPI_IO_API_KEY = "test-key"; }
 });
 
 test("provider switching keeps independent cursors and deduplicates shared posts", async () => {
@@ -242,6 +254,52 @@ test("concurrent monitors keep separate receipts and a provider failure releases
     else process.env.CLAUDE_RESET_PROVIDER = claudeProvider;
   }
 });
+
+for (const stop of ["budget", "collection valve"] as const) {
+  test(`a ${stop} stop prevents a reserved queue request from sending and preserves the in-flight answer`, { timeout: 10000 }, async () => {
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    answer = async url => {
+      const id = url.searchParams.get("tweet_ids")!;
+      if (id === "8101") { entered(); await held; }
+      return { tweets: [post(id)] };
+    };
+    const options = { purpose: "monitor.context", subject: "stop-queue", roundId: `stop-${stop}`, resume: true };
+    const first = getTweet("8101", options);
+    await started;
+    const second = getTweet("8102", options).catch(error => error);
+    try {
+      // Stop after the second request has reserved its receipt but while it is still queued.
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const [pending] = await sql`SELECT count(*)::int n FROM receipts WHERE purpose='monitor.context' AND status='pending'`;
+        if (pending!.n === 2) break;
+        assert.ok(Date.now() < deadline, "the queued receipt was not reserved");
+      }
+      if (stop === "budget") await sql`UPDATE budgets SET per_minute=0 WHERE service='twitterapi_io'`;
+      else process.env.COLLECT_ENABLED = "false";
+      release();
+      assert.equal((await first)?.id_str, "8101");
+      assert.ok(await second instanceof ProviderNotSentError);
+      assert.equal(calls.length, 1, "only the already-sent request reached the local provider");
+      const [unsent] = await sql`SELECT r.status, a.status AS attempt_status FROM receipts r JOIN receipt_attempts a ON a.receipt_id=r.id WHERE r.request->>'id'='8102'`;
+      assert.equal(unsent!.status, "failed");
+      assert.equal(unsent!.attempt_status, "failed", "a cancelled queue request has no unknown billing outcome");
+      await sql`UPDATE budgets SET per_minute=10 WHERE service='twitterapi_io'`;
+      process.env.COLLECT_ENABLED = "true";
+      assert.equal((await getTweet("8101", options))?.id_str, "8101");
+      assert.equal(calls.length, 1, "the in-flight response remains reusable");
+      assert.equal((await getTweet("8102", options))?.id_str, "8102");
+      assert.equal(calls.length, 2, "an explicit resume can send the proven unsent request once");
+    } finally {
+      release();
+      process.env.COLLECT_ENABLED = "true";
+      await Promise.allSettled([first, second]);
+    }
+  });
+}
 
 test("context failure stops immediately and a later normal round uses new request keys", async () => {
   answer = url => url.pathname.endsWith("advanced_search")

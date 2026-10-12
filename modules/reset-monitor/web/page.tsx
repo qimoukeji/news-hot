@@ -114,7 +114,7 @@ function Hero({ d, now }: { d: ResetMonitorSitePage; now: number }) {
             <PostCard
               avatar={d.authorAvatar}
               stage={`${last.posts[0].stage}原帖`}
-              post={{ id: last.posts[0].id, publishedAt: last.posts[0].publishedAt, translation: last.posts[0].fullText ?? last.posts[0].text, original: last.posts[0].fullOriginalText ?? last.posts[0].originalText, context: last.posts[0].context, url: last.posts[0].url }}
+              post={{ id: last.posts[0].id, author: last.posts[0].author, authorAvatar: last.posts[0].authorAvatar, publishedAt: last.posts[0].publishedAt, translation: last.posts[0].fullText ?? last.posts[0].text, original: last.posts[0].fullOriginalText ?? last.posts[0].originalText, context: last.posts[0].context, url: last.posts[0].url }}
             />
           </div>
         )}
@@ -176,7 +176,7 @@ function Hero({ d, now }: { d: ResetMonitorSitePage; now: number }) {
           <PostCard
             avatar={d.authorAvatar}
             stage={`${post.stage}原帖`}
-            post={{ id: post.id, publishedAt: post.publishedAt, translation: post.fullText ?? post.text, original: post.fullOriginalText ?? post.originalText, context: post.context, url: post.url }}
+            post={{ id: post.id, author: post.author, authorAvatar: post.authorAvatar, publishedAt: post.publishedAt, translation: post.fullText ?? post.text, original: post.fullOriginalText ?? post.originalText, context: post.context, url: post.url }}
           />
         </div>
       )}
@@ -219,7 +219,7 @@ function ActiveBonuses({ events, avatar }: { events: ResetMonitorEvent[]; avatar
       <p className="mt-1 text-[12.5px] text-ink-3">适用范围：{e.presentation?.audienceZh ?? e.presentation?.scopeLabel ?? "原帖未说明"}{e.presentation?.productsZh ? ` · ${e.presentation.productsZh}` : ""}</p>
       {e.schedule?.from && <p className="mt-2 text-[12.5px] text-ink-3">活动开放时间：北京时间 {stamp(e.schedule.from)}</p>}
       <BonusCreditDetails value={e.presentation?.bonusCredit} />
-      {e.posts[0] && <div className="mt-3"><PostCard compact avatar={avatar} stage={e.posts[0].stage} post={{ id: e.posts[0].id, publishedAt: e.posts[0].publishedAt, translation: e.posts[0].fullText ?? e.posts[0].text, original: e.posts[0].fullOriginalText ?? e.posts[0].originalText, context: e.posts[0].context, url: e.posts[0].url }} /></div>}
+      {e.posts[0] && <div className="mt-3"><PostCard compact avatar={avatar} stage={e.posts[0].stage} post={{ id: e.posts[0].id, author: e.posts[0].author, authorAvatar: e.posts[0].authorAvatar, publishedAt: e.posts[0].publishedAt, translation: e.posts[0].fullText ?? e.posts[0].text, original: e.posts[0].fullOriginalText ?? e.posts[0].originalText, context: e.posts[0].context, url: e.posts[0].url }} /></div>}
     </article>)}</div>
   </section>;
 }

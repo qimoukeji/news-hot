@@ -25,7 +25,7 @@ const source = "Pro and Max users can claim a one-time cloud session bonus. Run 
 const bonus = { amount: "one-time cloud session bonus", eligibility: "Pro and Max users", claimMethod: "/claim-credit",
   usageTerms: "One credit per account; cloud sessions only; connect GitHub to start a session.",
   claimDeadline: { source: "Oct 12 at 11:59pm PT", at: "2026-10-13T14:59:00+08:00" }, expiresAt: { source: "Nov 4", at: null } };
-const third: ResetMonitorBackendDefinition = { ...claude, monitorId: "testbonus", moduleName: "testbonus-reset", product: "TestBonus", author: "TestBonus", authorName: "TestBonus", title: "TestBonus 额度动态",
+const third: ResetMonitorBackendDefinition = { ...claude, monitorId: "testbonus", moduleName: "testbonus-reset", product: "TestBonus", authors: [{ handle: "TestBonus", name: "TestBonus" }], authorName: "TestBonus", title: "TestBonus 额度动态",
   pagePath: "/testbonus-reset", adminPath: "/admin/testbonus-reset", adminApiPath: "/api/admin/testbonus-reset", siteApiPath: "/api/site/testbonus-reset",
   publicApiPath: "/api/v1/testbonus-resets", agentPath: "/testbonus-resets", mcpTool: "get_testbonus_resets", names: monitorNames("testbonus") };
 
@@ -42,7 +42,7 @@ after(async () => { installModules([]); await stopBoss(); await closeDb(); });
 
 async function addPost(definition: ResetMonitorBackendDefinition, id: string, at: number) {
   await sql`INSERT INTO monitor_posts (monitor_id,id,author,published_at,text,url,recognition) VALUES
-    (${definition.monitorId},${id},${definition.author},${new Date(at)},${source},${`https://x.com/${definition.author}/status/${id}`},'{"modelResult":{"immutable":true}}')`;
+    (${definition.monitorId},${id},${definition.authors[0]!.handle},${new Date(at)},${source},${`https://x.com/${definition.authors[0]!.handle}/status/${id}`},'{"modelResult":{"immutable":true}}')`;
 }
 function draft(): AdminMonitorReviewDraft {
   return { decision: "events", translationZh: "一次性云会话奖励", contextZh: [], outage: null, propositions: [{ kind: "bonus_credit", kindExplicit: true,
