@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { defineServerModule } from "@aihot/backend/modules";
 import { modulePublication } from "@aihot/backend/publication/modules";
-import { siteUrl } from "@aihot/backend/publication/links";
 import type { FastifyInstance } from "fastify";
 import type { ResetMonitorPageData } from "./contracts.ts";
 import { inMonitor, bindMonitor, validateDefinition, type ResetMonitorBackendDefinition } from "./backend/context.ts";
@@ -58,7 +57,7 @@ export function createMonitorServer(definition: ResetMonitorBackendDefinition) {
       { name: definition.names.tick, cron: scanCron(), retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick()) },
       ...(definition.processingMode === "collect_only" ? [] : [{ name: definition.names.lookback, cron: "40 4 * * *", retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick({ lookbackHours: 24 })) }]),
     ],
-    sitemap: { pages: [{ loc: siteUrl(definition.pagePath), changefreq: "hourly" }] },
+    sitemap: { pages: [{ loc: definition.pagePath, changefreq: "hourly" }] },
     llms: bound(() => ({ api: [`- ${subject}：${definition.publicApiPath}/recent（最近七天及未完成事件）；${definition.publicApiPath}（完整历史）`],
       pace: [`${subject}每 ${scanMinutes()} 分钟查询一次`], pages: [`- ${bonusEnabled ? subject : `${definition.product} 重置监控`}：${definition.pagePath}`],
       usage: ["- 按事件的作者时间策略表达时间；仅明确绑定作者惯例的事件允许预计，其他事件缺时间保留原话。原帖或预计时间都不是到账确认；人工核实账户到账不代表所有账户到账。", ...(bonusEnabled ? ["- 奖励活动可领取不代表个人已领取或到账；领取截止与奖励到期分别表达，奖励时间不预测。"] : [])] })),

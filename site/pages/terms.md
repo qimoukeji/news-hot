@@ -8,7 +8,8 @@
 | 运营主体 | 个人运营 |
 | 联系方式 | [qimoukeji@gmail.com](mailto:qimoukeji@gmail.com) |
 
-HOT NEWS 聚合公开信源，提供新闻摘要、事件索引、日报、周报、月报和额度动态监控。网页、RSS、公开 API、Agent Markdown 和 MCP 均可匿名读取。
+页首说明：
+> HOT NEWS 聚合公开信源，提供新闻摘要、事件索引、日报、周报、月报和额度动态监控。网页、RSS、公开 API、Agent Markdown 和 MCP 均可匿名读取。
 
 ## 1. 内容与原文
 
