@@ -23,7 +23,7 @@ INDEXNOW_SUBMIT_ENABLED=false
 EOF
 dc up -d db
 ready=false
-for ((i=0; i<90; i++)); do if dc exec -T db pg_isready -U newshot -d newshot >/dev/null 2>&1; then ready=true; break; fi; sleep 1; done
+for ((i=0; i<90; i++)); do if dc exec -T db pg_isready -h 127.0.0.1 -U newshot -d newshot >/dev/null 2>&1; then ready=true; break; fi; sleep 1; done
 [[ $ready == true ]] || exit 1
 dc run --rm --no-deps setup
 dc up -d --no-deps api worker web
@@ -53,7 +53,7 @@ dc stop db
 dc rm -f db api worker web
 dc up -d db
 ready=false
-for ((i=0; i<90; i++)); do if dc exec -T db pg_isready -U newshot -d newshot >/dev/null 2>&1; then ready=true; break; fi; sleep 1; done
+for ((i=0; i<90; i++)); do if dc exec -T db pg_isready -h 127.0.0.1 -U newshot -d newshot >/dev/null 2>&1; then ready=true; break; fi; sleep 1; done
 [[ $ready == true ]] || exit 1
 dc run --rm --no-deps --entrypoint node setup deploy/news-hot/audit.cjs capture > "$restored_audit"
 node deploy/news-hot/audit.cjs compare "$source_audit" "$restored_audit"

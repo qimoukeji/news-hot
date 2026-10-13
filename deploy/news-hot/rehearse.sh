@@ -27,7 +27,7 @@ trap 'dc stop db >/dev/null 2>&1 || true' EXIT
 dc run --rm --no-deps --entrypoint node setup -e 'for (const [k,v] of Object.entries(process.env)) { if ((["COLLECT_ENABLED","MODEL_CALLS_ENABLED","INDEXNOW_SUBMIT_ENABLED"].includes(k) || /^FEISHU_.*_ENABLED$/.test(k)) && v === "true") process.exit(1); }'
 dc up -d db
 ready=false
-for ((i=0; i<90; i++)); do if dc exec -T db pg_isready -U newshot -d newshot >/dev/null 2>&1; then ready=true; break; fi; sleep 1; done
+for ((i=0; i<90; i++)); do if dc exec -T db pg_isready -h 127.0.0.1 -U newshot -d newshot >/dev/null 2>&1; then ready=true; break; fi; sleep 1; done
 [[ $ready == true ]] || exit 1
 dc exec -T db pg_restore -U newshot -d newshot --no-owner --no-acl --exit-on-error < "$dump"
 mkdir -p "$root/backups/import-rehearsal"

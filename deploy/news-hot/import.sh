@@ -55,7 +55,7 @@ trap cleanup_failure EXIT
 dc up -d db
 started=true
 ready=false
-for ((i=0; i<90; i++)); do if dc exec -T db pg_isready -U newshot -d newshot >/dev/null 2>&1; then ready=true; break; fi; sleep 1; done
+for ((i=0; i<90; i++)); do if dc exec -T db pg_isready -h 127.0.0.1 -U newshot -d newshot >/dev/null 2>&1; then ready=true; break; fi; sleep 1; done
 [[ $ready == true ]] || exit 1
 dc exec -T db pg_restore --list < "$dump" > /dev/null
 dc exec -T db pg_restore -U newshot -d newshot --no-owner --no-acl --exit-on-error < "$dump"

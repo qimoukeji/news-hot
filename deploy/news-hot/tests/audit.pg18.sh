@@ -10,7 +10,8 @@ trap cleanup EXIT
 docker run -d --name "$container" --network none -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=audit_test postgres:18-alpine >/dev/null
 ready=false
 for ((i=0; i<60; i++)); do
-  if docker exec "$container" pg_isready -U postgres -d audit_test >/dev/null 2>&1; then ready=true; break; fi
+  # The entrypoint's temporary init server only listens on a Unix socket.
+  if docker exec "$container" pg_isready -h 127.0.0.1 -U postgres -d audit_test >/dev/null 2>&1; then ready=true; break; fi
   sleep 1
 done
 [[ $ready == true ]] || { echo 'Isolated PostgreSQL 18 did not start' >&2; exit 1; }
