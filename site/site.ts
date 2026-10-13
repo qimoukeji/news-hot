@@ -18,14 +18,14 @@ export const EDITION_WHEN = {
 
 export const SITE = {
   /** 站名：导航、页面标题、分享图、RSS、MCP、后台都用它。 */
-  name: "MyHOT",
+  name: "HOT NEWS",
   /**
    * 行业词：拼进默认说法里，比如“AI 日报”“AI 动态”。
    * 改成“法律”“HR”“黄金”之类，页面上就会变成“法律日报”“法律动态”。
    */
   subject: "AI",
   /** 首页的完整标题（浏览器标签、搜索结果）。 */
-  homeTitle: "MyHOT — AI 行业动态 · 每日精选与日报",
+  homeTitle: "HOT NEWS — AI 行业动态 · 每日精选与日报",
   /** 主题目录页（/topics）的标题。 */
   topicsTitle: "AI 主题：公司与模型、技术方向、内容形态的最新动态",
   /** 反馈表单输入框里的示例。 */
@@ -61,21 +61,21 @@ export const SITE = {
    */
   interfaceVersion: "4.0.0",
   /** 对外联系邮箱（选填）：llms.txt 和给 Agent 的使用说明里会写。 */
-  contactEmail: null as string | null,
+  contactEmail: "qimoukeji@gmail.com" as string | null,
   /** 关于页底部的一行小字（选填）。 */
-  footerNote: "由 AIHOT 开源框架驱动",
+  footerNote: "个人运营 · qimoukeji@gmail.com",
   /** 中国大陆网站的 ICP 备案号（选填），填了就显示在侧栏底部和“我的”页底部，并链接到工信部备案系统。 */
   icp: null as string | null,
   /** 源码的 GitHub 仓库地址（选填），填了就在侧栏底部和“我的”页底部显示“GitHub 开源”。 */
   github: null as string | null,
   /** 结构化数据里的网站运营者（搜索引擎用）。 */
   organization: {
-    name: "MyHOT",
+    name: "个人运营",
     /** 创始人（选填）。 */
     founder: null as null | { name: string; alternateName?: string; jobTitle?: string; description?: string; url?: string },
   },
   /** 抓取信源时报上的名字和版本（User-Agent 里用），不要冒用别的站。 */
-  crawlerName: "MyHOTBot/1.0",
+  crawlerName: "HotNewsBot/1.0",
 } as const;
 
 /** 使用规则和隐私说明两页（正文在 pages/ 里）。 */
@@ -92,7 +92,10 @@ export const POLICY = {
      * 讲清哪些用途要先取得授权的话（选填）：llms 接在 llms.txt“使用说明”的版权说明后面，
      * agent 写在给 Agent 的使用说明“使用规则”一节的开头。
      */
-    license: null as null | { llms: string; agent: string },
+    license: {
+      llms: "本站自行制作的摘要、整理结果和公开数据允许商业使用及公开转载；第三方原文、图片及其他内容的权利归原权利人所有，本授权不包含这些内容。",
+      agent: "本站自行制作的摘要、整理结果和公开数据允许商业使用及公开转载；第三方原文、图片及其他内容的权利归原权利人所有，本授权不包含这些内容。",
+    } as null | { llms: string; agent: string },
     /**
      * 公开 API、RSS 和 OpenAPI 文件声明使用规则的响应头（选填）：原样附上，再加一个指向这一页的
      * Link 头（rel="terms-of-service"）；浏览器里的调用方也读得到它们。
