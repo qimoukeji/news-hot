@@ -36,6 +36,7 @@
 3. 初始 `SITE_URL=https://news.xinbaihui.top`、`TRUST_PROXY=false`，采集、模型、所有飞书推送及 IndexNow 均关闭。任何脚本都不打印私有配置。
 4. 在独立临时 Compose 项目验证完整应用和 PostgreSQL 18；完成初始化、smoke、备份恢复及重启。失败时不导入业务数据、不升级宿主系统。
 5. 停止所有连接原库的 API、worker、初始化脚本和人工写入。付费请求必须正常收尾后停写。原库在本服务器的 PostgreSQL 18 中，本机 15432 是到服务器 5432 的 SSH 转发。
+   确认原库没有客户端会话，记录数据库原有设置，再由 PostgreSQL 管理员在 `postgres` 库执行 `ALTER DATABASE newshot SET default_transaction_read_only=on`。保持原应用停止；此设置只约束新会话的默认事务，不能替代停写与会话核对。本站原生 PostgreSQL 管理程序位于 `/www/server/pgsql/bin/`，数据库业务账户没有修改数据库设置的权限。
 6. 运行 `audit.cjs capture` 输出原库所有业务表的条数、内容哈希、序列状态和本地附件引用。使用 `/www/server/pgsql/bin/pg_dump` 18 导出 custom-format 备份并校验 `pg_restore --list`。密码通过私有 `PGPASSFILE` 提供，不放进命令参数。打包本机 `.data/uploads` 与 `.data/feedback-screenshots`；不存在时使用空 tar 包。停写期间生成数据库、审计文件和附件包，期间不恢复旧应用写入。
 7. 上传 SHA 对应发布包，将 `stage-first.sh` 与 `manifest.cjs` 传到同一工具目录，执行 `stage-first.sh <SHA>`，核验 checksum、解包并加载两个镜像。保持原库停写，执行发布目录中的 `rehearse.sh <SHA> <dump> <files.tar.gz> <source-audit.json>`，在 `news-hot-import-rehearsal` 独立库恢复并核对全部内容。它还检查附件引用及逐文件 SHA256；演练卷停止后保留，记录绑定数据库、附件和审计文件三份输入。
 8. 执行发布目录中的 `import.sh <SHA> <dump> <files.tar.gz> <source-audit.json>`。它拒绝已有目标卷、未完成演练、变更后的任一输入或开启的付费开关。恢复后再次核对数据库和附件清单，以 UID 1000 运行应用，完成 smoke 和重启检查后才写入初始化状态。
@@ -44,6 +45,8 @@
 业务数据备份与源库审计文件仅在本机及服务器之间传送，不成为 Actions artifacts。当前审计值是参考值；正式迁移必须在停写后重新生成，不能拿不停写时的报告冒充迁移基准。
 
 首次演练要求代码与源库迁移账本完全匹配。发现待迁移文件时先输出 SQL 并拒绝导入；演练库保留供审阅。先确定经过批准的迁移方案或匹配源库的首次提交，再准备新的演练，不在正式导入里隐式迁移。导入中途失败时保留 `import-failed` 和目标卷；按现场情况批准恢复到新的空卷，或批准恢复原应用写入，不删除目标卷重试，也不同时开启两套 worker。
+
+正常切换后保持原库只读。若经批准恢复原应用，先停止新库的 API、worker 和所有人工写入，再由原 PostgreSQL 管理员恢复记录中的数据库设置；原来未设置只读时执行 `ALTER DATABASE newshot RESET default_transaction_read_only`。恢复原应用前确认切换后新库产生的数据如何保留，不能直接忽略新增数据。
 
 通过已有管理员连接建立预览隧道：`ssh -N -L 13000:127.0.0.1:3000 centos-server`，浏览器访问 `http://127.0.0.1:13000`。部署账户的密钥禁止端口转发，预览使用原管理员连接。
 
