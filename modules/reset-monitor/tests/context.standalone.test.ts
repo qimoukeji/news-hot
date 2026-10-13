@@ -8,7 +8,7 @@ import { backendDefinition as codex } from "../../codex-reset/backend-definition
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
 
 export const third: ResetMonitorBackendDefinition = {
-  ...claude, monitorId: "testai", moduleName: "testai-reset", authors: [{ handle: "TestAI", name: "TestAI" }], authorName: "TestAI", product: "TestAI",
+  ...claude, processingMode: "automatic", monitorId: "testai", moduleName: "testai-reset", authors: [{ handle: "TestAI", name: "TestAI" }], authorName: "TestAI", product: "TestAI",
   pagePath: "/testai-reset", adminPath: "/admin/testai-reset", adminApiPath: "/api/admin/testai-reset",
   siteApiPath: "/api/site/testai-reset", publicApiPath: "/api/v1/testai-resets", agentPath: "/testai-resets",
   mcpTool: "get_testai_resets", names: monitorNames("testai"), providerEnv: "TESTAI_RESET_PROVIDER",

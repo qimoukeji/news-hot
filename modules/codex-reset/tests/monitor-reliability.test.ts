@@ -1,3 +1,4 @@
+import "../../reset-monitor/tests/automatic-fixture.ts";
 import { installModules } from "@aihot/backend/modules";
 import monitorModule from "../server.ts";
 installModules([monitorModule]);

@@ -2,10 +2,11 @@
 
 Codex、Claude、Grok 及后续 AI 的额度重置监控共用采集、事件处理、人工复核、公开投影、页面与数据库。此包是模块依赖，不在 `site/modules/` 中单独安装。各 AI 只提供信源、识别规则、时间策略及入口配置。
 
-账号、显示名、默认产品、作者时间策略、套餐和采集筛选集中配置在 `site/reset-monitors.ts`。三个监控统一支持额度重置、重置卡和奖励额度；识别模板、供应商适配、范围校验及复核共用实现，产品模块只保留专属语义和作者策略。
+账号、显示名、默认产品、作者时间策略、套餐、采集筛选和处理模式集中配置在 `site/reset-monitors.ts`。本站 Grok、Codex、Claude 均使用 `processingMode: "collect_only"`：首次任务由运营者结案，后续只采新主帖，保存原文后标记处理完成，不补历史、上下文或自动识别。无识别结果的帖子在后台显示“仅采集”，不标为无关。原事件与模型结果保留，人工复核仍可使用。外部采集的开启需要单独授权。
 
 ```ts
 codex: {
+  processingMode: "collect_only",
   authors: [
     { handle: "thsottiaux", name: "Tibo", timePolicy: "tibo" },
     { handle: "YourOfficialAccount", name: "官方账号" },
@@ -19,7 +20,7 @@ codex: {
 
 可选筛选 `collection.mode='announcements_and_relevant_replies'` 接收全部非回复帖及匹配的回复帖，配置 `words`、`phrases`、`productWords`、`benefitWords`、`chinese`、`selfPhrases`。有产品词时要求产品词与相关词共同出现；`selfPhrases` 可独立匹配。未给产品词时按相关词接受。默认全量。`queryGroups` 仅用于显式查询拆分和保留已有初始化断点；不随意改写已经开始的查询。
 
-升级时先保留原账号名单运行一次，建立配置基线，再修改账号。已有部署历史起点未知时保留未知，原每日查漏仍覆盖最近 24 小时。新增及重新添加账号从首次扫描观察到配置的时间开始；起点在付费前保存，失败重跑不漂移，也不继承旧账号历史。移除账号不删除其历史帖子或事件。扩大筛选范围只从生效时间采集新范围；旧账号失败后尚未覆盖的窗口按当时的旧筛选规则补齐。公开 `monitor.authors[].collectedSince` 和 `monitor.scopeEffectiveAt` 分别表示账号与范围起点，`null` 表示旧历史起点未记录。状态使用现有 `monitor_state` JSON，无表结构变更。
+新增及重新添加账号从首次扫描观察到配置的时间开始；起点在付费前保存，失败重跑不漂移，也不继承旧账号历史。移除账号不删除其历史帖子或事件。扩大筛选范围只从生效时间采集新范围，`collect_only` 不恢复旧范围或日常历史查漏。公开 `monitor.authors[].collectedSince` 和 `monitor.scopeEffectiveAt` 分别表示账号与范围起点，`null` 表示旧历史起点未记录。状态使用现有 `monitor_state` JSON，无表结构变更。
 
 ## 安装与配置
 
@@ -29,35 +30,35 @@ codex: {
 | --- | --- | --- | --- |
 | 采集提供商 | `CODEX_RESET_PROVIDER` | `CLAUDE_RESET_PROVIDER` | `GROK_RESET_PROVIDER` |
 | 扫描间隔 | `CODEX_RESET_SCAN_MINUTES` | `CLAUDE_RESET_SCAN_MINUTES` | `GROK_RESET_SCAN_MINUTES` |
-| 识别模型 | `MONITOR_MODEL` | `MONITOR_MODEL` | `MONITOR_MODEL` |
+| `automatic` 识别模型 | `MONITOR_MODEL` | `MONITOR_MODEL` | `MONITOR_MODEL` |
 | 默认提供商／间隔 | SocialData／15 分钟 | SocialData／15 分钟 | SocialData／15 分钟 |
 | 模型能力键 | `monitor` | `monitor` | `monitor` |
 
-间隔支持 1、2、3、4、5、6、10、12、15、20、30、60 分钟，修改后重启 API 和 worker。各模块每天北京时间 04:40 查漏最近 24 小时。所有重置监控共用 `MONITOR_MODEL`，填 `default` 或未配置时使用站点 `LLM_*`；也可填写 `site/models.ts` 的具名预设。后台“重置监控识别”共用 `monitor` 能力，后台选择优先于环境变量，对所有监控同时生效。
+间隔支持 1、2、3、4、5、6、10、12、15、20、30、60 分钟，修改后重启 API 和 worker。本站三个模块只注册正常增量扫描，不注册每日 04:40 查漏；直接调用查漏、上下文或自动识别也不能绕过 `collect_only`。共享引擎保留显式 `automatic` 模式，其识别共用 `MONITOR_MODEL` 和后台 `monitor` 能力；此配置不使本站自动调用模型。
 
 SocialData 与 TwitterAPI.io 共用采集凭据组中的 `SOCIALDATA_API_KEY`／`TWITTERAPI_IO_API_KEY`、对应 `BASE_URL` 和供应商请求预算。默认根地址分别为 `https://api.socialdata.tools`、`https://api.twitterapi.io`，不附加端点路径。配置 `EGRESS_PROXY_URL` 时沿用框架出站代理和公网地址校验。请求频率经过共享预算控制。TwitterAPI.io 免费套餐要求至少 5 秒间隔，适配器固定等待 5.5 秒，进程内各监控共用；不提供环境变量配置，失败释放队列但不重试。TwitterAPI.io 初次使用沿用 SocialData 的预算上限，后续可在后台单独修改。请求成本暂不填金额，按请求次数熔断。
 
-开发保持 `COLLECT_ENABLED=false`、`MODEL_CALLS_ENABLED=false` 和所有推送安全阀关闭；测试只连接本地假服务。首次实际采集前需明确开启采集与模型安全阀，配置凭据、模型和预算。
+开发保持 `COLLECT_ENABLED=false`、`MODEL_CALLS_ENABLED=false` 和所有推送安全阀关闭；测试只连接本地假服务。仅采集真实新帖需单独授权开启采集安全阀、配置供应商凭据与预算，模型安全阀保持关闭。
 
 ## 初始化与运行
 
-正常扫描只查询上次整轮成功截止时间至本轮开始时间，使用 `since_time` 与 `until_time`。新安装、切换提供商，或旧截止时间没有整轮成功证据时，普通扫描在付费请求前中止。必须从仓库根目录按实际运营范围初始化：
+正常扫描只查询上次成功采集截止时间至本轮开始时间，使用 `since_time` 与 `until_time`。本站已结案的首次任务不再自动续采；保留结案审计与原游标，采集截止从结案时刻开始。手工结案不代表缺失历史已经采全或模型准确率已核验。新安装、切换提供商，或没有有效截止时间时，普通扫描在付费请求前中止；如另行授权初始化，须给出有限范围：
 
 ```bash
 npm run initialize -w @aihot/claude-reset -- --since 2026-10-08T00:00:00Z --until 2026-10-09T00:00:00Z
 ```
 
-Codex 使用 `-w @aihot/codex-reset`，Grok 使用 `-w @aihot/grok-reset`。起止时间必须是带时区 ISO 时间且 `since < until <= 当前时间`。命令读取现有配置、不修改 `.env`，会实际调用采集和模型。Docker 使用 `docker compose run --rm worker npm run initialize -w @aihot/claude-reset -- --since <已确认的ISO时间> --until <已确认的ISO时间>`。参数、安全阀、已有成功检查点或并发任务不符合要求时失败退出。
+Codex 使用 `-w @aihot/codex-reset`，Grok 使用 `-w @aihot/grok-reset`。起止时间必须是带时区 ISO 时间且 `since < until <= 当前时间`。命令读取现有配置、不修改 `.env`；`collect_only` 只调用主帖采集，无需模型开关或凭据，全部分页成功即完成初始化、推进采集截止并清理断点。Docker 使用 `docker compose run --rm worker npm run initialize -w @aihot/claude-reset -- --since <已确认的ISO时间> --until <已确认的ISO时间>`。参数、安全阀、已有成功检查点或并发任务不符合要求时失败退出。
 
 首次有限范围初始化支持断点继续：每页的帖子、回执完成状态和下一页游标在同一事务中保存到现有 `monitor_state`。失败退出后，使用相同起止参数和采集配置重新执行初始化命令，跳过已完成作者及查询，从未完成页继续；全部分页完成后，上下文或识别失败也不会重新请求搜索页。上下文与识别同样使用持久请求标识，已收到的有效响应在业务写入失败后复用。断点绑定监控、提供商、查询顺序、时间范围及筛选版本，不绑定供应商账号或密钥；更换同供应商账号后仍可继续。范围、作者顺序、查询或筛选版本变化会在付费前报错；模块明确声明的额外补采查询可以追加到旧查询之后，旧游标保持不变，补采完成前不宣称覆盖完整。不同提供商不共用游标。
 
-只采集时在有限范围命令末尾加 `--collect-only`，仅需 `COLLECT_ENABLED=true`，无需模型凭据或模型开关。此模式保存和筛选主帖，不补采上下文、不调用模型、不推送、不写成功检查点；采集完成后仍保留初始化断点。使用离线审核处理已存内容后，是否调用正式接口或补采上下文须按运营授权另行决定。
+`processingMode: "collect_only"` 是持久站点策略，新主帖的 `processed_at` 与 `raw.processingCompletion` 表示处理完成及跳过自动处理的原因，`recognition` 保持空，已有判断与人工字段不被覆盖。此模式不推送识别事件。`--collect-only` 是共享引擎 `automatic` 模式的一次性分阶段参数：只存主帖，不补上下文、调用模型、推送或写成功检查点，采完仍保留断点。本站的持久策略优先于此参数。
 
-所有分页、必要上下文和待识别帖子全部成功才写成功截止时间，并在同一事务中清理该提供商的初始化断点。失败保留已存帖子及断点，不提高预算、缩短范围或写入假成功检查点。普通增量扫描和每日查漏不保存或使用分页断点；普通下一轮仍从上次成功时间重新扫描，按 X 帖子 ID 去重，已处理帖子不重复识别。每日查漏不推进正常扫描截止时间。各监控与提供商拥有独立检查点、覆盖范围和执行锁；同一监控的初始化、扫描与查漏互斥。
+`collect_only` 的所有作者主帖分页成功即可推进截止，不要求模型开启。任一作者失败保留已存帖子，截止保持不变；下一轮从旧截止重扫，按 X 帖子 ID 去重。普通增量不保存分页断点。共享引擎 `automatic` 模式要求分页、必要上下文和待识别帖子全部成功才推进截止，日常查漏不推进正常截止。各监控与提供商拥有独立检查点、覆盖范围和执行锁。
 
 任一步请求失败、结果未知、预算不足或 HTTP 402 都中止本轮。队列不自动重试，失败回执不自动恢复或放行。初始化重跑复用已收到的有效响应；只有明确拒绝、未发送或无效响应才能在下一次显式执行时重试同一标识。任何计费未知尝试都阻止放行，即使旧监控回执已标记失败。普通扫描每轮使用独立付费回执。停止信号可取消节流队列及间隔等待，实际发送前再次检查停止状态、采集开关及预算停用；已发请求继续保存响应，未发取消不记为计费未知。其他框架请求的恢复机制不适用于重置监控。更换有余额的提供商也必须初始化该提供商的成功范围。
 
-上下文优先复用已存帖子，待获取回复记在 `raw.contextPending`。识别按发布时间运行，必要上下文不完整时等待；上下文或识别失败记入帖子和运行记录，不当作业务复核。人工处理过的帖子不再由 worker 自动识别。采集帖子及响应内引用内容与补充回复上下文是两个步骤。框架代理 DNS 超时 30 秒，TwitterAPI.io 整体请求超时 60 秒。
+以下自动识别机制仅适用于显式 `automatic` 模式：上下文优先复用已存帖子，待获取回复记在 `raw.contextPending`；识别按发布时间运行，必要上下文不完整时等待，失败记入帖子和运行记录。人工处理过的帖子不再自动识别。本站 `collect_only` 不执行这些步骤，响应内已有引用仍随原文保存。框架代理 DNS 超时 30 秒，TwitterAPI.io 整体请求超时 60 秒。
 
 模型配置优先于流程默认值，`LLM_EXTRA_JSON` 同名字段优先级更高；未配置温度时用 0.1，未配置输出上限时用 6000 加配置的思考额度，未配置超时时用 120 秒。仅在未配置思考模式和预算的 `deepseek-flash` 上默认关闭思考。所有模型调用经过回执与预算。离线评估只使用已保存材料，不访问付费接口；输入、标注与报告放 `.data/local-preview/`，不自动写回运营识别结果。
 
@@ -97,4 +98,4 @@ Codex 使用 `-w @aihot/codex-reset`，Grok 使用 `-w @aihot/grok-reset`。起�
 
 新增供应商在共享 `backend/providers/` 实现 `Collector.searchTweets` 和 `getTweet`，转换成统一 `Tweet` 后注册；付费请求必须经过回执、预算及安全阀，原响应先存回执再校验，错误中止本轮。TwitterAPI.io 接口依据：[搜索与游标](https://docs.twitterapi.io/api-reference/endpoint/tweet_advanced_search)、[按 ID 读取帖子](https://docs.twitterapi.io/api-reference/endpoint/get_tweet_by_ids)。
 
-多作者监控按 `authors` 顺序按账号起点及筛选范围分段完整分页采集，所有作者的采集、上下文和识别成功才推进检查点。公开帖子补充 `author` 与 `authorAvatar`，按实际作者展示；页面多账号分别展示，不使用首个账号头像代表全部信源。模块可提供 `defaultProductForAuthor` 与 `scopeConflicts`，产品默认值只补缺失字段，不覆盖已有事件或人工字段。`requireCrossAuthorEvidence` 要求跨账号关联明确指向事件，不能只靠时间和产品相近。
+多作者监控按 `authors` 顺序按账号起点及筛选范围完整分页采集，成功条件由处理模式决定：`collect_only` 只要求主帖采集成功，`automatic` 还要求必要上下文及识别成功。公开帖子补充 `author` 与 `authorAvatar`，按实际作者展示；页面多账号分别展示，不使用首个账号头像代表全部信源。模块可提供 `defaultProductForAuthor` 与 `scopeConflicts`，产品默认值只补缺失字段，不覆盖已有事件或人工字段。`requireCrossAuthorEvidence` 要求跨账号关联明确指向事件，不能只靠时间和产品相近。

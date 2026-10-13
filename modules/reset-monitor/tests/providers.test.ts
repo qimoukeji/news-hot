@@ -1,3 +1,4 @@
+import "./automatic-fixture.ts";
 import { Reply, stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";

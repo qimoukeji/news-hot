@@ -77,6 +77,7 @@ export function bindMonitor<A extends unknown[], R>(definition: ResetMonitorBack
 }
 
 export function validateDefinition(definition: ResetMonitorBackendDefinition) {
+  if (definition.processingMode !== undefined && !["automatic", "collect_only"].includes(definition.processingMode)) throw new Error("Invalid reset monitor processing mode");
   if (!/^[a-z][a-z0-9-]*$/.test(definition.monitorId)) throw new Error("Invalid reset monitor ID");
   if (!definition.authors.length || definition.authors.some((a) => !/^[A-Za-z0-9_]{1,15}$/.test(a.handle) || !a.name.trim())
     || new Set(definition.authors.map((a) => a.handle.toLowerCase())).size !== definition.authors.length) throw new Error("Invalid X monitor authors");

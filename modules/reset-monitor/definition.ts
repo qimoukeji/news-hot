@@ -21,6 +21,7 @@ export interface ResetMonitorCollection {
   queryGroups?: { query: readonly string[]; supplementalQueries?: readonly string[]; version: string; reason: string };
 }
 export interface ResetMonitorSiteConfig {
+  processingMode?: "automatic" | "collect_only";
   authors: readonly ResetMonitorAuthor[];
   plans: readonly string[];
   collection?: ResetMonitorCollection;
@@ -28,6 +29,7 @@ export interface ResetMonitorSiteConfig {
 export interface ResetMonitorProductAlias { key: string; patterns: readonly string[] }
 
 export interface ResetMonitorWebDefinition {
+  processingMode?: "automatic" | "collect_only";
   monitorId: string;
   moduleName: string;
   product: string;

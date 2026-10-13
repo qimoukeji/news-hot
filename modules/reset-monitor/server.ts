@@ -56,7 +56,7 @@ export function createMonitorServer(definition: ResetMonitorBackendDefinition) {
     models: { monitor: { label: "重置监控识别", env: "MONITOR_MODEL", purposes: [`${definition.names.purposePrefix}.recognize`] } },
     schedules: [
       { name: definition.names.tick, cron: scanCron(), retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick()) },
-      { name: definition.names.lookback, cron: "40 4 * * *", retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick({ lookbackHours: 24 })) },
+      ...(definition.processingMode === "collect_only" ? [] : [{ name: definition.names.lookback, cron: "40 4 * * *", retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick({ lookbackHours: 24 })) }]),
     ],
     sitemap: { pages: [{ loc: siteUrl(definition.pagePath), changefreq: "hourly" }] },
     llms: bound(() => ({ api: [`- ${subject}：${definition.publicApiPath}/recent（最近七天及未完成事件）；${definition.publicApiPath}（完整历史）`],

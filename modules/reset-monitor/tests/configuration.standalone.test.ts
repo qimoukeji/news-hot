@@ -25,6 +25,7 @@ const scope = (productsZh: string, plans: string[] | null = null) => ({ audience
 
 test("the three monitors share event kinds and configure authors, plans and defaults without credentials", () => {
   for (const definition of [codex, claude, grok]) {
+    assert.equal(definition.processingMode, "collect_only");
     assert.equal(definition.eventKinds, RESET_EVENT_KINDS);
     assert.deepEqual(definition.authors, RESET_MONITORS[definition.monitorId as keyof typeof RESET_MONITORS].authors);
     assert.equal(buildCollectionFilter(definition.collection), undefined);
@@ -37,6 +38,7 @@ test("the three monitors share event kinds and configure authors, plans and defa
   });
   assert.throws(() => validateResetMonitorConfig({ authors: [{ handle: "one", name: "One" }, { handle: "ONE", name: "Two" }], plans: [] }), /Invalid X/);
   assert.throws(() => validateResetMonitorConfig({ authors: [], plans: [] }), /Invalid X/);
+  assert.throws(() => validateResetMonitorConfig({ ...RESET_MONITORS.codex, processingMode: "invalid" as never }), /processing mode/);
   assert.throws(() => validateResetMonitorConfig({ authors: [{ handle: "one", name: "One" }], plans: ["Plan", "plan"] }), /Invalid reset monitor plans/);
 });
 

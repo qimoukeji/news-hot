@@ -102,6 +102,7 @@ function describeTime(iso: string, author?: string): string {
 }
 
 export async function recognizePost(input: { id: string; author?: string; text: string; publishedAt: string; context: ContextInput[]; openEvents: OpenEventInput[]; roundId?: string; resume?: boolean }): Promise<Recognition> {
+  if (currentMonitor().processingMode === "collect_only") throw new Error("Automatic recognition is disabled for this monitor");
   const lines = [
     `帖子 ${input.id}，作者 @${input.author ?? currentMonitor().authors[0]!.handle}，时间策略 ${authorTimePolicy(input.author)}，发布于 ${describeTime(input.publishedAt, input.author)}：`,
     input.text,

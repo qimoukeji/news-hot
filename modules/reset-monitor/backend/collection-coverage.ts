@@ -28,7 +28,7 @@ export type CollectionCoverage = z.infer<typeof CollectionCoverage>;
 export const collectionCoverageKey = () => `collection:coverage:v1:${collectorName()}`;
 
 /** A configuration change applies forwards only; display changes do not reset coverage. */
-export function reconcileCollectionCoverage(saved: unknown, definition: Pick<ResetMonitorBackendDefinition, "authors" | "collectionFilter">,
+export function reconcileCollectionCoverage(saved: unknown, definition: Pick<ResetMonitorBackendDefinition, "authors" | "collectionFilter" | "processingMode">,
   observedAt: string, baseline: string | null, explicitInitialization = false): CollectionCoverage {
   Timestamp.parse(observedAt); Timestamp.nullable().parse(baseline);
   const filter = definition.collectionFilter;
@@ -41,7 +41,7 @@ export function reconcileCollectionCoverage(saved: unknown, definition: Pick<Res
   const previous = saved == null ? null : CollectionCoverage.parse(saved);
   const identity = (value: typeof snapshot.filter) => value?.signature ?? JSON.stringify(value);
   const changed = !!previous && identity(previous.snapshot.filter) !== identity(snapshot.filter);
-  if (changed && !explicitInitialization && previous.snapshot.filter && !previous.snapshot.filter.configuration) {
+  if (changed && definition.processingMode !== "collect_only" && !explicitInitialization && previous.snapshot.filter && !previous.snapshot.filter.configuration) {
     throw new Error("Previous collection filter cannot be reconstructed; restore its original configuration and finish coverage before changing scope");
   }
   return {
@@ -51,7 +51,7 @@ export function reconcileCollectionCoverage(saved: unknown, definition: Pick<Res
       return { handle: author.handle, name: author.name, collectedSince: previous ? existing ? existing.collectedSince : observedAt : baseline };
     }),
     scopeEffectiveAt: explicitInitialization ? baseline : previous ? changed ? observedAt : previous.scopeEffectiveAt : baseline,
-    retiredScopes: explicitInitialization ? [] : [...(previous?.retiredScopes ?? []), ...(changed ? [{ since: previous!.scopeEffectiveAt, until: observedAt, filter: previous!.snapshot.filter }] : [])],
+    retiredScopes: explicitInitialization || definition.processingMode === "collect_only" ? [] : [...(previous?.retiredScopes ?? []), ...(changed ? [{ since: previous!.scopeEffectiveAt, until: observedAt, filter: previous!.snapshot.filter }] : [])],
   };
 }
 

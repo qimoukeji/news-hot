@@ -32,7 +32,6 @@ export async function initializeMonitor(usage: string, load: () => Promise<{ mod
     if (!options) console.log(usage);
     else {
       const { config } = await import("@aihot/backend/config");
-      if (process.env.COLLECT_ENABLED !== "true" || !options.collectOnly && !config.modelCallsEnabled) throw new Error("Initialization requires COLLECT_ENABLED=true and, unless --collect-only, MODEL_CALLS_ENABLED=true");
       const { closeDb } = await import("@aihot/backend/db");
       close = closeDb;
       const { shutdownSignal } = await import("@aihot/backend/lib/shutdown");
@@ -40,6 +39,7 @@ export async function initializeMonitor(usage: string, load: () => Promise<{ mod
       process.on("SIGINT", stop); process.on("SIGTERM", stop);
       const { installModules } = await import("@aihot/backend/modules");
       const { module, definition } = await load();
+      if (process.env.COLLECT_ENABLED !== "true" || definition.processingMode !== "collect_only" && !options.collectOnly && !config.modelCallsEnabled) throw new Error("Initialization requires COLLECT_ENABLED=true and, in automatic processing mode without --collect-only, MODEL_CALLS_ENABLED=true");
       installModules([module]);
       const { monitorTick } = await import("./backend/scan.ts");
       const { inMonitor } = await import("./backend/context.ts");

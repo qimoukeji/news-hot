@@ -5,7 +5,7 @@ name: Check
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/deploy]
   pull_request:
   workflow_dispatch:
 
@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: check-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/codex/deploy' }}
 
 jobs:
   check:
@@ -65,6 +65,14 @@ jobs:
           /usr/lib/postgresql/17/bin/pg_restore --version
       - name: Typecheck
         run: npm run typecheck
+      - name: Deployment failure paths and PostgreSQL 18 audit
+        run: |
+          node --test deploy/news-hot/tests/manifest.test.cjs deploy/news-hot/tests/attachments.test.cjs
+          for script in deploy/news-hot/*.sh deploy/news-hot/tests/*.sh; do bash -n "$script"; done
+          bash deploy/news-hot/tests/release.integration.sh
+          bash deploy/news-hot/tests/attachments.integration.sh
+          bash deploy/news-hot/tests/audit.pg18.sh
+          bash deploy/news-hot/tests/bootstrap.sh
       - name: Build web
         run: npm run build -w @aihot/web
       - name: Browser test engines
@@ -121,3 +129,84 @@ jobs:
       - name: Stop
         if: always()
         run: docker compose down -v
+
+  prepare-deployment:
+    if: github.ref == 'refs/heads/codex/deploy' && github.event_name != 'pull_request'
+    needs: [check, docker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      needs_migration: ${{ steps.prepare.outputs.needs_migration }}
+      approval_digest: ${{ steps.prepare.outputs.approval_digest }}
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Build the exact release and PostgreSQL image
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: bash deploy/news-hot/package.sh "$RELEASE_SHA" "$RUNNER_TEMP/news-hot-bundle"
+      - name: Validate the production image on an isolated database
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: bash deploy/news-hot/ci-smoke.sh "$RELEASE_SHA"
+      - name: Configure verified SSH connection
+        run: bash deploy/news-hot/ssh-setup.sh
+      - name: Transfer verified release and inspect pending migrations
+        id: prepare
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/news-hot-bundle"
+          remote="/opt/news-hot/incoming/$RELEASE_SHA"
+          ssh news-hot-deploy "mkdir -p '$remote/tools'"
+          scp "$bundle/source.tar.gz" "$bundle/app-image.tar.gz" "$bundle/db-image.tar.gz" "$bundle/release.json" "news-hot-deploy:$remote/"
+          scp deploy/news-hot/release.sh deploy/news-hot/manifest.cjs "news-hot-deploy:$remote/tools/"
+          ssh news-hot-deploy "bash '$remote/tools/release.sh' prepare '$RELEASE_SHA'" > "$RUNNER_TEMP/news-hot-plan.json"
+          node - "$RUNNER_TEMP/news-hot-plan.json" >> "$GITHUB_OUTPUT" <<'NODE'
+          const fs = require('fs');
+          const plan = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (!/^[a-f0-9]{64}$/.test(plan.approvalDigest) || typeof plan.needsMigration !== 'boolean') throw Error('Invalid deployment plan');
+          console.log('needs_migration=' + plan.needsMigration);
+          console.log('approval_digest=' + plan.approvalDigest);
+          NODE
+          {
+            echo "Commit: $RELEASE_SHA"
+            echo "Pending migration approval is bound to the current release and database ledger."
+            ssh news-hot-deploy "node '$remote/tools/manifest.cjs' pending-sql '$remote/plan.json' '/opt/news-hot/releases/$RELEASE_SHA'"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: prepare-deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: ${{ needs.prepare-deployment.outputs.needs_migration == 'true' && 'production-migrations' || 'production' }}
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Configure verified SSH connection
+        run: bash deploy/news-hot/ssh-setup.sh
+      - name: Apply approved release
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          APPROVAL_DIGEST: ${{ needs.prepare-deployment.outputs.approval_digest }}
+        run: |
+          set -euo pipefail
+          remote="/opt/news-hot/incoming/$RELEASE_SHA"
+          ssh news-hot-deploy "bash '$remote/tools/release.sh' apply '$RELEASE_SHA' '$APPROVAL_DIGEST'"
+          echo "Verified release: $RELEASE_SHA" >> "$GITHUB_STEP_SUMMARY"

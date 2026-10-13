@@ -1,3 +1,4 @@
+import "../../reset-monitor/tests/automatic-fixture.ts";
 import { stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";

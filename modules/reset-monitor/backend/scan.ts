@@ -1,5 +1,5 @@
 import { monitor as currentMonitor, monitorId, authorHandles, authorNameFor, purpose as requestPurpose, auditAction, auditSubject, type ResetMonitorBackendDefinition } from "./context.ts";
-// Each round stores successful pages and advances coverage only after context and recognition finish.
+// Successful coverage follows the monitor's configured collection or automatic processing policy.
 import { randomUUID } from "node:crypto";
 import { config } from "@aihot/backend/config";
 import { sql, type Db } from "@aihot/backend/db";
@@ -80,12 +80,14 @@ async function storePost(t: SdTweet, db: Db = sql, filter: ResetMonitorBackendDe
   if (!includedInCollection(t, filter)) return 0;
   const context = await contextOf(t, `x:${t.id_str}`, false);
   const handle = currentMonitor().authors.find((a) => a.handle.toLowerCase() === t.user.screen_name.toLowerCase())!.handle;
+  const completedAt = currentMonitor().processingMode === "collect_only" ? new Date() : null;
   const inserted = await db`
-    INSERT INTO monitor_posts (monitor_id, id, author, published_at, text, url, context, raw, origin)
+    INSERT INTO monitor_posts (monitor_id, id, author, published_at, text, url, context, raw, origin, processed_at)
     VALUES (${monitorId()}, ${t.id_str}, ${handle}, ${new Date(t.tweet_created_at)}, ${tweetText(t)}, ${`https://x.com/${handle}/status/${t.id_str}`},
       ${db.json(context.map(c => ({ id: c.id, author: c.author, relation: c.relation, text: null, originalText: c.text, url: c.url })) as never)},
-      ${db.json({ tweet: t, context, contextPending: !!t.in_reply_to_status_id_str,
-        collectionFilter: { version: filter?.version ?? null, signature: filter?.signature ?? null, accepted: true } } as never)}, 'live')
+      ${db.json({ tweet: t, context, contextPending: !completedAt && !!t.in_reply_to_status_id_str,
+        ...(completedAt ? { processingCompletion: { mode: "collect_only", source: "configuration", reason: "automatic_processing_disabled", completedAt: completedAt.toISOString() } } : {}),
+        collectionFilter: { version: filter?.version ?? null, signature: filter?.signature ?? null, accepted: true } } as never)}, 'live', ${completedAt})
     ON CONFLICT (monitor_id, id) DO NOTHING`;
   return inserted.count;
 }
@@ -96,6 +98,7 @@ function includedInCollection(t: SdTweet, filter: ResetMonitorBackendDefinition[
 
 /** Preserve posts collected before an operator narrowed the scope, without buying their context or recognition. */
 export async function screenPendingPosts(): Promise<number> {
+  if (currentMonitor().processingMode === "collect_only") return 0;
   const filter = currentMonitor().collectionFilter;
   if (!filter) return 0;
   const posts = await sql<{ id: string; raw: { tweet?: SdTweet } | null }[]>`SELECT id,raw FROM monitor_posts
@@ -116,7 +119,7 @@ export async function screenPendingPosts(): Promise<number> {
 /** A failure aborts context collection; the next scheduled round gets independent request keys. */
 export async function collectPendingContext(limit = Infinity, roundId: string = randomUUID(), resume = false): Promise<{ completed: number }> {
   const result = { completed: 0 };
-  if (process.env.COLLECT_ENABLED !== "true") return result;
+  if (currentMonitor().processingMode === "collect_only" || process.env.COLLECT_ENABLED !== "true") return result;
   const posts = await sql<{ id: string; raw: { tweet: SdTweet } }[]>`
     SELECT id, raw FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts
     WHERE lower(author) = ANY(${authorHandles()}::text[]) AND processed_at IS NULL AND raw->>'contextPending' = 'true'
@@ -137,6 +140,7 @@ export async function collectPendingContext(limit = Infinity, roundId: string = 
 
 /** Collect every page within the fixed window. This function never advances successful coverage. */
 export async function collectPosts(opts: ScanOptions = {}): Promise<{ stored: number; pages: number }> {
+  if (currentMonitor().processingMode === "collect_only" && opts.lookbackHours !== undefined) return { stored: 0, pages: 0 };
   if (!opts.initialRange) {
     const [unfinished] = await sql`SELECT key FROM monitor_state WHERE monitor_id=${monitorId()} AND key LIKE 'initial:%' LIMIT 1`;
     if (unfinished) throw new Error("Monitor has unfinished initialization; complete the original range and configuration before scanning or lookback");
@@ -168,7 +172,9 @@ export async function collectPosts(opts: ScanOptions = {}): Promise<{ stored: nu
   let progress = range ? initialCollection(originalQueries, await getState(initialCollectionKey()), supplementalQueries) : null;
   type QueryScope = { query: string; since: number; until: number; filter: ResetMonitorBackendDefinition["collectionFilter"]; historical: boolean };
   const jobs: QueryScope[] = progress ? progress.queries.map(query => ({ query, since, until, filter: currentMonitor().collectionFilter, historical: false }))
-    : currentMonitor().authors.flatMap(author => collectionSegments(coverage!, authorCollectionSince(coverage!, author.handle, since), until)
+    : currentMonitor().authors.flatMap(author => (currentMonitor().processingMode === "collect_only"
+      ? [{ since: Math.max(authorCollectionSince(coverage!, author.handle, since), coverage!.scopeEffectiveAt ? Date.parse(coverage!.scopeEffectiveAt) : since), until, filter: currentMonitor().collectionFilter }].filter(segment => segment.since < segment.until)
+      : collectionSegments(coverage!, authorCollectionSince(coverage!, author.handle, since), until))
       // Search boundaries have second precision. Round the upper bound outwards and
       // enforce the exact segment locally so a subsecond scope change cannot leave a gap.
       .flatMap(segment => [false, true].flatMap(supplemental => collectionQueriesFor(segment.filter, [author], segment.since, Math.ceil(segment.until / 1000) * 1000, supplemental)
@@ -327,7 +333,7 @@ function resetPostCard(post: PushPost, entries: Array<{ eventId: string; action:
 
 /** Process all pending posts in publication order. Failed recognition aborts the round. */
 export async function processPending(limit = Infinity, roundId: string = randomUUID(), resume = false): Promise<{ processed: number; failed: number }> {
-  if (!config.modelCallsEnabled) return { processed: 0, failed: 0 };
+  if (currentMonitor().processingMode === "collect_only" || !config.modelCallsEnabled) return { processed: 0, failed: 0 };
   const posts = await sql<{ id: string; author: string; text: string; published_at: Date; raw: { contextPending?: boolean; context?: Array<ContextInput & { url: string }> } | null }[]>`
     SELECT id, author, text, published_at, raw FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE processed_at IS NULL AND lower(author) = ANY(${authorHandles()}::text[])
     ORDER BY published_at, id ${Number.isFinite(limit) ? sql`LIMIT ${limit}` : sql``}`;
@@ -410,6 +416,7 @@ export async function flushResetPushes(): Promise<number> {
 
 /** One scheduled run owns the checkpoint; a concurrent trigger skips instead of queuing. */
 export async function monitorTick(opts: { lookbackHours?: number; initialRange?: { since: string; until: string }; collectOnly?: boolean } = {}) {
+  if (currentMonitor().processingMode === "collect_only" && opts.lookbackHours !== undefined) return { skipped: true, reason: "historical_collection_disabled" };
   if (opts.collectOnly && !opts.initialRange) throw new Error("collectOnly requires a finite initialization range");
   const connection = await sql.reserve();
   try {
@@ -424,6 +431,16 @@ async function tick(opts: { lookbackHours?: number; initialRange?: { since: stri
   await cleanupMonitorCollectionState();
   await touchWatermarks({ lastAttemptAt: started.toISOString() });
   const collected = await collectPosts({ ...opts, startedAt: started, roundId });
+  if (currentMonitor().processingMode === "collect_only") {
+    if (process.env.COLLECT_ENABLED !== "true") throw new Error("Monitor round incomplete: collection must be enabled");
+    const through = opts.initialRange ? new Date(Math.floor(Date.parse(opts.initialRange.until) / 1000) * 1000).toISOString() : started.toISOString();
+    await sql.begin(async tx => {
+      await setState(cursorKey(), { checkpointVersion: 2, scannedThrough: through }, tx);
+      await touchWatermarks({ lastVerifiedAt: started.toISOString() }, tx);
+      if (opts.initialRange) await tx`DELETE FROM monitor_state WHERE monitor_id = ${monitorId()} AND key = ${initialCollectionKey()}`;
+    });
+    return { ...collected, processingMode: "collect_only", processed: collected.stored, pending: 0, verifiedAt: bjIso(started) };
+  }
   const screened = await screenPendingPosts();
   if (opts.collectOnly) return { ...collected, screened, collectOnly: true, verifiedAt: null };
   const progress = opts.initialRange ? await getState<{ processingWindow: string }>(initialCollectionKey()) : null;

@@ -1,3 +1,4 @@
+import "./automatic-fixture.ts";
 import { installModules } from "@aihot/backend/modules";
 
 import monitorModule from "../../codex-reset/server.ts";

@@ -9,7 +9,7 @@ import { backendDefinition } from "../../grok-reset/backend-definition.ts";
 const baseline = "2026-10-10T00:00:00.000Z";
 const first = "2026-10-11T00:00:00.000Z";
 const retry = "2026-10-11T01:00:00.000Z";
-const original = { ...backendDefinition, authors: [{ handle: "bot", name: "Bot" }], collectionFilter: undefined };
+const original = { ...backendDefinition, processingMode: "automatic" as const, authors: [{ handle: "bot", name: "Bot" }], collectionFilter: undefined };
 
 test("upgrade installs original account coverage and display changes preserve its start", () => {
   const installed = reconcileCollectionCoverage(null, original, first, null);

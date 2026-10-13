@@ -1,3 +1,4 @@
+import "../../reset-monitor/tests/automatic-fixture.ts";
 import { stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -100,7 +101,7 @@ test("initialization CLI validates a finite explicit range and performs the comp
   collected = { tweets: [tweet()] };
   const initialRange = range();
   const command = fileURLToPath(new URL("../scripts/initialize.ts", import.meta.url));
-  const result = await promisify(execFile)(process.execPath, [command, "--since", initialRange.since, "--until", initialRange.until], { env: { ...process.env, ALLOW_PRIVATE_NETWORK_FETCH: "true" }, timeout: 20_000 });
+  const result = await promisify(execFile)(process.execPath, ["--import", fileURLToPath(new URL("../../reset-monitor/tests/automatic-fixture.ts", import.meta.url)), command, "--since", initialRange.since, "--until", initialRange.until], { env: { ...process.env, ALLOW_PRIVATE_NETWORK_FETCH: "true" }, timeout: 20_000 });
   assert.equal(JSON.parse(result.stdout).pending, 0);
   assert.equal((await sql`SELECT processed_at FROM monitor_posts WHERE id = '100'`)[0]!.processed_at instanceof Date, true);
   assert.equal((await sql`SELECT value FROM monitor_state WHERE key = 'cursor:socialdata'`)[0]!.value.checkpointVersion, 2);
@@ -111,7 +112,7 @@ test("collect-only CLI needs no model credentials and retains the unfinished ini
   const initialRange = range();
   const hits = model.hits();
   const command = fileURLToPath(new URL("../scripts/initialize.ts", import.meta.url));
-  const result = await promisify(execFile)(process.execPath, [command, "--since", initialRange.since, "--until", initialRange.until, "--collect-only"], {
+  const result = await promisify(execFile)(process.execPath, ["--import", fileURLToPath(new URL("../../reset-monitor/tests/automatic-fixture.ts", import.meta.url)), command, "--since", initialRange.since, "--until", initialRange.until, "--collect-only"], {
     env: { ...process.env, ALLOW_PRIVATE_NETWORK_FETCH: "true", MODEL_CALLS_ENABLED: "false", DEEPSEEK_API_KEY: "", LLM_API_KEY: "" }, timeout: 20_000,
   });
   assert.equal(JSON.parse(result.stdout).collectOnly, true);
