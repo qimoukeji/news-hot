@@ -1,3 +1,4 @@
+import { collectsForwardOnly } from "./definition.ts";
 import { z } from "zod";
 import { defineServerModule } from "@aihot/backend/modules";
 import { modulePublication } from "@aihot/backend/publication/modules";
@@ -11,6 +12,7 @@ import { monitorTick } from "./backend/scan.ts";
 import { scanCron, scanMinutes } from "./config.ts";
 import { registerHttp } from "./api/routes.ts";
 import { eventDisplayLabel } from "./event-kind.ts";
+import { publicV2Snapshot } from "./backend/public-v2.ts";
 
 export function monitorNames(id: string): ResetMonitorBackendDefinition["names"] {
   return { tick: `${id}-reset.tick`, lookback: `${id}-reset.lookback`, purposePrefix: `reset_monitor.${id}`,
@@ -50,12 +52,13 @@ export function createMonitorServer(definition: ResetMonitorBackendDefinition) {
       day: bound(({ date }: Record<string, unknown>) => loadSiteResetMonitorDay(String(date))),
       version: bound(() => resetVersion()), snapshot: bound(() => resetsSnapshot()), recent: bound(() => resetsRecent()),
       agent: bound(() => resetPage()),
+      ...(definition.publicV2 ? { snapshotV2: bound(() => publicV2Snapshot()) } : {}),
     },
     http: (app) => scopedHttp(app, definition),
-    models: { monitor: { label: "重置监控识别", env: "MONITOR_MODEL", purposes: [`${definition.names.purposePrefix}.recognize`] } },
+    models: { monitor: { label: "重置监控识别与 v2 补全", env: "MONITOR_MODEL", purposes: [`${definition.names.purposePrefix}.recognize`, `${definition.names.purposePrefix}.public_v2`] } },
     schedules: [
       { name: definition.names.tick, cron: scanCron(), retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick()) },
-      ...(definition.processingMode === "collect_only" ? [] : [{ name: definition.names.lookback, cron: "40 4 * * *", retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick({ lookbackHours: 24 })) }]),
+      ...(collectsForwardOnly(definition) ? [] : [{ name: definition.names.lookback, cron: "40 4 * * *", retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick({ lookbackHours: 24 })) }]),
     ],
     sitemap: { pages: [{ loc: definition.pagePath, changefreq: "hourly" }] },
     llms: bound(() => ({ api: [`- ${subject}：${definition.publicApiPath}/recent（最近七天及未完成事件）；${definition.publicApiPath}（完整历史）`],

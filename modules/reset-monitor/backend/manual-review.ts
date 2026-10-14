@@ -10,6 +10,7 @@ import type {
 } from "../contracts.ts";
 import { eventRows, postRows } from "./admin.ts";
 import { quotedInPost } from "./assemble.ts";
+import { enqueuePublicV2 } from "./public-v2-work.ts";
 import { eventDisplayLabel, eventLabel } from "../event-kind.ts";
 import { BonusCreditInput } from "./bonus-input.ts";
 import { authorTimePolicy } from "./context.ts";
@@ -911,6 +912,7 @@ export async function submitMonitorReview(
         { db: tx },
       );
       await bumpPublication(tx);
+      await enqueuePublicV2(tx, planned.changes.map(change => change.after.id));
       return result(state!, planned);
     });
   } catch (error) {

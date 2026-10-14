@@ -119,7 +119,8 @@ test("admin corrections and repeated manual reviews preserve bonus facts and imm
   assert.equal(detail.history.length, 2);
 });
 
-test("Codex supports bonus review while a third monitor reuses public and notification behavior", async () => {
+test("Codex supports bonus review while a third monitor reuses public and notification behavior", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now });
   await addPost(codex, "supported", now);
   await review(codex, "supported");
   assert.equal((await inMonitor(codex, () => listMonitorEvents())).events[0]!.type, "bonus_credit");

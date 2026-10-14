@@ -14,6 +14,7 @@
     "@aihot/contracts": "*",
     "@aihot/site": "*",
     "@aihot/api": "*",
+    "@js-temporal/polyfill": "0.5.1",
     "zod": "4.6.5",
     "react": "19.3.0",
     "react-router": "8.4.0"

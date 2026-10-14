@@ -1,3 +1,4 @@
+import "./collect-only-fixture.ts";
 import { Reply, stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -55,7 +56,7 @@ beforeEach(async () => {
 });
 after(async () => { await provider.close(); await model.close(); await closeDb(); });
 
-test("all three site monitors register only forward collection schedules", () => {
+test("collect-only monitors register only forward collection schedules", () => {
   definitions.forEach((definition, index) => {
     assert.equal(definition.processingMode, "collect_only");
     assert.deepEqual(servers[index]!.schedules!.map(schedule => schedule.name), [definition.names.tick]);
@@ -115,7 +116,7 @@ test("a failed later author preserves stored completed posts and the old live ch
 
 test("collect-only initialization finishes paging without model credentials even when CLI flag is omitted", async () => {
   const command = fileURLToPath(new URL("../../codex-reset/scripts/initialize.ts", import.meta.url));
-  const result = await promisify(execFile)(process.execPath, [command, "--since", range.since, "--until", range.until], {
+  const result = await promisify(execFile)(process.execPath, ["--import", new URL("./collect-only-fixture.ts", import.meta.url).href, command, "--since", range.since, "--until", range.until], {
     env: { ...process.env, ALLOW_PRIVATE_NETWORK_FETCH: "true", MODEL_CALLS_ENABLED: "false", DEEPSEEK_API_KEY: "", LLM_API_KEY: "" }, timeout: 20_000,
   });
   assert.equal(JSON.parse(result.stdout).processingMode, "collect_only");

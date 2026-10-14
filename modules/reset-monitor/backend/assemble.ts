@@ -14,6 +14,7 @@ import { trustedThreadEvents } from "./thread-events.ts";
 import { authorTimePolicy, withAuthorTime } from "./context.ts";
 import { resolve as resolveExplicitTime } from "./explicit-time.ts";
 import { productsConflict, plansFromScopeLabel } from "./scope-policy.ts";
+import { enqueuePublicV2 } from "./public-v2-work.ts";
 
 const HOUR = 3600_000;
 const OUTAGE_LINK_MS = 18 * HOUR;
@@ -543,6 +544,7 @@ export async function applyRecognition(postId: string, rec: Recognition): Promis
         activity = coalesce(${activity ? tx.json(activity as never) : null}, activity),
         outage = coalesce(${outage ? tx.json(outage as never) : null}, outage), processed_at = now()
       WHERE monitor_id = ${monitorId()} AND (id = ${postId}) `;
+    await enqueuePublicV2(tx, applied.eventIds);
     // The paid recognition is complete once its result is committed with the post.
     await completeReceipt(tx, rec.receiptId);
     await tx`INSERT INTO monitor_state (monitor_id, key, value) VALUES (${monitorId()}, 'publication_revision', ${tx.json({ revision: randomUUID() })})

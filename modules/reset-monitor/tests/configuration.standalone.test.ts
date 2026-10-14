@@ -25,7 +25,7 @@ const scope = (productsZh: string, plans: string[] | null = null) => ({ audience
 
 test("the three monitors share event kinds and configure authors, plans and defaults without credentials", () => {
   for (const definition of [codex, claude, grok]) {
-    assert.equal(definition.processingMode, "collect_only");
+    assert.equal(definition.processingMode, "automatic_incremental");
     assert.equal(definition.eventKinds, RESET_EVENT_KINDS);
     assert.deepEqual(definition.authors, RESET_MONITORS[definition.monitorId as keyof typeof RESET_MONITORS].authors);
     assert.equal(buildCollectionFilter(definition.collection), undefined);

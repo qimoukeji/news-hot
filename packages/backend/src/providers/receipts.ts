@@ -34,7 +34,7 @@ export class ReceiptFailedError extends Error {
   constructor(receiptId: number, message: string, options?: ErrorOptions) { super(message, options); this.receiptId = receiptId; }
 }
 
-export const MONITOR_PURPOSE_PATTERN = "^(monitor|reset_monitor\\.[a-z][a-z0-9-]*)\\.(scan|lookback|context|recognize)$";
+export const MONITOR_PURPOSE_PATTERN = "^(monitor|reset_monitor\\.[a-z][a-z0-9-]*)\\.(scan|lookback|context|recognize|public_v2)$";
 export const isMonitorRequest = (purpose: string) => new RegExp(MONITOR_PURPOSE_PATTERN).test(purpose);
 
 export class ReceiptUnknownError extends Error {

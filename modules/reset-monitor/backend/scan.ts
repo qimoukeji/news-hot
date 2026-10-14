@@ -1,3 +1,5 @@
+import { collectsForwardOnly } from "../definition.ts";
+import { processPublicV2Pending } from "./public-v2-generate.ts";
 import { monitor as currentMonitor, monitorId, authorHandles, authorNameFor, purpose as requestPurpose, auditAction, auditSubject, type ResetMonitorBackendDefinition } from "./context.ts";
 // Successful coverage follows the monitor's configured collection or automatic processing policy.
 import { randomUUID } from "node:crypto";
@@ -6,6 +8,7 @@ import { sql, type Db } from "@aihot/backend/db";
 import type { ResetMonitorContextPost } from "../contracts.ts";
 import { SITE } from "@aihot/site";
 import { shutdownSignal } from "@aihot/backend/lib/shutdown";
+import { sha256, stableJson } from "@aihot/backend/lib/ids";
 import { getTweet, searchTweets, tweetText, type Tweet as SdTweet } from "./providers/collectors.ts";
 import type { SearchResult } from "@aihot/backend/providers/socialdata";
 import { completeReceipt, retireMonitorUnknownReceipts } from "@aihot/backend/providers/receipts";
@@ -17,6 +20,11 @@ import { cursorKey, watermarksKey } from "../config.ts";
 import { sourceContentIssue, markIncompleteSource } from "./source-completeness.ts";
 import { advanceInitialCollection, collectionQueries, collectionQueriesFor, initialCollection, initialCollectionKey } from "./initial-collection.ts";
 import { authorCollectionSince, collectionSegments, prepareCollectionCoverage } from "./collection-coverage.ts";
+
+// The cutover is marked only on insertion; old pending and collect-only posts stay untouched.
+function incrementalPostFilter() {
+  return currentMonitor().processingMode === "automatic_incremental" ? sql`raw->>'processingMode' = 'automatic_incremental'` : sql`true`;
+}
 
 const PUSH_MAX_AGE_MS = 36 * 3600_000;
 
@@ -87,6 +95,7 @@ async function storePost(t: SdTweet, db: Db = sql, filter: ResetMonitorBackendDe
       ${db.json(context.map(c => ({ id: c.id, author: c.author, relation: c.relation, text: null, originalText: c.text, url: c.url })) as never)},
       ${db.json({ tweet: t, context, contextPending: !completedAt && !!t.in_reply_to_status_id_str,
         ...(completedAt ? { processingCompletion: { mode: "collect_only", source: "configuration", reason: "automatic_processing_disabled", completedAt: completedAt.toISOString() } } : {}),
+        ...(currentMonitor().processingMode === "automatic_incremental" ? { processingMode: "automatic_incremental" } : {}),
         collectionFilter: { version: filter?.version ?? null, signature: filter?.signature ?? null, accepted: true } } as never)}, 'live', ${completedAt})
     ON CONFLICT (monitor_id, id) DO NOTHING`;
   return inserted.count;
@@ -103,7 +112,7 @@ export async function screenPendingPosts(): Promise<number> {
   if (!filter) return 0;
   const posts = await sql<{ id: string; raw: { tweet?: SdTweet } | null }[]>`SELECT id,raw FROM monitor_posts
     WHERE monitor_id = ${monitorId()} AND lower(author) = ANY(${authorHandles()}::text[]) AND processed_at IS NULL
-      AND recognition IS NULL AND NOT coalesce(raw,'{}'::jsonb) ? 'collectionFilter'`;
+      AND ${incrementalPostFilter()} AND recognition IS NULL AND NOT coalesce(raw,'{}'::jsonb) ? 'collectionFilter'`;
   const excluded = posts.filter(p => p.raw?.tweet && !includedInCollection(p.raw.tweet)).map(p => p.id);
   if (!excluded.length) return 0;
   const basis = { version: filter.version, reason: filter.reason, accepted: false };
@@ -122,12 +131,14 @@ export async function collectPendingContext(limit = Infinity, roundId: string = 
   if (currentMonitor().processingMode === "collect_only" || process.env.COLLECT_ENABLED !== "true") return result;
   const posts = await sql<{ id: string; raw: { tweet: SdTweet } }[]>`
     SELECT id, raw FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts
-    WHERE lower(author) = ANY(${authorHandles()}::text[]) AND processed_at IS NULL AND raw->>'contextPending' = 'true'
+    WHERE lower(author) = ANY(${authorHandles()}::text[]) AND processed_at IS NULL AND raw->>'contextPending' = 'true' AND ${incrementalPostFilter()}
     ORDER BY published_at, id ${Number.isFinite(limit) ? sql`LIMIT ${limit}` : sql``}`;
   for (const p of posts) {
     shutdownSignal.signal.throwIfAborted();
     let context: Array<ContextInput & { url: string }>;
-    try { context = await contextOf(p.raw.tweet, `x:${p.id}`, true, roundId, resume); }
+    try { context = await contextOf(p.raw.tweet, `x:${p.id}`, true,
+      currentMonitor().processingMode === "automatic_incremental" ? `incremental:${p.id}` : roundId,
+      currentMonitor().processingMode === "automatic_incremental" || resume); }
     catch (error) { await recordPostFailure(p.id, "context", error); throw error; }
     await sql`UPDATE monitor_posts SET
       context = ${sql.json(context.map(c => ({ id: c.id, author: c.author, relation: c.relation, text: null, originalText: c.text, url: c.url })) as never)},
@@ -140,7 +151,7 @@ export async function collectPendingContext(limit = Infinity, roundId: string = 
 
 /** Collect every page within the fixed window. This function never advances successful coverage. */
 export async function collectPosts(opts: ScanOptions = {}): Promise<{ stored: number; pages: number }> {
-  if (currentMonitor().processingMode === "collect_only" && opts.lookbackHours !== undefined) return { stored: 0, pages: 0 };
+  if (collectsForwardOnly(currentMonitor()) && opts.lookbackHours !== undefined) return { stored: 0, pages: 0 };
   if (!opts.initialRange) {
     const [unfinished] = await sql`SELECT key FROM monitor_state WHERE monitor_id=${monitorId()} AND key LIKE 'initial:%' LIMIT 1`;
     if (unfinished) throw new Error("Monitor has unfinished initialization; complete the original range and configuration before scanning or lookback");
@@ -172,7 +183,7 @@ export async function collectPosts(opts: ScanOptions = {}): Promise<{ stored: nu
   let progress = range ? initialCollection(originalQueries, await getState(initialCollectionKey()), supplementalQueries) : null;
   type QueryScope = { query: string; since: number; until: number; filter: ResetMonitorBackendDefinition["collectionFilter"]; historical: boolean };
   const jobs: QueryScope[] = progress ? progress.queries.map(query => ({ query, since, until, filter: currentMonitor().collectionFilter, historical: false }))
-    : currentMonitor().authors.flatMap(author => (currentMonitor().processingMode === "collect_only"
+    : currentMonitor().authors.flatMap(author => (collectsForwardOnly(currentMonitor())
       ? [{ since: Math.max(authorCollectionSince(coverage!, author.handle, since), coverage!.scopeEffectiveAt ? Date.parse(coverage!.scopeEffectiveAt) : since), until, filter: currentMonitor().collectionFilter }].filter(segment => segment.since < segment.until)
       : collectionSegments(coverage!, authorCollectionSince(coverage!, author.handle, since), until))
       // Search boundaries have second precision. Round the upper bound outwards and
@@ -334,8 +345,9 @@ function resetPostCard(post: PushPost, entries: Array<{ eventId: string; action:
 /** Process all pending posts in publication order. Failed recognition aborts the round. */
 export async function processPending(limit = Infinity, roundId: string = randomUUID(), resume = false): Promise<{ processed: number; failed: number }> {
   if (currentMonitor().processingMode === "collect_only" || !config.modelCallsEnabled) return { processed: 0, failed: 0 };
+  if (currentMonitor().processingMode === "automatic_incremental" && process.env.COLLECT_ENABLED !== "true") return { processed: 0, failed: 0 };
   const posts = await sql<{ id: string; author: string; text: string; published_at: Date; raw: { contextPending?: boolean; context?: Array<ContextInput & { url: string }> } | null }[]>`
-    SELECT id, author, text, published_at, raw FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE processed_at IS NULL AND lower(author) = ANY(${authorHandles()}::text[])
+    SELECT id, author, text, published_at, raw FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE processed_at IS NULL AND lower(author) = ANY(${authorHandles()}::text[]) AND ${incrementalPostFilter()}
     ORDER BY published_at, id ${Number.isFinite(limit) ? sql`LIMIT ${limit}` : sql``}`;
   let processed = 0;
   for (const p of posts) {
@@ -349,7 +361,9 @@ export async function processPending(limit = Infinity, roundId: string = randomU
       continue;
     }
     try {
-      const rec = await recognizePost({ id: p.id, author: p.author, text: p.text, publishedAt: p.published_at.toISOString(), context: p.raw?.context ?? [], openEvents: await openEvents(p.published_at, p.raw?.context ?? []), roundId, resume });
+      const input = { id: p.id, author: p.author, text: p.text, publishedAt: p.published_at.toISOString(), context: p.raw?.context ?? [], openEvents: await openEvents(p.published_at, p.raw?.context ?? []) };
+      const incremental = currentMonitor().processingMode === "automatic_incremental";
+      const rec = await recognizePost({ ...input, roundId: incremental ? sha256(stableJson(input)) : roundId, resume: incremental || resume });
       await applyRecognition(p.id, rec);
     } catch (error) { await recordPostFailure(p.id, "recognition", error); throw error; }
     await sql`UPDATE monitor_posts SET raw = raw - 'collectionFailure' WHERE monitor_id = ${monitorId()} AND (id = ${p.id} AND raw ? 'collectionFailure') `;
@@ -416,7 +430,8 @@ export async function flushResetPushes(): Promise<number> {
 
 /** One scheduled run owns the checkpoint; a concurrent trigger skips instead of queuing. */
 export async function monitorTick(opts: { lookbackHours?: number; initialRange?: { since: string; until: string }; collectOnly?: boolean } = {}) {
-  if (currentMonitor().processingMode === "collect_only" && opts.lookbackHours !== undefined) return { skipped: true, reason: "historical_collection_disabled" };
+  if (collectsForwardOnly(currentMonitor()) && opts.lookbackHours !== undefined) return { skipped: true, reason: "historical_collection_disabled" };
+  if (currentMonitor().processingMode === "automatic_incremental" && (process.env.COLLECT_ENABLED !== "true" || !config.modelCallsEnabled)) return { skipped: true, reason: "automatic_processing_disabled" };
   if (opts.collectOnly && !opts.initialRange) throw new Error("collectOnly requires a finite initialization range");
   const connection = await sql.reserve();
   try {
@@ -447,7 +462,8 @@ async function tick(opts: { lookbackHours?: number; initialRange?: { since: stri
   const processingWindow = progress?.processingWindow ?? roundId;
   const context = await collectPendingContext(Infinity, processingWindow, !!opts.initialRange);
   const result = await processPending(Infinity, processingWindow, !!opts.initialRange);
-  const [pending] = await sql<{ n: number }[]>`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS n FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE lower(author) = ANY(${authorHandles()}::text[])`;
+  const [pending] = await sql<{ n: number }[]>`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS n FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS monitor_posts WHERE lower(author) = ANY(${authorHandles()}::text[]) AND ${incrementalPostFilter()}`;
+  const enrichment = await processPublicV2Pending();
   const complete = process.env.COLLECT_ENABLED === "true" && config.modelCallsEnabled && !pending?.n;
   if (!complete) throw new Error(`Monitor round incomplete: ${pending?.n ?? 0} posts pending; collection and model calls must be enabled`);
   // Business review does not mean the transport or recognition failed.
@@ -460,5 +476,5 @@ async function tick(opts: { lookbackHours?: number; initialRange?: { since: stri
     });
   }
   const pushed = await flushResetPushes();
-  return { ...collected, ...result, ...(screened ? { screened } : {}), context, pushed, pending: 0, verifiedAt: opts.lookbackHours === undefined ? bjIso(started) : null };
+  return { ...collected, ...result, ...enrichment, ...(screened ? { screened } : {}), context, pushed, pending: 0, verifiedAt: opts.lookbackHours === undefined ? bjIso(started) : null };
 }

@@ -26,7 +26,7 @@ after(async () => { await provider.close(); await closeDb(); });
 test("Codex, Claude and Grok share MONITOR_MODEL, its default and one admin choice", async () => {
   const capability = capabilities().monitor!;
   assert.equal(capability.env, "MONITOR_MODEL");
-  assert.deepEqual(capability.purposes.sort(), ["monitor.recognize", "reset_monitor.claude.recognize", "reset_monitor.grok.recognize"]);
+  assert.deepEqual(capability.purposes.sort(), ["monitor.public_v2", "monitor.recognize", "reset_monitor.claude.public_v2", "reset_monitor.claude.recognize", "reset_monitor.grok.public_v2", "reset_monitor.grok.recognize"]);
   const recognize = (definition: typeof backendDefinition, id: string) => inMonitor(definition, () => recognizePost({ id, text: "An ordinary announcement.", publishedAt: new Date().toISOString(), context: [], openEvents: [] }));
   for (const definition of [codex, backendDefinition, grok]) {
     const result = await recognize(definition, `${definition.monitorId}-shared-model`);

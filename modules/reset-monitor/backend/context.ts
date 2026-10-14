@@ -68,7 +68,7 @@ export function authorTimePolicy(author = authorScope.getStore() ?? monitor().au
   const configured = monitor().authors.find(a => a.handle.toLowerCase() === author.replace(/^@/, "").toLowerCase());
   return configured?.timePolicy && configured.timePolicy !== "explicit" && monitor().timingProfiles?.[configured.timePolicy] ? "predicted" : "explicit";
 }
-export const purpose = (phase: "scan" | "lookback" | "context" | "recognize") => `${monitor().names.purposePrefix}.${phase}`;
+export const purpose = (phase: "scan" | "lookback" | "context" | "recognize" | "public_v2") => `${monitor().names.purposePrefix}.${phase}`;
 export const auditAction = (action: string) => `${monitor().names.auditActionPrefix}.${action}`;
 export const auditSubject = (kind: "post" | "event", id: string) => `${monitor().names.auditSubjectPrefix}-${kind}:${id}`;
 
@@ -77,7 +77,8 @@ export function bindMonitor<A extends unknown[], R>(definition: ResetMonitorBack
 }
 
 export function validateDefinition(definition: ResetMonitorBackendDefinition) {
-  if (definition.processingMode !== undefined && !["automatic", "collect_only"].includes(definition.processingMode)) throw new Error("Invalid reset monitor processing mode");
+  if (definition.processingMode !== undefined && !["automatic", "collect_only", "automatic_incremental"].includes(definition.processingMode)) throw new Error("Invalid reset monitor processing mode");
+  if (definition.processingMode === "automatic_incremental" && !definition.publicV2) throw new Error("Incremental automatic processing requires public v2 configuration");
   if (!/^[a-z][a-z0-9-]*$/.test(definition.monitorId)) throw new Error("Invalid reset monitor ID");
   if (!definition.authors.length || definition.authors.some((a) => !/^[A-Za-z0-9_]{1,15}$/.test(a.handle) || !a.name.trim())
     || new Set(definition.authors.map((a) => a.handle.toLowerCase())).size !== definition.authors.length) throw new Error("Invalid X monitor authors");

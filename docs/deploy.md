@@ -265,9 +265,9 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 账号、显示名、默认产品、套餐、作者时间策略和可选筛选统一在 `site/reset-monitors.ts`，不新增密钥或必填环境变量。本次没有数据库 schema 变更，不删除帖子、事件、关联或人工结论，也不自动重识别、撤回或补采历史。
 
-本站 Grok、Codex、Claude 在 `site/reset-monitors.ts` 统一使用 `processingMode: "collect_only"`。首次采集按使用者指令结案：全部已存帖子标记处理完成，关闭待复核与上下文任务；原文、原始判断、事件、关联和付费回执保留，原分页断点存入结案审计，未采历史不再续跑。采集截止与范围起点从结案时刻开始；结案不意味着 90 天已采全或识别准确率已验证，不新增迁移、不修改 `.env`，也不自动开启外部请求。
+本站 Grok、Codex、Claude 在 `site/reset-monitors.ts` 统一使用 `processingMode: "automatic_incremental"`，新增帖子自动识别并生成经校验的七语言 v2 字段。首次采集按使用者指令结案：全部已存帖子标记处理完成，关闭待复核与上下文任务；原文、原始判断、事件、关联和付费回执保留，原分页断点存入结案审计，未采历史不再续跑。采集截止与范围起点从结案时刻开始；结案不意味着 90 天已采全或识别准确率已验证，不新增迁移、不修改 `.env`，也不自动开启外部请求。
 
-后续只保存新主帖并记录处理完成原因，无识别结果的帖子显示“仅采集”，不判为无关；不补历史、上下文或调用自动识别。主帖分页全部成功即推进采集截止，无需模型开关或凭据；失败保留原截止。人工复核继续可用。新增或重新添加账号从首次扫描观察到配置的时间开始，扩大筛选只从生效时刻向前采集，不恢复旧范围。
+后续沿既有截止采集，仅对新插入并带 automatic_incremental 标记的帖子补充必要上下文、识别并建立或关联事件，再补齐 v2。历史仅采集记录继续显示“仅采集”，不判为无关，也不重新识别。全部阶段成功才推进截止；补全失败保留已保存事实与待处理状态，后续轮次恢复，已收到的模型响应复用。人工复核继续可用。新增或重新添加账号从首次扫描观察到配置的时间开始，扩大筛选只从生效时刻向前采集，不恢复旧范围。
 
 配置修改后重启 API 和 worker；网页通过 HTTP 读取当前账号配置。公开页面、API、Agent 和 MCP 展示账号采集起点与范围生效时间；旧历史起点未记录时显示未知，不能宣称新增账号覆盖过去记录。历史补采需另行指定范围，本次升级不执行。
 
@@ -275,7 +275,7 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 本站安装 [Codex 模块](../modules/codex-reset/README.md)、[Claude 模块](../modules/claude-reset/README.md)和 [Grok 模块](../modules/grok-reset/README.md)，共用 [重置监控引擎](../modules/reset-monitor/README.md)。共享包不单独注册站点入口；各 AI 模块在 `site/modules/` 三份清单和 workspace 依赖中安装。Docker 构建包含三个 AI 模块及共享包的 package 清单。
 
-各模块默认每 15 分钟增量扫描，本站不注册每日北京时间 04:40 查漏。直接调用查漏、上下文及识别也不能绕过 `collect_only` 策略；更新 worker 时撤销已移除的查漏任务，旧任务即使触发也跳过。Claude 默认 SocialData，使用 `CLAUDE_RESET_PROVIDER`、`CLAUDE_RESET_SCAN_MINUTES`；共享引擎显式 `automatic` 模式才使用 `MONITOR_MODEL` 与后台 `monitor` 能力。供应商凭据与请求预算共用，TwitterAPI.io 固定间隔 5.5 秒；执行锁、检查点、通知与数据库记录按监控隔离。开发与验证保持采集、模型及推送安全阀关闭，未来真实采集仍须另行授权。
+各模块默认每 15 分钟增量扫描，本站不注册每日北京时间 04:40 查漏。直接调用查漏也不能绕过向前采集策略，旧帖不因切换模式进入上下文或识别；更新 worker 时撤销已移除的查漏任务，旧任务即使触发也跳过。Claude 默认 SocialData，使用 `CLAUDE_RESET_PROVIDER`、`CLAUDE_RESET_SCAN_MINUTES`；automatic 与 automatic_incremental 的识别共用 `MONITOR_MODEL` 与后台 `monitor` 能力，增量 v2 补全也使用同一模型和预算，回执 purpose 分别为 monitor.public_v2（Codex）、reset_monitor.claude.public_v2 和 reset_monitor.grok.public_v2。供应商凭据与请求预算共用，TwitterAPI.io 固定间隔 5.5 秒；执行锁、检查点、通知与数据库记录按监控隔离。开发与验证保持采集、模型及推送安全阀关闭，未来真实采集仍须另行授权。
 
 ### 共享表升级
 
@@ -312,16 +312,22 @@ npm run initialize -w @aihot/codex-reset -- --since 2026-10-08T00:00:00Z --until
 npm run initialize -w @aihot/claude-reset -- --since 2026-10-08T00:00:00Z --until 2026-10-09T00:00:00Z
 ```
 
-Docker 在相同环境中执行 `docker compose run --rm worker npm run initialize -w @aihot/claude-reset -- --since <已确认的ISO时间> --until <已确认的ISO时间>`，Codex 替换 workspace 名。命令不修改配置；本站 `collect_only` 仅采主帖，无需模型开关或凭据，全部分页成功即写采集截止并清理断点。必须另行授权 `COLLECT_ENABLED=true` 和供应商预算、凭据；已结案任务不再运行原初始化命令。
+Docker 在相同环境中执行 `docker compose run --rm worker npm run initialize -w @aihot/claude-reset -- --since <已确认的ISO时间> --until <已确认的ISO时间>`，Codex 替换 workspace 名。命令不修改配置；新安装 automatic_incremental 需要采集与模型安全阀均开启，全部分页、识别和 v2 补全成功才写采集截止并清理断点。collect_only 仅采主帖，无需模型开关或凭据。必须另行授权 `COLLECT_ENABLED=true` 和供应商预算、凭据；已结案任务不再运行原初始化命令。
 
-独立新安装的有限初始化支持分页断点：每页帖子、回执完成状态和下一页游标在同一事务写入现有 `monitor_state`，无需新表或迁移。失败后保持原起止参数、作者顺序、查询与筛选版本，显式重跑即可继续，更换同一供应商账号仍可续采；断点按监控及提供商隔离，配置变化在付费前报错。`collect_only` 全部主帖分页成功即写采集截止并清理断点；仅 `automatic` 模式还要求上下文和识别成功，其失败不会重采已完成搜索页。本站已结案首次任务不再续跑。
+独立新安装的有限初始化支持分页断点：每页帖子、回执完成状态和下一页游标在同一事务写入现有 `monitor_state`，无需新表或迁移。失败后保持原起止参数、作者顺序、查询与筛选版本，显式重跑即可继续，更换同一供应商账号仍可续采；断点按监控及提供商隔离，配置变化在付费前报错。`collect_only` 全部主帖分页成功即写采集截止并清理断点；automatic 与 automatic_incremental 还要求上下文和识别成功，后者还要求 v2 补全成功，其失败不会重采已完成搜索页。本站已结案首次任务不再续跑。
 
-共享引擎 `automatic` 模式可给初始化加一次性 `--collect-only` 参数：只采主帖，不补上下文、调用模型、推送或推进完整流程检查点。本站持久 `processingMode: "collect_only"` 优先于该参数，分页成功即完成采集。仅在 `automatic` 模式，初始化上下文及识别使用持久请求标识，业务写入失败后复用有效响应。明确拒绝、未发送或无效响应可在下次显式续跑时重试；计费未知保持阻断，不能静默重购。节流等待结束、发送前再检查停止状态与预算，保留已发响应。
+共享引擎 `automatic` 模式可给初始化加一次性 `--collect-only` 参数：只采主帖，不补上下文、调用模型、推送或推进完整流程检查点。持久 collect_only 模式优先于该参数，分页成功即完成采集。在自动处理模式，初始化上下文及识别使用持久请求标识，业务写入失败后复用有效响应。明确拒绝、未发送或无效响应可在下次显式续跑时重试；计费未知保持阻断，不能静默重购。节流等待结束、发送前再检查停止状态与预算，保留已发响应。
 
-共享引擎有限初始化可声明额外查询并保留旧游标；本站已结案首次任务不再执行补采。普通 `collect_only` 增量仅查询当前截止之后的窗口，不恢复旧筛选范围。升级代码不自动恢复已暂停任务或修改凭据。
+共享引擎有限初始化可声明额外查询并保留旧游标；本站已结案首次任务不再执行补采。普通 collect_only 与 automatic_incremental 增量仅查询当前截止之后的窗口，不恢复旧筛选范围。升级代码不自动恢复已暂停任务或修改凭据。
 
 失败保留材料、不推进采集截止，不提高预算或自动缩短范围。普通增量不使用分页断点，下一轮从上次成功时间重新查询并按帖子 ID 去重；本站没有日常查漏。监控回执失败即中止，队列零重试；未知请求仍保留计费未知，不能保证未扣费。人工复核继续可用，人工更正不发送事件通知。
 
 ### Grok 额度动态
 
 Grok 使用 `GROK_RESET_PROVIDER` 和 `GROK_RESET_SCAN_MINUTES`，默认 SocialData 与 15 分钟，识别共用 `MONITOR_MODEL`。依次采集 `@bot` 与 `@grok`，原文未说明产品时分别默认 Grok Bot 和 Grok 普通额度；原文明示优先。不新增数据库迁移或改写历史数据。首次真实启用先确认有限起止时间，再执行 `npm run initialize -w @aihot/grok-reset -- --since <ISO> --until <ISO>`；详见 [Grok 模块](../modules/grok-reset/README.md)。
+
+### 增量 v2 上线核对
+
+本功能无需 schema 迁移或回填历史。先在采集、模型和推送关闭时部署并核对原检查点和 41 条已核验事件；单独授权真实调用后再启用采集与监控模型。保持原有采集截止，禁止清空 processed_at、覆盖历史 processingCompletion、重启已结案初始化或重置检查点。新帖 raw.processingMode 标记在插入时保存，重扫已存帖子不会补标。
+
+识别事实与 public_v2:pending:<事件ID> 在同一事务保存；补充字段、人工可追溯审计与模型回执一并提交。失败状态可在 monitor_state 和回执中检查，未知计费保持阻断。管理员更改事实或关联后旧文本立即失效，下一轮重新生成；并发版本不一致拒绝覆盖。来源及自动补全年份时区依据留在内部，七语言文案只包含业务信息。公开接口读取不调用模型。

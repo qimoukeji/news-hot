@@ -1,3 +1,4 @@
+import { collectsForwardOnly } from "../definition.ts";
 import { z } from "zod";
 import { sql, type Db } from "@aihot/backend/db";
 import { monitor, monitorId, type ResetMonitorBackendDefinition } from "./context.ts";
@@ -41,7 +42,7 @@ export function reconcileCollectionCoverage(saved: unknown, definition: Pick<Res
   const previous = saved == null ? null : CollectionCoverage.parse(saved);
   const identity = (value: typeof snapshot.filter) => value?.signature ?? JSON.stringify(value);
   const changed = !!previous && identity(previous.snapshot.filter) !== identity(snapshot.filter);
-  if (changed && definition.processingMode !== "collect_only" && !explicitInitialization && previous.snapshot.filter && !previous.snapshot.filter.configuration) {
+  if (changed && !collectsForwardOnly(definition) && !explicitInitialization && previous.snapshot.filter && !previous.snapshot.filter.configuration) {
     throw new Error("Previous collection filter cannot be reconstructed; restore its original configuration and finish coverage before changing scope");
   }
   return {
@@ -51,7 +52,7 @@ export function reconcileCollectionCoverage(saved: unknown, definition: Pick<Res
       return { handle: author.handle, name: author.name, collectedSince: previous ? existing ? existing.collectedSince : observedAt : baseline };
     }),
     scopeEffectiveAt: explicitInitialization ? baseline : previous ? changed ? observedAt : previous.scopeEffectiveAt : baseline,
-    retiredScopes: explicitInitialization || definition.processingMode === "collect_only" ? [] : [...(previous?.retiredScopes ?? []), ...(changed ? [{ since: previous!.scopeEffectiveAt, until: observedAt, filter: previous!.snapshot.filter }] : [])],
+    retiredScopes: explicitInitialization || collectsForwardOnly(definition) ? [] : [...(previous?.retiredScopes ?? []), ...(changed ? [{ since: previous!.scopeEffectiveAt, until: observedAt, filter: previous!.snapshot.filter }] : [])],
   };
 }
 

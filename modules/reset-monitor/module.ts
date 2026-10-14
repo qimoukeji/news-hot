@@ -1,5 +1,6 @@
 import { defineModule } from "@aihot/contracts/modules";
 import type { ResetMonitorWebDefinition } from "./definition.ts";
+import { publicV2Path } from "./definition.ts";
 
 const escapePattern = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -14,6 +15,6 @@ export function createMonitorModule(definition: ResetMonitorWebDefinition) {
       { path: definition.adminPath.slice(1), file: "web/admin.tsx" },
       { path: `${definition.adminPath.slice(1)}/posts/:id/review`, file: "web/review.tsx" },
     ],
-    apiPaths: [new RegExp(`^(?:${[definition.siteApiPath, definition.publicApiPath, definition.adminApiPath, `/api/v1/agent${definition.agentPath}`].map(escapePattern).join("|")})(?:/|$)`)],
+    apiPaths: [new RegExp(`^(?:${[definition.siteApiPath, definition.publicApiPath, ...(definition.publicV2 ? [publicV2Path(definition)] : []), definition.adminApiPath, `/api/v1/agent${definition.agentPath}`].map(escapePattern).join("|")})(?:/|$)`)],
   });
 }

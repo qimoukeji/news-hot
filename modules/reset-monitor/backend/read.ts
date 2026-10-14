@@ -146,9 +146,14 @@ async function loadAll(now: number, from?: number) {
   });
 }
 
+function legacyPresentation(value: EventRow["presentation"]) {
+  const stored = value as (EventRow["presentation"] & { publicV2?: { legacyPresentationWasNull?: boolean } });
+  return stored?.publicV2?.legacyPresentationWasNull && Object.keys(stored).every(key => key === "publicV2") ? null : stored;
+}
+
 function eventJson(e: EventRow, links: LinkRow[], posts: Map<string, PostRow>, now: number) {
   const status = presentationStatus(e, now);
-  const p = e.presentation;
+  const p = legacyPresentation(e.presentation);
   const presentation = p
     ? {
         ...(p.reportedAt ? { reportedAt: bjIso(p.reportedAt) } : {}),
@@ -408,7 +413,7 @@ export async function resetVersion(now = Date.now()): Promise<ResetMonitorVersio
   ]);
   const monitor = monitorJson(health.state, health.counts, now);
   return {
-    version: versionHash(events.map((e) => [e.id, bjIso(e.updated_at), e.presentation ? presentationStatus(e, now) : undefined]), outage?.id ?? null, monitor, health.state.get("publication_revision")),
+    version: versionHash(events.map((e) => [e.id, bjIso(e.updated_at), legacyPresentation(e.presentation) ? presentationStatus(e, now) : undefined]), outage?.id ?? null, monitor, health.state.get("publication_revision")),
     checkedAt: monitor?.lastVerifiedAt ?? null,
     today: beijingDate(now),
   };

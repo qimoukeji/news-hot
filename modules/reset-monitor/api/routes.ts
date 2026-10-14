@@ -12,6 +12,8 @@ import {
 } from "@aihot/api/http/respond";
 import { actorOf } from "@aihot/backend/admin/auth";
 import * as admin from "../backend/admin.ts";
+import { publicV2Path } from "../definition.ts";
+import type { ResetSnapshot } from "../public-v2.ts";
 
 const read = (view: string, input: Record<string, unknown> = {}) =>
   modulePublication(monitor().moduleName, view, input);
@@ -26,6 +28,15 @@ const found = (req: FastifyRequest, reply: FastifyReply, value: unknown) =>
   });
 
 export function registerHttp(app: FastifyInstance) {
+  if (monitor().publicV2) app.get(publicV2Path(monitor()), publicHandler(async (req, reply) => {
+    strictQuery(req, []);
+    const snapshot = await read("snapshotV2") as ResetSnapshot;
+    const { generatedAt: _generatedAt, ...content } = snapshot;
+    return sendJsonWithEtag(req, reply, snapshot, {
+      etagPrefix: `${monitor().monitorId}-v2`, etagOf: content,
+      cacheControl: "public, max-age=60, s-maxage=60, must-revalidate",
+    });
+  }));
   app.get(
     monitor().siteApiPath,
     siteHandler(async (req, reply) =>

@@ -1,12 +1,14 @@
 # 共享重置监控引擎
 
+公开额度快照 v2 的接口、七语言数据整理及应用流程见 [接口说明](../../docs/reset-monitor-v2.md)。v1 和站内页面继续使用原有契约。
+
 Codex、Claude、Grok 及后续 AI 的额度重置监控共用采集、事件处理、人工复核、公开投影、页面与数据库。此包是模块依赖，不在 `site/modules/` 中单独安装。各 AI 只提供信源、识别规则、时间策略及入口配置。
 
-账号、显示名、默认产品、作者时间策略、套餐、采集筛选和处理模式集中配置在 `site/reset-monitors.ts`。本站 Grok、Codex、Claude 均使用 `processingMode: "collect_only"`：首次任务由运营者结案，后续只采新主帖，保存原文后标记处理完成，不补历史、上下文或自动识别。无识别结果的帖子在后台显示“仅采集”，不标为无关。原事件与模型结果保留，人工复核仍可使用。外部采集的开启需要单独授权。
+账号、显示名、默认产品、作者时间策略、套餐、采集筛选和处理模式集中配置在 `site/reset-monitors.ts`。本站 Grok、Codex、Claude 使用 `processingMode: "automatic_incremental"`：沿原检查点采集新帖，识别事件并自动生成经校验的七语言 v2 信息；不重识别历史帖子、不恢复每日查漏。首次任务结案和历史仅采集记录保留。真实采集、模型调用与公开部署需要单独授权。collect_only 模式仍支持只保存原文，后台显示“仅采集”，不标为无关。
 
 ```ts
 codex: {
-  processingMode: "collect_only",
+  processingMode: "automatic_incremental",
   authors: [
     { handle: "thsottiaux", name: "Tibo", timePolicy: "tibo" },
     { handle: "YourOfficialAccount", name: "官方账号" },
@@ -20,7 +22,7 @@ codex: {
 
 可选筛选 `collection.mode='announcements_and_relevant_replies'` 接收全部非回复帖及匹配的回复帖，配置 `words`、`phrases`、`productWords`、`benefitWords`、`chinese`、`selfPhrases`。有产品词时要求产品词与相关词共同出现；`selfPhrases` 可独立匹配。未给产品词时按相关词接受。默认全量。`queryGroups` 仅用于显式查询拆分和保留已有初始化断点；不随意改写已经开始的查询。
 
-新增及重新添加账号从首次扫描观察到配置的时间开始；起点在付费前保存，失败重跑不漂移，也不继承旧账号历史。移除账号不删除其历史帖子或事件。扩大筛选范围只从生效时间采集新范围，`collect_only` 不恢复旧范围或日常历史查漏。公开 `monitor.authors[].collectedSince` 和 `monitor.scopeEffectiveAt` 分别表示账号与范围起点，`null` 表示旧历史起点未记录。状态使用现有 `monitor_state` JSON，无表结构变更。
+新增及重新添加账号从首次扫描观察到配置的时间开始；起点在付费前保存，失败重跑不漂移，也不继承旧账号历史。移除账号不删除其历史帖子或事件。扩大筛选范围只从生效时间采集新范围，collect_only 与 automatic_incremental 不恢复旧范围或日常历史查漏。公开 `monitor.authors[].collectedSince` 和 `monitor.scopeEffectiveAt` 分别表示账号与范围起点，`null` 表示旧历史起点未记录。状态使用现有 `monitor_state` JSON，无表结构变更。
 
 ## 安装与配置
 
@@ -30,11 +32,11 @@ codex: {
 | --- | --- | --- | --- |
 | 采集提供商 | `CODEX_RESET_PROVIDER` | `CLAUDE_RESET_PROVIDER` | `GROK_RESET_PROVIDER` |
 | 扫描间隔 | `CODEX_RESET_SCAN_MINUTES` | `CLAUDE_RESET_SCAN_MINUTES` | `GROK_RESET_SCAN_MINUTES` |
-| `automatic` 识别模型 | `MONITOR_MODEL` | `MONITOR_MODEL` | `MONITOR_MODEL` |
+| 自动识别及 v2 补全模型 | `MONITOR_MODEL` | `MONITOR_MODEL` | `MONITOR_MODEL` |
 | 默认提供商／间隔 | SocialData／15 分钟 | SocialData／15 分钟 | SocialData／15 分钟 |
 | 模型能力键 | `monitor` | `monitor` | `monitor` |
 
-间隔支持 1、2、3、4、5、6、10、12、15、20、30、60 分钟，修改后重启 API 和 worker。本站三个模块只注册正常增量扫描，不注册每日 04:40 查漏；直接调用查漏、上下文或自动识别也不能绕过 `collect_only`。共享引擎保留显式 `automatic` 模式，其识别共用 `MONITOR_MODEL` 和后台 `monitor` 能力；此配置不使本站自动调用模型。
+间隔支持 1、2、3、4、5、6、10、12、15、20、30、60 分钟，修改后重启 API 和 worker。本站三个模块只注册正常增量扫描，不注册每日 04:40 查漏；automatic_incremental 只对新存标记的帖子补上下文及识别，collect_only 仍禁止上下文与自动识别。共享引擎保留显式 `automatic` 模式，其识别共用 `MONITOR_MODEL` 和后台 `monitor` 能力；只有采集与模型安全阀均开启才会运行本站自动处理链路。
 
 SocialData 与 TwitterAPI.io 共用采集凭据组中的 `SOCIALDATA_API_KEY`／`TWITTERAPI_IO_API_KEY`、对应 `BASE_URL` 和供应商请求预算。默认根地址分别为 `https://api.socialdata.tools`、`https://api.twitterapi.io`，不附加端点路径。配置 `EGRESS_PROXY_URL` 时沿用框架出站代理和公网地址校验。请求频率经过共享预算控制。TwitterAPI.io 免费套餐要求至少 5 秒间隔，适配器固定等待 5.5 秒，进程内各监控共用；不提供环境变量配置，失败释放队列但不重试。TwitterAPI.io 初次使用沿用 SocialData 的预算上限，后续可在后台单独修改。请求成本暂不填金额，按请求次数熔断。
 
@@ -52,13 +54,13 @@ Codex 使用 `-w @aihot/codex-reset`，Grok 使用 `-w @aihot/grok-reset`。起�
 
 首次有限范围初始化支持断点继续：每页的帖子、回执完成状态和下一页游标在同一事务中保存到现有 `monitor_state`。失败退出后，使用相同起止参数和采集配置重新执行初始化命令，跳过已完成作者及查询，从未完成页继续；全部分页完成后，上下文或识别失败也不会重新请求搜索页。上下文与识别同样使用持久请求标识，已收到的有效响应在业务写入失败后复用。断点绑定监控、提供商、查询顺序、时间范围及筛选版本，不绑定供应商账号或密钥；更换同供应商账号后仍可继续。范围、作者顺序、查询或筛选版本变化会在付费前报错；模块明确声明的额外补采查询可以追加到旧查询之后，旧游标保持不变，补采完成前不宣称覆盖完整。不同提供商不共用游标。
 
-`processingMode: "collect_only"` 是持久站点策略，新主帖的 `processed_at` 与 `raw.processingCompletion` 表示处理完成及跳过自动处理的原因，`recognition` 保持空，已有判断与人工字段不被覆盖。此模式不推送识别事件。`--collect-only` 是共享引擎 `automatic` 模式的一次性分阶段参数：只存主帖，不补上下文、调用模型、推送或写成功检查点，采完仍保留断点。本站的持久策略优先于此参数。
+`processingMode: "collect_only"` 是持久站点策略，新主帖的 `processed_at` 与 `raw.processingCompletion` 表示处理完成及跳过自动处理的原因，`recognition` 保持空，已有判断与人工字段不被覆盖。此模式不推送识别事件。`--collect-only` 是共享引擎 `automatic` 模式的一次性分阶段参数：只存主帖，不补上下文、调用模型、推送或写成功检查点，采完仍保留断点。持久策略优先于此参数。
 
 `collect_only` 的所有作者主帖分页成功即可推进截止，不要求模型开启。任一作者失败保留已存帖子，截止保持不变；下一轮从旧截止重扫，按 X 帖子 ID 去重。普通增量不保存分页断点。共享引擎 `automatic` 模式要求分页、必要上下文和待识别帖子全部成功才推进截止，日常查漏不推进正常截止。各监控与提供商拥有独立检查点、覆盖范围和执行锁。
 
 任一步请求失败、结果未知、预算不足或 HTTP 402 都中止本轮。队列不自动重试，失败回执不自动恢复或放行。初始化重跑复用已收到的有效响应；只有明确拒绝、未发送或无效响应才能在下一次显式执行时重试同一标识。任何计费未知尝试都阻止放行，即使旧监控回执已标记失败。普通扫描每轮使用独立付费回执。停止信号可取消节流队列及间隔等待，实际发送前再次检查停止状态、采集开关及预算停用；已发请求继续保存响应，未发取消不记为计费未知。其他框架请求的恢复机制不适用于重置监控。更换有余额的提供商也必须初始化该提供商的成功范围。
 
-以下自动识别机制仅适用于显式 `automatic` 模式：上下文优先复用已存帖子，待获取回复记在 `raw.contextPending`；识别按发布时间运行，必要上下文不完整时等待，失败记入帖子和运行记录。人工处理过的帖子不再自动识别。本站 `collect_only` 不执行这些步骤，响应内已有引用仍随原文保存。框架代理 DNS 超时 30 秒，TwitterAPI.io 整体请求超时 60 秒。
+以下自动识别机制适用于 automatic 和 automatic_incremental 模式，后者仅处理新存标记的帖子：上下文优先复用已存帖子，待获取回复记在 `raw.contextPending`；识别按发布时间运行，必要上下文不完整时等待，失败记入帖子和运行记录。人工处理过的帖子不再自动识别。collect_only 不执行这些步骤，响应内已有引用仍随原文保存。框架代理 DNS 超时 30 秒，TwitterAPI.io 整体请求超时 60 秒。
 
 模型配置优先于流程默认值，`LLM_EXTRA_JSON` 同名字段优先级更高；未配置温度时用 0.1，未配置输出上限时用 6000 加配置的思考额度，未配置超时时用 120 秒。仅在未配置思考模式和预算的 `deepseek-flash` 上默认关闭思考。所有模型调用经过回执与预算。离线评估只使用已保存材料，不访问付费接口；输入、标注与报告放 `.data/local-preview/`，不自动写回运营识别结果。
 
