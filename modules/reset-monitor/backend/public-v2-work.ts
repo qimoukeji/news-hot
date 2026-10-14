@@ -15,6 +15,14 @@ export async function clearPublicV2Work(db: Db, id: string) {
   await db`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${publicV2PendingKey(id)}`;
 }
 
+/** Accepted facts remain successful; only the optional editorial work needs review. */
+export async function publicV2WorkReview(id: string, error: unknown, version: string, receiptId?: number) {
+  const reason = String(error).replace(/postgres(?:ql)?:\/\/\S+/gi, "[database]").slice(0, 1000);
+  await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${publicV2PendingKey(id)},
+    ${sql.json({ status: "needs_review", reason, version, at: new Date().toISOString(), ...(receiptId !== undefined ? { receiptId } : {}) })})
+    ON CONFLICT(monitor_id,key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()`;
+}
+
 export async function publicV2WorkFailure(id: string, error: unknown) {
   const receiptId = error && typeof error === "object" && "receiptId" in error ? error.receiptId : undefined;
   const message = String(error).replace(/postgres(?:ql)?:\/\/\S+/gi, "[database]").slice(0, 1000);

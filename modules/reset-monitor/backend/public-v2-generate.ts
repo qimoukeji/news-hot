@@ -2,7 +2,7 @@ import { z } from "zod";
 import { sql } from "@aihot/backend/db";
 import { config } from "@aihot/backend/config";
 import { modelFor } from "@aihot/backend/editorial/models";
-import { chatJson } from "@aihot/backend/providers/llm";
+import { chatJson, ModelOutputError } from "@aihot/backend/providers/llm";
 import { completeReceipt, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
 import { audit, Conflict } from "@aihot/backend/audit";
 import { stableJson, sha256 } from "@aihot/backend/lib/ids";
@@ -12,7 +12,12 @@ import { reviewedEventSchema, type ReviewedEvent, type EventTime } from "../publ
 import { evidenceVersion, loadPublicV2Input, projectPublicV2, timeBoundary, type PublicV2EventRow, type PublicV2Input } from "./public-v2.ts";
 import { validateReview } from "./public-v2-review.ts";
 import { resolveBonusTimes, resolveEventExpression } from "./public-v2-time.ts";
-import { clearPublicV2Work, publicV2WorkFailure } from "./public-v2-work.ts";
+import { clearPublicV2Work, publicV2WorkFailure, publicV2WorkReview } from "./public-v2-work.ts";
+
+class PublicV2ValidationError extends Error {
+  readonly receiptId: number;
+  constructor(error: unknown, receiptId: number) { super(String(error), { cause: error }); this.receiptId = receiptId; }
+}
 
 const quote = z.strictObject({ postId: z.string().min(1), excerpt: z.string().min(1) });
 export const generatedPublicV2Schema = reviewedEventSchema.pick({ title: true, summary: true, details: true, scope: true, evidence: true })
@@ -84,18 +89,20 @@ function createReview(data: z.infer<typeof generatedPublicV2Schema>, row: Public
 export async function processPublicV2Pending() {
   if (monitor().processingMode !== "automatic_incremental" || !monitor().publicV2 || !config.modelCallsEnabled || process.env.COLLECT_ENABLED !== "true") return { enriched: 0 };
   const input = await sql.begin("isolation level repeatable read read only", db => loadPublicV2Input(db));
-  const pending = await sql<{ key: string }[]>`SELECT key FROM monitor_state WHERE monitor_id=${monitorId()} AND key LIKE 'public_v2:pending:%'`;
+  const pending = await sql<{ key: string; value: { status?: string; version?: string } }[]>`SELECT key,value FROM monitor_state WHERE monitor_id=${monitorId()} AND key LIKE 'public_v2:pending:%'`;
   const requested = new Set(pending.map(row => row.key.slice("public_v2:pending:".length)));
-  let enriched = 0;
+  const work = new Map(pending.map(row => [row.key.slice("public_v2:pending:".length), row.value]));
+  let enriched = 0, enrichmentPending = 0;
   for (const row of input.events) {
     const stored = currentReview(row);
     if (!requested.has(row.id) && (!stored || stored.evidenceVersion === evidenceVersion(row, input))) continue;
     if (row.withdrawn || stored?.evidenceVersion === evidenceVersion(row, input)) { await clearPublicV2Work(sql, row.id); continue; }
+    const version = editionVersion(row, input);
+    if (work.get(row.id)?.status === "needs_review" && work.get(row.id)?.version === version) { enrichmentPending++; continue; }
     shutdownSignal.signal.throwIfAborted();
     try {
       const linked = new Set(input.links.filter(link => link.event_id === row.id).map(link => link.post_id));
       const posts = input.posts.filter(post => linked.has(post.id));
-      const version = editionVersion(row, input);
       const source = { event: { id: row.id, type: row.type, status: projectPublicV2(input, monitor()).events.find(event => event.id === row.id)!.status, confirmationBasis: row.confirmation_basis, occurredOn: row.occurred_on },
         catalog: monitor().publicV2!.catalog, posts: posts.map(post => ({ id: post.id, author: post.author, publishedAt: new Date(post.published_at).toISOString(), text: post.text })),
         links: input.links.filter(link => link.event_id === row.id) };
@@ -104,7 +111,11 @@ export async function processPublicV2Pending() {
         schema: generatedPublicV2Schema, temperature: 0.1, maxTokens: 12000 });
       let review: ReviewedEvent;
       try { review = createReview(response.data, row, input); }
-      catch (error) { await rejectReceivedResponse(response.receiptId, String(error).slice(0, 500)); throw error; }
+      catch (error) {
+        if (error instanceof TypeError || error instanceof ReferenceError) throw error;
+        await rejectReceivedResponse(response.receiptId, String(error).slice(0, 500));
+        throw new PublicV2ValidationError(error, response.receiptId);
+      }
       await sql.begin("isolation level repeatable read read write", async db => {
         await db`SELECT id FROM monitor_events WHERE monitor_id=${monitorId()} AND id=${row.id} FOR UPDATE`;
         await db`SELECT p.id FROM monitor_posts p JOIN monitor_event_posts l ON l.monitor_id=p.monitor_id AND l.post_id=p.id WHERE l.monitor_id=${monitorId()} AND l.event_id=${row.id} FOR SHARE OF p,l`;
@@ -118,11 +129,19 @@ export async function processPublicV2Pending() {
         await clearPublicV2Work(db, row.id);
       });
       enriched++;
-    } catch (error) { await publicV2WorkFailure(row.id, error); throw error; }
+    } catch (error) {
+      if (error instanceof PublicV2ValidationError || error instanceof ModelOutputError || error instanceof Conflict) {
+        await publicV2WorkReview(row.id, error, version, "receiptId" in error ? error.receiptId ?? undefined : undefined);
+        enrichmentPending++;
+        continue;
+      }
+      await publicV2WorkFailure(row.id, error);
+      throw error;
+    }
   }
   // A removed event must not leave work that blocks every subsequent successful round.
   for (const id of requested) if (!input.events.some(row => row.id === id)) await sql`DELETE FROM monitor_state
     WHERE monitor_id=${monitorId()} AND key=${`public_v2:pending:${id}`}
       AND NOT EXISTS (SELECT 1 FROM monitor_events WHERE monitor_id=${monitorId()} AND id=${id})`;
-  return { enriched };
+  return { enriched, ...(enrichmentPending ? { enrichmentPending } : {}) };
 }

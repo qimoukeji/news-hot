@@ -8,6 +8,8 @@ import { modulePublication } from "@aihot/backend/publication/modules";
 import { inMonitor } from "../backend/context.ts";
 import { monitorTick, collectPosts, processPending } from "../backend/scan.ts";
 import { processPublicV2Pending } from "../backend/public-v2-generate.ts";
+import { enqueuePublicV2 } from "../backend/public-v2-work.ts";
+import { recordRun } from "@aihot/backend/jobs/queue";
 import { publicV2Title, properName } from "../backend/public-v2.ts";
 import { resetsSnapshot, resetVersion } from "../backend/read.ts";
 import { reviewedEventSchema, resetSnapshotSchema, type ResetSnapshot } from "../public-v2.ts";
@@ -59,10 +61,10 @@ const model = await stub(async (_hit, request) => {
       announcementEvidence: post.text.startsWith("ANNOUNCE") ? { postId: post.id, excerpt: post.text } : null };
     const data = content as any;
     if (badOutput === "language") delete data.title.ja;
-    if (badOutput === "quote") data.evidence[0].excerpt = "This quote was never written.";
+    if (badOutput === "quote" || badOutput === "first-quote" && row.type === "direct_reset") data.evidence[0].excerpt = "This quote was never written.";
     if (badOutput === "code") data.scope.planCodes = ["another-platform-plan"];
     if (badOutput === "attribution") data.summary.zh = "原帖称已完成重置。";
-    if (badOutput === "range") data.timeEvidence = { postId: post.id, excerpt: post.text };
+    if (["range", "time"].includes(badOutput)) data.timeEvidence = { postId: post.id, excerpt: post.text };
     if (badOutput === "transport") return new Reply(429, { error: "Synthetic refusal" });
     if (conflict) {
       conflict = false;
@@ -221,19 +223,67 @@ test("first enrichment preserves the creation post's publication even when an ea
   assert.equal((await read()).events[0]!.publishedAt, first.publishedAt);
 });
 
-for (const invalid of ["language", "quote", "code", "attribution", "transport"]) test(`invalid ${invalid} enrichment leaves durable work, committed facts and the old checkpoint`, async () => {
-  variant = "reset"; badOutput = invalid;
-  await assert.rejects(inMonitor(codex, () => monitorTick()));
+for (const invalid of ["language", "quote", "code", "attribution", "time"]) test(`invalid ${invalid} enrichment preserves accepted facts, advances the checkpoint and records a successful run`, async () => {
+  variant = invalid === "time" ? "announce" : "reset"; badOutput = invalid;
+  const result = await recordRun("monitor.tick", () => inMonitor(codex, () => monitorTick()));
+  assert.ok("enrichmentPending" in result && result.enrichmentPending === 1);
+  const [run] = await sql`SELECT status,detail FROM job_runs WHERE job='monitor.tick' ORDER BY id DESC LIMIT 1`;
+  assert.equal(run!.status, "ok"); assert.equal(run!.detail.enrichmentPending, 1);
   const [post] = await sql`SELECT processed_at FROM monitor_posts WHERE monitor_id='codex'`;
   assert.ok(post!.processed_at);
   const snapshot = await read(); assert.equal(snapshot.events.length, 1); assert.equal(snapshot.events[0]!.summary, null);
+  const [cursor] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key='cursor:socialdata'`;
+  assert.ok(Date.parse(cursor!.value.scannedThrough) > Date.parse(since));
+  const [work] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key LIKE 'public_v2:pending:%'`;
+  assert.equal(work!.value.status, "needs_review");
+  assert.equal(typeof work!.value.reason, "string");
+  if (invalid === "time") { assert.equal(snapshot.events[0]!.status, "announced"); assert.equal(snapshot.events[0]!.time.kind, "unknown"); }
+  const calls = enrichmentCalls;
+  await inMonitor(codex, () => monitorTick());
+  assert.equal(enrichmentCalls, calls, "the same invalid editorial version is not purchased again");
+  badOutput = "";
+  await inMonitor(codex, () => enqueuePublicV2(sql, [snapshot.events[0]!.id]));
+  await inMonitor(codex, () => monitorTick());
+  assert.equal(recognitionCalls, 1, "committed recognition is never repeated for enrichment failure");
+  assert.equal((await read()).events[0]!.summary!.en, "Synthetic public business summary.");
+});
+
+test("a rejected event supplement does not prevent other accepted events from being enriched", async () => {
+  badOutput = "first-quote";
+  const result = await inMonitor(codex, () => monitorTick());
+  assert.ok("enriched" in result && result.enriched === 2 && "enrichmentPending" in result && result.enrichmentPending === 1);
+  const snapshot = resetSnapshotSchema.parse(await read());
+  assert.equal(snapshot.events.length, 3);
+  assert.equal(snapshot.events.find(event => event.type === "direct_reset")!.summary, null);
+  assert.equal(snapshot.events.filter(event => event.summary !== null).length, 2);
+  const [cursor] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key='cursor:socialdata'`;
+  assert.ok(Date.parse(cursor!.value.scannedThrough) > Date.parse(since));
+});
+
+test("all platforms advance independently when only their supplemental validation needs review", async () => {
+  variant = "reset"; badOutput = "quote";
+  for (const def of definitions) {
+    const result = await inMonitor(def, () => monitorTick());
+    const snapshot = resetSnapshotSchema.parse(await read(def));
+    assert.ok("enrichmentPending" in result && result.enrichmentPending === snapshot.events.length, JSON.stringify({ monitor: def.monitorId, result }));
+    assert.ok(snapshot.events.length > 0);
+    const [cursor] = await sql`SELECT value FROM monitor_state WHERE monitor_id=${def.monitorId} AND key='cursor:socialdata'`;
+    assert.ok(Date.parse(cursor!.value.scannedThrough) > Date.parse(since));
+    const [work] = await sql`SELECT value FROM monitor_state WHERE monitor_id=${def.monitorId} AND key LIKE 'public_v2:pending:%'`;
+    assert.equal(work!.value.status, "needs_review");
+  }
+});
+
+test("transport refusal still reports a failed round with the old checkpoint and can resume", async () => {
+  variant = "reset"; badOutput = "transport";
+  await assert.rejects(inMonitor(codex, () => monitorTick()));
   const [cursor] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key='cursor:socialdata'`;
   assert.equal(cursor!.value.scannedThrough, since);
   const [work] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key LIKE 'public_v2:pending:%'`;
   assert.equal(work!.value.status, "failed");
   badOutput = "";
   await inMonitor(codex, () => monitorTick());
-  assert.equal(recognitionCalls, 1, "committed recognition is never repeated for enrichment failure");
+  assert.equal(recognitionCalls, 1);
   assert.equal((await read()).events[0]!.summary!.en, "Synthetic public business summary.");
 });
 
@@ -276,7 +326,8 @@ test("unknown billing on an enrichment receipt blocks automatic re-purchase", as
 
 test("concurrent fact edits reject stale enrichment and changed evidence can be regenerated", async () => {
   variant = "reset"; conflict = true;
-  await assert.rejects(inMonitor(codex, () => monitorTick()), /Event changed/);
+  const result = await inMonitor(codex, () => monitorTick());
+  assert.ok("enrichmentPending" in result && result.enrichmentPending === 1);
   assert.equal((await read()).events[0]!.summary, null);
   await inMonitor(codex, () => monitorTick());
   const first = (await read()).events[0]!;
