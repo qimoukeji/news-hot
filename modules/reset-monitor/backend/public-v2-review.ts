@@ -5,7 +5,7 @@ import { sql, type Db } from "@aihot/backend/db";
 import { stableJson, sha256 } from "@aihot/backend/lib/ids";
 import { monitorId, monitor, inMonitor, auditAction, auditSubject, type ResetMonitorBackendDefinition } from "./context.ts";
 import { evidenceVersion, loadPublicV2Input, projectPublicV2, type PublicV2Input, type PublicV2EventRow } from "./public-v2.ts";
-import { reviewedEventSchema, type ReviewedEvent, type ResetSnapshot } from "../public-v2.ts";
+import { reviewedEventSchema, normalizePublicTime, updateActions, type ReviewedEvent, type ResetSnapshot } from "../public-v2.ts";
 import { resolveBonusTimes } from "./public-v2-time.ts";
 
 const text = z.string().regex(/\S/);
@@ -37,8 +37,8 @@ export async function exportPublicV2(definitions: ResetMonitorBackendDefinition[
 
 export function validateReview(review: ReviewedEvent, row: PublicV2EventRow, input: PublicV2Input) {
   if (review.evidenceVersion !== evidenceVersion(row, input)) throw new Conflict(`Evidence changed: ${monitorId()}/${row.id}`);
-  const prior = row.presentation?.publicV2 && reviewedEventSchema.parse(row.presentation.publicV2);
-  if (prior && Date.parse(prior.publishedAt) !== Date.parse(review.publishedAt)) throw new Error(`First publication is immutable: ${row.id}`);
+  const prior = row.presentation?.publicV2;
+  if (prior && Date.parse(reviewedEventSchema.shape.publishedAt.parse(prior.publishedAt)) !== Date.parse(review.publishedAt)) throw new Error(`First publication is immutable: ${row.id}`);
   const linked = new Set(input.links.filter(link => link.event_id === row.id).map(link => link.post_id));
   if (!prior) {
     const first = input.posts.filter(post => linked.has(post.id)).map(post => new Date(post.published_at).getTime()).sort((a, b) => a - b)[0];
@@ -49,6 +49,14 @@ export function validateReview(review: ReviewedEvent, row: PublicV2EventRow, inp
   for (const evidence of review.evidence) {
     const post = input.posts.find(post => post.id === evidence.postId);
     if (!linked.has(evidence.postId) || !post?.text.includes(evidence.excerpt)) throw new Error(`Evidence is not quoted in a linked source: ${row.id}/${evidence.postId}`);
+  }
+  if (review.updateSummaries) {
+    const required = new Set(input.links.filter(link => link.event_id === row.id && updateActions.includes(link.action as typeof updateActions[number])).map(link => link.post_id));
+    const provided = review.updateSummaries.map(update => update.postId);
+    if (new Set(provided).size !== provided.length || required.size !== provided.length
+      || provided.some(id => !required.has(id) || !review.evidence.some(evidence => evidence.postId === id))) {
+      throw new Error(`Update summaries must cover every accepted business update with linked evidence: ${row.id}`);
+    }
   }
   for (const resolution of review.timeResolutions ?? []) {
     const post = input.posts.find(post => post.id === resolution.postId);
@@ -93,6 +101,7 @@ async function prepare(bundle: ReviewBundle, definitions: ResetMonitorBackendDef
         if (!row || row.withdrawn || reviewVersion(row, input) !== entry.expectedVersion) throw new Conflict(`Event changed: ${monitorId()}/${entry.id}`);
         if (!entry.publicV2) continue;
         validateReview(entry.publicV2, row, input);
+        entry.publicV2.time = normalizePublicTime(entry.publicV2.time);
         const resolved = resolveBonusTimes(row, input, entry.publicV2.bonusCredit);
         entry.publicV2.bonusCredit = resolved.bonusCredit;
         if (resolved.resolutions.length) entry.publicV2.timeResolutions = resolved.resolutions;
@@ -105,7 +114,7 @@ async function prepare(bundle: ReviewBundle, definitions: ResetMonitorBackendDef
       const snapshot = projectPublicV2(input, monitor());
       snapshots.push(snapshot);
       for (const event of snapshot.events) {
-        const fields = [event.summary === null && "summary", event.details === null && "details", event.time.kind === "unknown" && "time", event.scope.type === "unknown" && "scope.type",
+        const fields = [event.summary === null && "summary",
           event.type === "bonus_credit" && event.bonusCredit === null && "bonusCredit",
           event.type === "bonus_credit" && (!event.bonusCredit?.claimDeadline || event.bonusCredit.claimDeadline.kind === "unknown") && "bonusCredit.claimDeadline",
           event.type === "bonus_credit" && (!event.bonusCredit?.expiresAt || event.bonusCredit.expiresAt.kind === "unknown") && "bonusCredit.expiresAt"].filter((field): field is string => !!field);

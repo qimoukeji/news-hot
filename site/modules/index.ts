@@ -5,5 +5,6 @@ import codexReset from "@aihot/codex-reset/module";
 import claudeReset from "@aihot/claude-reset/module";
 import grokReset from "@aihot/grok-reset/module";
 import type { ModuleDeclaration } from "@aihot/contracts/modules";
+import { overviewModule } from "@aihot/reset-monitor/overview-module";
 
-export const MODULES: readonly ModuleDeclaration[] = [codexReset, claudeReset, grokReset];
+export const MODULES: readonly ModuleDeclaration[] = [codexReset, claudeReset, grokReset, overviewModule];

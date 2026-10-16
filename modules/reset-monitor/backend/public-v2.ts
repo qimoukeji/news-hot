@@ -4,7 +4,7 @@ import { sha256, stableJson } from "@aihot/backend/lib/ids";
 import { beijingDate, addDays } from "@aihot/contracts/time";
 import { monitor, monitorId } from "./context.ts";
 import type { ResetMonitorBackendDefinition } from "./context.ts";
-import { resetSnapshotSchema, reviewedEventSchema, type ResetSnapshot, type ResetEvent, type EventTime } from "../public-v2.ts";
+import { resetSnapshotSchema, reviewedEventSchema, normalizePublicTime, updateActions, type ResetSnapshot, type ResetEvent, type EventTime, type PublicTime } from "../public-v2.ts";
 import type { ResetMonitorEventKind } from "../contracts.ts";
 import { resolveBonusTimes } from "./public-v2-time.ts";
 
@@ -27,8 +27,18 @@ export interface PublicV2Input { events: PublicV2EventRow[]; posts: PublicV2Post
 
 const iso = (value: Timestamp) => new Date(value).toISOString();
 const byId = <T extends { id: string }>(a: T, b: T) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-const unknownTime = (): EventTime => ({ kind: "unknown" });
-const emptyScope = (): ResetEvent["scope"] => ({ type: "unknown", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null });
+export function publicV2Scope(scope?: ResetEvent["scope"]): ResetEvent["scope"] {
+  const value = scope ?? { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null };
+  const type = value.type === "unknown" ? "all_users" : value.type;
+  if (type === "selected_users") {
+    if (languages.some(language => !value.note?.[language]?.trim())) throw new Error("Selected users require a specific scope note in all seven languages");
+    return { ...value, type };
+  }
+  const names = type === "paid_users"
+    ? ["Paid users", "付费用户", "付費使用者", "有料ユーザー", "유료 사용자", "Платные пользователи", "Usuarios de pago"]
+    : ["All users", "所有用户", "所有使用者", "すべてのユーザー", "모든 사용자", "Все пользователи", "Todos los usuarios"];
+  return { ...value, type, note: Object.fromEntries(languages.map((language, index) => [language, names[index]!])) as ResetEvent["title"] };
+}
 
 /** Updated-at and editorial data are excluded so applying a review does not invalidate itself. */
 export function evidenceVersion(event: PublicV2EventRow, input: PublicV2Input): string {
@@ -73,13 +83,6 @@ export function publicV2Title(product: string, type: ResetEvent["type"], status:
   return Object.fromEntries(languages.map((language, index) => [language, `${product}: ${kindNames[type][index]} · ${statusNames[status][index]}`])) as Record<typeof languages[number], string>;
 }
 
-function confirmationPublication(row: PublicV2EventRow, input: PublicV2Input) {
-  // A persisted source_post confirmation and its confirm links are the official evidence.
-  // Retired accounts remain valid historical sources; unrelated later replies are not nodes.
-  const ids = new Set(input.links.filter(link => link.event_id === row.id && link.action === "confirm").map(link => link.post_id));
-  return input.posts.filter(post => ids.has(post.id)).sort((a, b) => Date.parse(iso(a.published_at)) - Date.parse(iso(b.published_at)) || byId(a, b))[0];
-}
-
 /** Only explicit linked business statements can close a bonus; wall-clock time cannot. */
 function bonusStatusStatement(text: string): ResetEvent["status"] | null {
   for (const sentence of text.match(/[^.!?\n;]+[.!?\n;]?/g) ?? []) {
@@ -107,16 +110,17 @@ export function publicV2Status(row: PublicV2EventRow, input: PublicV2Input): Res
   return "available";
 }
 
-export function timeBoundary(time: EventTime): string | null {
+export function timeBoundary(time: EventTime | PublicTime): string | null {
+  if (typeof time === "string") return /^\d{4}-\d{2}-\d{2}$/.test(time) ? `${time}T00:00:00Z` : time.split("/")[0]!;
   if (time.kind === "unknown") return null;
   if (time.kind === "date") return Temporal.PlainDate.from(time.date).toZonedDateTime(time.timeZone).toInstant().toString();
   return time.kind === "range" ? time.from : time.at;
 }
 function exactTime(event: ResetEvent): number | null {
-  return event.time.kind === "instant" ? Date.parse(event.time.at) : null;
+  return /^\d{4}-\d{2}-\d{2}T/.test(event.time) && !event.time.includes("/") ? Date.parse(event.time) : null;
 }
 function eventDate(event: ResetEvent): string | null {
-  if (event.time.kind === "date") return event.time.date;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(event.time)) return event.time;
   const at = timeBoundary(event.time);
   return at ? beijingDate(Date.parse(at)) : null;
 }
@@ -138,39 +142,39 @@ export function projectPublicV2(input: PublicV2Input, definition: ResetMonitorBa
   });
   const posts = new Map(input.posts.map(post => [post.id, post]));
   const events = input.events.filter(event => !event.withdrawn).map(row => {
-    const links = input.links.filter(link => link.event_id === row.id).sort((a, b) => {
-      const rank = (link: PublicV2LinkRow) => link.action === "announce" ? 0 : 1;
-      return rank(a) - rank(b) || Date.parse(iso(posts.get(a.post_id)!.published_at)) - Date.parse(iso(posts.get(b.post_id)!.published_at)) || a.post_id.localeCompare(b.post_id);
-    });
-    const sourceIds = links.map(link => {
+    const linkedPosts = input.links.filter(link => link.event_id === row.id).map(link => {
       const post = posts.get(link.post_id);
       if (!post) throw new Error("Public event references a missing post");
-      const id = `x-post:${post.id}`;
-      sourceMap.set(id, { id, type: "official_social", name: properName(`@${post.author} · ${iso(post.published_at).slice(0, 10)}`), url: post.url });
-      return id;
+      const id = `x-account:${post.author.toLowerCase()}`;
+      if (!sourceMap.has(id)) sourceMap.set(id, {
+        id, type: "official_social", name: properName(`@${post.author}`), url: `https://x.com/${post.author.toLowerCase()}`,
+      });
+      return { link, post, sourceId: id };
     });
+    const businessUpdates = linkedPosts.filter(({ link }) => updateActions.includes(link.action as typeof updateActions[number]))
+      .sort((a, b) => Date.parse(iso(b.post.published_at)) - Date.parse(iso(a.post.published_at)) || byId(a.post, b.post));
+    if (!businessUpdates.length) throw new Error("Public event requires a business update");
     const stored = row.presentation?.publicV2 === undefined ? null : reviewedEventSchema.parse(row.presentation.publicV2);
     const reviewed = stored?.evidenceVersion === evidenceVersion(row, input) ? stored : null;
-    const confirmed = row.status === "confirmed" && row.confirmation_basis === "source_post";
     const status = reviewed?.status ?? publicV2Status(row, input);
-    // occurred_on is an operator/source-recorded occurrence date, never a confirmation instant.
-    let time: EventTime = reviewed?.time ?? (row.occurred_on && row.type !== "bonus_credit" ? { kind: "date", date: iso(row.occurred_on).slice(0, 10), timeZone: "Asia/Shanghai" } : unknownTime());
-    if (time.kind === "unknown" && confirmed && ["completed", "available", "claim_closed", "expired"].includes(status)) {
-      const confirmation = confirmationPublication(row, input);
-      if (confirmation) {
-        time = { kind: "instant", at: iso(confirmation.published_at) };
-      }
+    let time = reviewed?.timeBasis !== "latest_update" ? reviewed?.time : undefined;
+    if (!time) {
+      const latestUpdate = businessUpdates[0]!;
+      time = row.occurred_on && row.type !== "bonus_credit"
+        ? iso(row.occurred_on).slice(0, 10)
+        : iso(latestUpdate.post.published_at);
     }
     return {
       id: row.id, type: row.type, status, publishedAt: stored?.publishedAt ?? iso(row.created_at),
-      title: reviewed?.title ?? publicV2Title(definition.product, row.type, status), summary: reviewed?.summary ?? null, details: reviewed?.details ?? null,
-      time, announcement: reviewed?.announcement ?? null, sourceIds, scope: reviewed?.scope ?? emptyScope(), bonusCredit: resolveBonusTimes(row, input, reviewed?.bonusCredit ?? null).bonusCredit,
+      title: reviewed?.title ?? publicV2Title(definition.product, row.type, status), summary: reviewed?.summary ?? null,
+      time: normalizePublicTime(time), updates: businessUpdates.map(({ link, post, sourceId }) => ({
+        id: post.id, action: link.action as typeof updateActions[number], publishedAt: iso(post.published_at),
+        summary: reviewed?.updateSummaries?.find(update => update.postId === post.id)?.summary ?? null,
+        source: { sourceId, url: post.url },
+      })), scope: publicV2Scope(reviewed?.scope), bonusCredit: resolveBonusTimes(row, input, reviewed?.bonusCredit ?? null).bonusCredit,
     } satisfies ResetEvent;
-  }).sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || byId(a, b));
-  const completed = events.filter(event => event.type === "direct_reset" && event.status === "completed").sort((a, b) => {
-    const order = (event: ResetEvent) => Date.parse(timeBoundary(event.time) ?? event.publishedAt);
-    return order(b) - order(a) || byId(a, b);
-  });
+  }).sort((a, b) => Date.parse(timeBoundary(b.time)!) - Date.parse(timeBoundary(a.time)!) || byId(a, b));
+  const completed = events.filter(event => event.type === "direct_reset" && event.status === "completed");
   const latest = completed[0];
   const anchor = latest ? exactTime(latest) : null;
   const forecastSamples = anchor === null ? [] : completed.filter(event => {
@@ -181,42 +185,18 @@ export function projectPublicV2(input: PublicV2Input, definition: ResetMonitorBa
   const today = beijingDate(now), since = addDays(today, -29);
   const count = (type: ResetEvent["type"]) => {
     const eligible = events.filter(event => event.type === type && (type === "bonus_credit" ? ["available", "claim_closed", "expired"].includes(event.status) : event.status === "completed"));
-    const start = Date.parse(`${since}T00:00:00+08:00`);
-    // A confirmation is only an upper bound on occurrence, never its displayed time.
-    // Recent undated completions prevent a fabricated zero or an understated count.
-    if (eligible.some(event => {
-      if (eventDate(event) !== null) return false;
-      const row = input.events.find(row => row.id === event.id)!;
-      return !row.confirmed_at || Date.parse(iso(row.confirmed_at)) >= start;
-    })) return null;
     return eligible.filter(event => { const date = eventDate(event); return date !== null && date >= since && date <= today; }).length;
   };
-  const marks: ResetSnapshot["calendar"]["marks"] = [];
-  for (const event of events) {
-    if (event.time.kind !== "unknown") marks.push({ id: `event:${event.id}`, eventId: event.id, kind: "event", time: event.time });
-    for (const [key, kind] of [["claimDeadline", "claim_deadline"], ["expiresAt", "expiry"]] as const) {
-      const time = event.bonusCredit?.[key];
-      if (time && time.kind !== "unknown") marks.push({ id: `${kind}:${event.id}`, eventId: event.id, kind, time });
-    }
-  }
-  const calendarDays = marks.flatMap(mark => {
-    if (mark.time.kind === "date") return [mark.time.date];
-    const boundary = timeBoundary(mark.time)!;
-    const day = new Date(boundary).toISOString().slice(0, 10);
-    return [addDays(day, -1), addDays(day, 1)];
-  }).sort();
-  const historyDays = events.map(eventDate).filter((date): date is string => date !== null).sort();
   const typical = medianInterval(completed.filter(event => {
     const at = exactTime(event); return at !== null && at >= now - 90 * 86_400_000 && at <= now;
   }));
   return resetSnapshotSchema.parse({
     schemaVersion: 2, platform: config.platform, generatedAt: new Date(now).toISOString(),
     sources: [...sourceMap.values()], catalog: config.catalog, events,
-    overview: { latestDirectResetEventId: events.find(event => event.type === "direct_reset")?.id ?? null,
-      latestCompletedResetEventId: latest?.id ?? null, statisticalForecast: forecastAt ? { time: { kind: "instant", at: forecastAt }, expiresAt: forecastAt } : null },
+    predictedResetTime: forecastAt && Date.parse(forecastAt) <= now ? addDays(today, 1) : forecastAt,
+    announcedResetTime: events[0]?.status === "announced" ? events[0].time : null,
+    resetTime: events[0] && events[0].status !== "announced" ? events[0].time : null,
     statistics: { typicalInterval: typical, resetsLast30Days: count("direct_reset"), cardsLast30Days: count("reset_credit"), bonusesLast30Days: count("bonus_credit") },
-    history: { range: historyDays.length ? { from: historyDays[0]!, through: historyDays.at(-1)! } : null, total: events.length, eventIds: events.map(event => event.id) },
-    calendar: { range: calendarDays.length ? { from: calendarDays[0]!, through: calendarDays.at(-1)! } : null, marks },
   });
 }
 

@@ -2,7 +2,7 @@ import definition from "./definition.ts";
 import { buildResetMonitorPrompt } from "@aihot/reset-monitor/prompt";
 import type { ResetMonitorDefinition } from "@aihot/reset-monitor/definition";
 
-export const promptVersion = "codex-reset-2026-10-12.1";
+export const promptVersion = "codex-reset-2026-10-15.1";
 export const productRules = `- Codex / ChatGPT Work 额度恢复属于 direct_reset，banked reset、manual resets 属于 reset_credit。只说 API credits、美元或 API tokens 不构成奖励；明确额外产品一次性消费池才是 bonus_credit。
 - “OK fine”直接回应唯一明确的 banked reset 请求，属于答应发卡，role=answer、real=true、action=announce；同句另说“it's coming Tuesday”而祖先讨论产品发布时，不把 it 的星期二强加给重置卡，statedTime=null，不因缺日期转人工。
 - “给 500k 用户发卡”后解释“给那两小时内按过按钮的人补发卡”，是同一次补偿，不是两次；“明天再给所有人发卡”才是另一件事。若保留重复原句，duplicateOf 指向前一个相同 kind/action 命题的编号（从 0 开始）；独立事件填 null。重复不能增加 count。

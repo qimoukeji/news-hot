@@ -19,6 +19,7 @@ import { backendDefinition as claude } from "../../claude-reset/backend-definiti
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
 import { createMonitorServer } from "../server.ts";
 import { isMonitorRequest } from "@aihot/backend/providers/receipts";
+import { updateMonitorEvent, reviewReceipt, setWithdrawn } from "../backend/admin.ts";
 
 const definitions = [codex, claude, grok];
 const started = new Date();
@@ -27,6 +28,7 @@ const since = new Date(started.getTime() - 60_000).toISOString();
 let variant = "all", badOutput = "", conflict = false;
 let enrichmentCalls = 0, recognitionCalls = 0;
 const bodies = new Map<string, string>();
+const enrichmentInputs: any[] = [];
 const provider = await stub((_hit, request) => {
   const url = new URL(request.url, "http://local");
   assert.equal(url.pathname, "/twitter/search", "these synthetic root posts need no context lookup");
@@ -52,19 +54,26 @@ const model = await stub(async (_hit, request) => {
   if (user.startsWith("{")) {
     enrichmentCalls++;
     const input = JSON.parse(user), row = input.event, post = input.posts[0];
+    enrichmentInputs.push(input);
     const def = definitions.find(def => def.authors.some(author => author.handle.toLowerCase() === post.author.toLowerCase()))!;
     const status = row.status;
-    content = { title: publicV2Title(def.product, row.type, status), summary: properName("Synthetic public business summary."), details: null,
+    content = { title: publicV2Title(def.product, row.type, status), summary: properName("Synthetic public business summary."),
       scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null },
       bonusCredit: row.type === "bonus_credit" ? { amount: null, eligibility: properName("All users."), claimMethod: null, usageTerms: null } : null,
-      evidence: [{ postId: post.id, excerpt: post.text }], timeEvidence: null,
-      announcementEvidence: post.text.startsWith("ANNOUNCE") ? { postId: post.id, excerpt: post.text } : null };
+      updateSummaries: input.links.filter((link: any) => ["announce", "confirm", "progress", "amend", "withdraw"].includes(link.action)).map((link: any) => ({ postId: link.post_id, summary: properName("Synthetic business update.") })),
+      evidence: input.posts.map((source: any) => ({ postId: source.id, excerpt: source.text })), timeEvidence: status === "announced" && post.text.startsWith("ANNOUNCE") ? { postId: post.id, excerpt: post.text } : null };
     const data = content as any;
     if (badOutput === "language") delete data.title.ja;
     if (badOutput === "quote" || badOutput === "first-quote" && row.type === "direct_reset") data.evidence[0].excerpt = "This quote was never written.";
     if (badOutput === "code") data.scope.planCodes = ["another-platform-plan"];
+    if (badOutput === "unknown-scope") data.scope.type = "unknown";
+    if (badOutput === "selected-note") data.scope.type = "selected_users";
     if (badOutput === "attribution") data.summary.zh = "原帖称已完成重置。";
-    if (["range", "time"].includes(badOutput)) data.timeEvidence = { postId: post.id, excerpt: post.text };
+    if (badOutput === "update-attribution") data.updateSummaries[0].summary.zh = "原帖称已完成重置。";
+    if (badOutput === "update-missing") data.updateSummaries = [];
+    if (badOutput === "update-duplicate") data.updateSummaries.push(data.updateSummaries[0]);
+    if (badOutput === "update-unlinked") data.updateSummaries[0].postId = "unlinked";
+    if (["range", "time"].includes(badOutput)) data.timeEvidence = { postId: badOutput === "time" ? "unlinked" : post.id, excerpt: post.text };
     if (badOutput === "transport") return new Reply(429, { error: "Synthetic refusal" });
     if (conflict) {
       conflict = false;
@@ -74,10 +83,11 @@ const model = await stub(async (_hit, request) => {
     recognitionCalls++;
     const id = /帖子 ([^，]+)/.exec(user)![1]!, text = bodies.get(id)!;
     const kind = text.startsWith("CARD") ? "reset_credit" : text.startsWith("BONUS") ? "bonus_credit" : "direct_reset";
-    const target = text.startsWith("AMEND") ? (await sql`SELECT id FROM monitor_events WHERE monitor_id='codex' ORDER BY id LIMIT 1`)[0]!.id : null;
+    assert.match(body.messages[0].content, /个人账户到账或恢复不能证明整个活动完成/);
+    const target = /^(?:AMEND|PROGRESS|CONFIRM|PERSONAL):/.test(text) ? (await sql`SELECT id FROM monitor_events WHERE monitor_id='codex' ORDER BY id LIMIT 1`)[0]!.id : null;
     content = { relevant: !text.startsWith("IGNORE"), translationZh: text, contextZh: [], outage: null, needsReview: false,
-      propositions: text.startsWith("IGNORE") ? [] : [{ kind, kindExplicit: true, action: target ? "amend" : text.startsWith("ANNOUNCE") ? "announce" : "confirm", real: true, count: 1,
-        role: "action", relatesTo: target, excerpt: text, excerptZh: text, statedTime: null, timeInferred: false, expectedLanding: null,
+      propositions: text.startsWith("IGNORE") ? [] : [{ kind, kindExplicit: true, action: text.startsWith("PROGRESS") ? "progress" : text.startsWith("CONFIRM") ? "confirm" : target ? "amend" : text.startsWith("ANNOUNCE") ? "announce" : "confirm", real: !text.startsWith("PERSONAL"), count: 1,
+        role: text.startsWith("PERSONAL") ? "explanation" : "action", relatesTo: target, excerpt: text, excerptZh: text, statedTime: null, timeInferred: false, expectedLanding: null,
         scope: { audienceSource: "all users", plans: null, audienceZh: "所有用户", productsZh: null }, bonusCredit: null }] };
   }
   return { choices: [{ finish_reason: "stop", message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 10, completion_tokens: 10 } };
@@ -92,6 +102,7 @@ beforeEach(async () => {
   await sql`DELETE FROM monitor_state`; await sql`DELETE FROM audit_log`; await sql`DELETE FROM receipts`; await sql`DELETE FROM budgets`;
   for (const def of definitions) await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${def.monitorId},'cursor:socialdata',${sql.json({ checkpointVersion: 2, scannedThrough: since })})`;
   variant = "all"; badOutput = ""; conflict = false; recognitionCalls = 0; enrichmentCalls = 0;
+  enrichmentInputs.length = 0;
   config.modelCallsEnabled = true; process.env.COLLECT_ENABLED = "true";
 });
 after(async () => { await provider.close(); await model.close(); installModules([]); await closeDb(); });
@@ -120,7 +131,7 @@ test("new posts flow through recognition, all three event kinds, seven languages
     for (const event of snapshot.events) {
       assert.equal(Object.keys(event.title).length, 7);
       assert.equal(Object.keys(event.summary!).length, 7);
-      assert.equal(event.details, null); assert.equal(event.time.kind, "instant");
+      assert.equal("details" in event, false); assert.equal(typeof event.time, "string");
       assert.equal(event.publishedAt, postAt.toISOString());
       const [stored] = await sql`SELECT presentation FROM monitor_events WHERE monitor_id=${def.monitorId} AND id=${event.id}`;
       reviewedEventSchema.parse(stored!.presentation.publicV2);
@@ -151,16 +162,45 @@ test("cutover ignores all pre-existing pending and collection-only posts", async
   assert.equal((await read()).events.length, 1);
 });
 
-test("official relative announcements produce planned calendar nodes without confirming completion", async () => {
+test("automatic enrichment stores the default audience and latest update when timing is unstated", async () => {
+  variant = "reset"; badOutput = "unknown-scope";
+  await inMonitor(codex, () => monitorTick());
+  const event = (await read()).events[0]!;
+  assert.equal(event.scope.type, "all_users");
+  assert.equal(event.scope.note!.zh, "所有用户");
+  assert.deepEqual(event.time, postAt.toISOString());
+  const [stored] = await sql`SELECT presentation->'publicV2' AS review FROM monitor_events WHERE monitor_id='codex' AND id=${event.id}`;
+  assert.equal(stored!.review.scope.type, "all_users");
+  assert.equal(stored!.review.scope.note.zh, "所有用户");
+  assert.deepEqual(stored!.review.time, event.time);
+  assert.equal(stored!.review.timeBasis, "latest_update");
+});
+
+test("official relative plans use the scalar event and overview announcement time without confirming completion", async () => {
   variant = "announce";
   await inMonitor(codex, () => monitorTick());
   const snapshot = await read(), event = snapshot.events[0]!;
   const expected = { kind: "deadline", at: new Date(postAt.getTime() + 30 * 60_000).toISOString() };
-  assert.equal(event.status, "announced"); assert.deepEqual(event.time, expected);
-  assert.deepEqual(event.announcement!.time, expected);
-  assert.equal(event.announcement!.displayUntil, expected.at);
-  assert.deepEqual(snapshot.calendar.marks[0]!.time, expected);
+  assert.equal(event.status, "announced");
+  assert.equal(event.time, expected.at); assert.equal("announcement" in event, false);
+
+  assert.equal(snapshot.announcedResetTime, event.time);
+  assert.equal(snapshot.resetTime, null);
   assert.equal(snapshot.statistics.resetsLast30Days, 0);
+});
+
+test("automatic enrichment preserves a recorded occurrence date separately from a different announcement time", async () => {
+  variant = "announce";
+  await inMonitor(codex, () => monitorTick());
+  const id = (await read()).events[0]!.id;
+  await sql`UPDATE monitor_events SET occurred_on='2026-10-01' WHERE monitor_id='codex' AND id=${id}`;
+  const expected = "2026-10-01";
+  assert.deepEqual((await read()).events[0]!.time, expected);
+  await inMonitor(codex, () => processPublicV2Pending());
+  const event = (await read()).events[0]!;
+  assert.deepEqual(event.time, expected);
+  assert.equal("announcement" in event, false);
+  assert.equal(event.status, "announced");
 });
 
 test("a new follow-up refreshes the existing event without changing identity or first publication", async () => {
@@ -175,8 +215,98 @@ test("a new follow-up refreshes the existing event without changing identity or 
   const snapshot = await read();
   assert.equal(snapshot.events.length, 1); assert.equal(snapshot.events[0]!.id, first.id);
   assert.equal(snapshot.events[0]!.publishedAt, first.publishedAt);
-  assert.equal(snapshot.events[0]!.sourceIds.length, 2);
+  assert.deepEqual(snapshot.events[0]!.updates.map(update => update.id), [id, first.updates[0]!.id]);
+  assert.deepEqual(snapshot.events[0]!.updates[1]!.source, first.updates[0]!.source);
+  const updated = new Date(postAt.getTime() + 1000).toISOString();
+  assert.deepEqual(snapshot.events[0]!.time, updated);
+  const [stored] = await sql`SELECT presentation->'publicV2' AS review FROM monitor_events WHERE monitor_id='codex' AND id=${first.id}`;
+  assert.deepEqual(stored!.review.time, snapshot.events[0]!.time);
+  assert.equal(stored!.review.timeBasis, "latest_update");
+  assert.equal(snapshot.sources.filter(source => source.id === first.updates[0]!.source.sourceId).length, 1);
   assert.equal(recognitionCalls, 2); assert.equal(enrichmentCalls, 2);
+});
+
+test("announcement, individual feedback, progress, confirmation and repair keep one event and refresh its business timeline", async () => {
+  variant = "announce";
+  await inMonitor(codex, () => monitorTick());
+  const first = (await read()).events[0]!;
+  const followups = [
+    ["10096", "PERSONAL: My usage has been restored.", "announced", null],
+    ["10097", "PROGRESS: We are rolling out the reset for all users.", "in_progress", "progress"],
+    ["10098", "CONFIRM: The reset has completed for all users.", "completed", "confirm"],
+    ["10099", "AMEND: The missing delivery issue has been fixed for all users.", "completed", "amend"],
+  ] as const;
+  for (const [index, [id, text, status, action]] of followups.entries()) {
+    bodies.set(id, text);
+    const publishedAt = new Date(postAt.getTime() + (index + 1) * 1000);
+    await sql`INSERT INTO monitor_posts(monitor_id,id,author,published_at,text,url,raw) VALUES
+      ('codex',${id},${codex.authors[0]!.handle},${publishedAt},${text},${`https://x.com/i/status/${id}`},'{"processingMode":"automatic_incremental"}'::jsonb)`;
+    await inMonitor(codex, () => processPending());
+    const pending = await read(), event = pending.events[0]!;
+    assert.equal(pending.events.length, 1); assert.equal(event.id, first.id); assert.equal(event.publishedAt, first.publishedAt);
+    assert.equal(event.status, status);
+    if (action) {
+      assert.equal(event.summary, null, "accepted facts invalidate old editorial content before enrichment");
+      assert.ok(event.updates.every(update => update.summary === null));
+      assert.equal(event.updates[0]!.action, action);
+      assert.equal(event.time, publishedAt.toISOString(), "progress and completion never reuse the planned deadline");
+      assert.deepEqual((await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key=${`public_v2:pending:${first.id}`}`)[0]!.value, { status: "pending" });
+      await inMonitor(codex, () => processPublicV2Pending());
+      assert.ok((await read()).events[0]!.summary);
+    } else {
+      assert.equal(event.updates.length, 1, "individual feedback cannot become a global business update");
+      assert.equal(pending.announcedResetTime, event.time); assert.equal(pending.resetTime, null);
+    }
+  }
+  const final = await read();
+  assert.deepEqual(final.events[0]!.updates.map(update => update.action), ["amend", "confirm", "progress", "announce"]);
+  assert.equal(final.statistics.resetsLast30Days, 1);
+  assert.equal(final.announcedResetTime, null); assert.equal(final.resetTime, final.events[0]!.time);
+});
+
+for (const operation of ["update", "receipt", "withdraw", "restore"] as const) test(`admin ${operation} atomically queues v2 refresh and invalidates old editorial content`, async () => {
+  variant = operation === "receipt" ? "announce" : "reset";
+  await inMonitor(codex, () => monitorTick());
+  const first = (await read()).events[0]!;
+  if (operation === "restore") await sql`UPDATE monitor_events SET withdrawn=true WHERE monitor_id='codex' AND id=${first.id}`;
+  const [before] = await sql`SELECT * FROM monitor_events WHERE monitor_id='codex' AND id=${first.id}`;
+  const input = { reason: "Synthetic accepted correction", version: new Date(before!.updated_at).toISOString() };
+  await inMonitor(codex, () => operation === "update" ? updateMonitorEvent(first.id, { ...input, patch: { audienceZh: "所有用户", productsZh: "Codex" } }, "synthetic-admin")
+    : operation === "receipt" ? reviewReceipt(first.id, { ...input, occurredOn: "2026-10-14" }, "synthetic-admin")
+    : setWithdrawn(first.id, { ...input, withdrawn: operation === "withdraw" }, "synthetic-admin"));
+  assert.deepEqual((await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key=${`public_v2:pending:${first.id}`}`)[0]!.value, { status: "pending" });
+  if (operation === "withdraw") assert.equal((await read()).events.length, 0);
+  else assert.equal((await read()).events[0]!.summary, null);
+  await inMonitor(codex, () => processPublicV2Pending());
+  assert.equal((await sql`SELECT key FROM monitor_state WHERE monitor_id='codex' AND key=${`public_v2:pending:${first.id}`}`).length, 0);
+  if (operation === "update") {
+    assert.equal(enrichmentInputs.at(-1)!.event.audienceZh, "所有用户");
+    assert.equal(enrichmentInputs.at(-1)!.event.productsZh, "Codex");
+    assert.equal("publicV2" in enrichmentInputs.at(-1)!.event, false);
+  }
+  if (operation === "receipt") assert.equal((await read()).events[0]!.status, "announced", "an account receipt cannot establish source-post completion");
+  const [after] = await sql`SELECT created_at FROM monitor_events WHERE monitor_id='codex' AND id=${first.id}`;
+  assert.equal(new Date(after!.created_at).toISOString(), first.publishedAt);
+});
+
+test("an admin correction cannot commit without its durable v2 task", async () => {
+  variant = "reset";
+  await inMonitor(codex, () => monitorTick());
+  const first = (await read()).events[0]!;
+  const [before] = await sql`SELECT * FROM monitor_events WHERE monitor_id='codex' AND id=${first.id}`;
+  const [audits] = await sql`SELECT count(*)::int AS n FROM audit_log`;
+  await sql`CREATE FUNCTION reject_v2_enqueue_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.key LIKE 'public_v2:pending:%' THEN RAISE EXCEPTION 'Synthetic task persistence failure'; END IF; RETURN NEW; END $$`;
+  await sql`CREATE TRIGGER reject_v2_enqueue_test BEFORE INSERT OR UPDATE ON monitor_state FOR EACH ROW EXECUTE FUNCTION reject_v2_enqueue_test()`;
+  try {
+    await assert.rejects(inMonitor(codex, () => updateMonitorEvent(first.id, {
+      patch: { audienceZh: "Synthetic corrected audience" }, reason: "Synthetic transaction boundary", version: new Date(before!.updated_at).toISOString(),
+    }, "synthetic-admin")), /Synthetic task persistence failure/);
+  } finally {
+    await sql`DROP TRIGGER reject_v2_enqueue_test ON monitor_state`; await sql`DROP FUNCTION reject_v2_enqueue_test()`;
+  }
+  assert.deepEqual((await sql`SELECT * FROM monitor_events WHERE monitor_id='codex' AND id=${first.id}`)[0], before);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM audit_log`)[0]!.n, audits!.n);
+  assert.deepEqual((await read()).events[0], first);
 });
 
 test("bonus enrichment keeps availability and precise deadlines after a conditional, date-only reminder", async () => {
@@ -204,11 +334,11 @@ test("worker-generated occurrence windows reach the API as ranges and are exclud
   badOutput = "range";
   await inMonitor(codex, () => processPublicV2Pending());
   const snapshot = resetSnapshotSchema.parse(await read());
-  const expected = { kind: "range", from: "2026-10-14T17:00:00Z", through: "2026-10-14T19:00:00Z" };
+  const expected = "2026-10-14T17:00:00Z/2026-10-14T19:00:00Z";
   assert.deepEqual(snapshot.events[0]!.time, expected);
-  assert.deepEqual(snapshot.calendar.marks[0]!.time, expected);
+  assert.equal(snapshot.resetTime, expected);
   assert.equal(snapshot.statistics.typicalInterval, null);
-  assert.equal(snapshot.overview.statisticalForecast, null);
+  assert.equal(snapshot.predictedResetTime, null);
 });
 
 test("first enrichment preserves the creation post's publication even when an earlier source is linked", async () => {
@@ -223,7 +353,7 @@ test("first enrichment preserves the creation post's publication even when an ea
   assert.equal((await read()).events[0]!.publishedAt, first.publishedAt);
 });
 
-for (const invalid of ["language", "quote", "code", "attribution", "time"]) test(`invalid ${invalid} enrichment preserves accepted facts, advances the checkpoint and records a successful run`, async () => {
+for (const invalid of ["language", "quote", "code", "attribution", "time", "selected-note", "update-attribution", "update-missing", "update-duplicate", "update-unlinked"]) test(`invalid ${invalid} enrichment preserves accepted facts, advances the checkpoint and records a successful run`, async () => {
   variant = invalid === "time" ? "announce" : "reset"; badOutput = invalid;
   const result = await recordRun("monitor.tick", () => inMonitor(codex, () => monitorTick()));
   assert.ok("enrichmentPending" in result && result.enrichmentPending === 1);
@@ -237,7 +367,10 @@ for (const invalid of ["language", "quote", "code", "attribution", "time"]) test
   const [work] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key LIKE 'public_v2:pending:%'`;
   assert.equal(work!.value.status, "needs_review");
   assert.equal(typeof work!.value.reason, "string");
-  if (invalid === "time") { assert.equal(snapshot.events[0]!.status, "announced"); assert.equal(snapshot.events[0]!.time.kind, "unknown"); }
+  if (invalid === "time") {
+    assert.equal(snapshot.events[0]!.status, "announced");
+    assert.deepEqual(snapshot.events[0]!.time, postAt.toISOString());
+  }
   const calls = enrichmentCalls;
   await inMonitor(codex, () => monitorTick());
   assert.equal(enrichmentCalls, calls, "the same invalid editorial version is not purchased again");

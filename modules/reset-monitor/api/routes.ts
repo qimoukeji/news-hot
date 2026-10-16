@@ -13,7 +13,7 @@ import {
 import { actorOf } from "@aihot/backend/admin/auth";
 import * as admin from "../backend/admin.ts";
 import { publicV2Path } from "../definition.ts";
-import type { ResetSnapshot } from "../public-v2.ts";
+import { parsePublicV2Query, PublicV2QueryError } from "../backend/public-v2-list.ts";
 
 const read = (view: string, input: Record<string, unknown> = {}) =>
   modulePublication(monitor().moduleName, view, input);
@@ -29,13 +29,17 @@ const found = (req: FastifyRequest, reply: FastifyReply, value: unknown) =>
 
 export function registerHttp(app: FastifyInstance) {
   if (monitor().publicV2) app.get(publicV2Path(monitor()), publicHandler(async (req, reply) => {
-    strictQuery(req, []);
-    const snapshot = await read("snapshotV2") as ResetSnapshot;
-    const { generatedAt: _generatedAt, ...content } = snapshot;
-    return sendJsonWithEtag(req, reply, snapshot, {
-      etagPrefix: `${monitor().monitorId}-v2`, etagOf: content,
-      cacheControl: "public, max-age=60, s-maxage=60, must-revalidate",
-    });
+    try {
+      const query = parsePublicV2Query(strictQuery(req, ["from", "to", "timeZone", "limit", "cursor"]));
+      const list = await read("eventsV2", { ...query });
+      return sendJsonWithEtag(req, reply, list as object, {
+        etagPrefix: `${monitor().monitorId}-v2`, etagOf: { query, list },
+        cacheControl: "public, max-age=60, s-maxage=60, must-revalidate",
+      });
+    } catch (error) {
+      if (error instanceof PublicV2QueryError) return sendProblem(req, reply, { status: 400, code: "invalid_request", detail: error.message });
+      throw error;
+    }
   }));
   app.get(
     monitor().siteApiPath,

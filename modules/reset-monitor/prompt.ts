@@ -18,6 +18,7 @@ export function buildResetMonitorPrompt(definition: ResetMonitorDefinition, prod
 共同规则：
 - direct_reset=恢复产品已有用量计数；reset_credit=用户可手动兑换的重置次数；bonus_credit=额外可消费的一次性奖励额度，独立消费池，不是恢复计数或可兑换的重置次数。
 - announce=明确承诺将做；progress=执行中未完成；confirm=明确已完成或奖励活动已可领取；amend=更正或补充；withdraw=撤回。活动可领取只表示官方开放，不表示个人已领取或到账。
+- 明确完成且目标唯一使用 confirm，普通解释、对象补充或修复说明使用 amend，不因是后续帖子就使用 confirm。个人账户到账或恢复不能证明整个活动完成；只保留原文明示的个人范围，普通个人反馈用 role=explanation、real=false，不把其改写为全体确认；无法确定动作或目标时保留复核。
 - kind 不明时按最可能的一种填、kindExplicit=false。count 表示同次动作的明确轮数，默认1；复数不证明多轮，奖励 count 永远1，金额、tokens和覆盖人数不得充作轮数。
 - role=action/answer/explanation/policy/uncertain。只有明确动作或直接回答唯一明确事件问题才可 real=true。Yes/Granted/Soon 等简短回复只结合直接父帖；父帖同时问重置和 API 赠金、回复对象不清楚时复核。
 - 纯解释、惯例、未满足条件、玩笑、假设、暗示和否认不生成事件，也不因此复核。仅有相关暗示但没有明确动作不能借祖先承诺生成事件。

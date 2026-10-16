@@ -10,6 +10,7 @@ import { estimateFor, manualSchedule, type Schedule } from "./time.ts";
 import { bumpPublication, moveReviewedLink } from "./manual-review.ts";
 import { eventDisplayLabel, eventLabel } from "../event-kind.ts";
 import { BonusCreditInput } from "./bonus-input.ts";
+import { enqueuePublicV2 } from "./public-v2-work.ts";
 export {
   monitorPostDetail,
   previewMonitorReview,
@@ -276,6 +277,7 @@ export async function updateMonitorEvent(
       after,
       { db: tx },
     );
+    await enqueuePublicV2(tx, [id]);
     await bumpPublication(tx);
     return after;
   });
@@ -314,6 +316,7 @@ export async function reviewReceipt(
       after,
       { db: tx },
     );
+    await enqueuePublicV2(tx, [id]);
     await bumpPublication(tx);
     return after;
   });
@@ -341,6 +344,7 @@ export async function setWithdrawn(
       after,
       { db: tx },
     );
+    await enqueuePublicV2(tx, [id]);
     await bumpPublication(tx);
     return after;
   });

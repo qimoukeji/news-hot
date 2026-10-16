@@ -13,6 +13,8 @@ import { scanCron, scanMinutes } from "./config.ts";
 import { registerHttp } from "./api/routes.ts";
 import { eventDisplayLabel } from "./event-kind.ts";
 import { publicV2Snapshot } from "./backend/public-v2.ts";
+import { paginatePublicV2, type PublicV2Query } from "./backend/public-v2-list.ts";
+import { platformOverviewSchema } from "./public-v2.ts";
 
 export function monitorNames(id: string): ResetMonitorBackendDefinition["names"] {
   return { tick: `${id}-reset.tick`, lookback: `${id}-reset.lookback`, purposePrefix: `reset_monitor.${id}`,
@@ -52,7 +54,14 @@ export function createMonitorServer(definition: ResetMonitorBackendDefinition) {
       day: bound(({ date }: Record<string, unknown>) => loadSiteResetMonitorDay(String(date))),
       version: bound(() => resetVersion()), snapshot: bound(() => resetsSnapshot()), recent: bound(() => resetsRecent()),
       agent: bound(() => resetPage()),
-      ...(definition.publicV2 ? { snapshotV2: bound(() => publicV2Snapshot()) } : {}),
+      ...(definition.publicV2 ? {
+        snapshotV2: bound(() => publicV2Snapshot()),
+        eventsV2: bound(async (query: Record<string, unknown>) => paginatePublicV2(await publicV2Snapshot(), query as unknown as PublicV2Query)),
+        overviewV2: bound(async ({ now }: Record<string, unknown>) => {
+          const { schemaVersion: _schema, generatedAt: _generated, events: _events, ...overview } = await publicV2Snapshot(Number(now));
+          return platformOverviewSchema.parse(overview);
+        }),
+      } : {}),
     },
     http: (app) => scopedHttp(app, definition),
     models: { monitor: { label: "重置监控识别与 v2 补全", env: "MONITOR_MODEL", purposes: [`${definition.names.purposePrefix}.recognize`, `${definition.names.purposePrefix}.public_v2`] } },
