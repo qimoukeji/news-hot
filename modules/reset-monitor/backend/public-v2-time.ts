@@ -28,6 +28,7 @@ function parseZone(value: string): string | null {
 }
 /** undefined means absent; null means explicit but unsupported or contradictory. */
 function zoneIn(text: string): string | null | undefined {
+  text = text.replace(/\b(?:https?:\/\/|www\.)[^\s<>"']+/gi, " ");
   const tokens = [...text.matchAll(zonePattern)].map(match => match[0]);
   for (const match of text.matchAll(/\b\d{1,2}(?::\d{2})?\s*(?:[aA][mM]|[pP][mM])?\s+([A-Z]{2,5})\b/g)) {
     const token = match[1]!;
@@ -111,10 +112,30 @@ function resolveSingleSourceTime(expression: string, context: SourceTimeContext)
 
 const clockText = "\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?";
 const rangePattern = new RegExp(`^\\s*(?:at\\s+|from\\s+|between\\s+)?(?<start>${clockText})(?:\\s*(?<startZone>${zoneToken}))?\\s*(?:[–—-]|to\\b|through\\b|and\\b)\\s*(?:(?<endDate>${datePattern})\\s*(?:at\\s+)?)?(?<end>${clockText})(?:\\s*(?<endZone>${zoneToken}))?`, "i");
+const isoTimestampPattern = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d{1,9})?)?(?:Z|[+-]\\d{2}:\\d{2})";
 
 export function resolveSourceTime(expression: string, context: SourceTimeContext): ResolvedTime | null {
   const date = new RegExp(datePattern, "i").exec(expression);
   if (!date) return null;
+  const timestamp = expression.slice(date.index);
+  if (/^\d{4}-\d{2}-\d{2}T/i.test(timestamp)) {
+    const match = new RegExp(`^(${isoTimestampPattern})(?![\\w:+-])`, "i").exec(timestamp);
+    if (!match) return null; // An explicit clock must never become a date-only fact.
+    try {
+      const from = Temporal.Instant.from(match[1]!).toString();
+      const remainder = timestamp.slice(match[0].length);
+      let time: EventTime = { kind: context.deadline ? "deadline" : "instant", at: from };
+      if (/^\s*(?:\/|[–—-]|to\b|through\b)/i.test(remainder)) {
+        const end = new RegExp(`^\\s*(?:/|[–—-]|to\\b|through\\b)\\s*(${isoTimestampPattern})(?![\\w:+-])`, "i").exec(remainder);
+        if (!end) return null;
+        const through = Temporal.Instant.from(end[1]!).toString();
+        if (Temporal.Instant.compare(through, from) < 0) return null;
+        time = { kind: "range", from, through };
+      }
+      return { time, activityAnchor: context.activityAnchor, yearBasis: "explicit",
+        timeZone: /Z$/i.test(match[1]!) ? "UTC" : match[1]!.slice(-6), zoneBasis: "expression" };
+    } catch { return null; }
+  }
   const remainder = expression.slice(date.index + date[0].length);
   if (/^\s*(?:[–—-]|to\b|through\b)\s*(?:\d|[A-Za-z])/i.test(remainder)) return null;
   const range = rangePattern.exec(remainder)?.groups;
@@ -147,7 +168,7 @@ export function resolveSourceTime(expression: string, context: SourceTimeContext
 }
 
 /** Event expressions are kept apart from redemption and expiry wording. */
-export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, announcement: boolean, activityText: string): EventTime {
+export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, announcement: boolean, activityText: string, activityAnchor?: string): EventTime {
   if (/\b(?:claim|redeem|expire|expiry|valid until)\b/i.test(excerpt)) return { kind: "unknown" };
   const anchor = new Date(post.published_at).toISOString();
   const relative = /\b(?:in|within|over)(?:\s+the)?(?:\s+next)?\s+(?:(\d+(?:\.\d+)?)|(an?|one))\s+(minutes?|hours?|days?)\b/i.exec(excerpt);
@@ -161,7 +182,10 @@ export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, a
   if (/\b(?:about|around|roughly|approximately)\b|~/i.test(excerpt)) return { kind: "unknown" };
   const deadline = /\b(?:by|before|until)\b/i.test(excerpt);
   const context = { activityAnchor: anchor, postText: post.text, activityText, deadline, past: !announcement };
-  if (new RegExp(datePattern, "i").test(excerpt)) return resolveSourceTime(excerpt, context)?.time ?? { kind: "unknown" };
+  if (new RegExp(datePattern, "i").test(excerpt)) {
+    // A calendar date belongs to the original announcement even when a later post confirms it.
+    return resolveSourceTime(excerpt, activityAnchor ? { ...context, activityAnchor, past: false } : context)?.time ?? { kind: "unknown" };
+  }
   const zone = sourceZone(excerpt, post.text, activityText);
   if (!zone) return { kind: "unknown" };
   const { timeZone } = zone;

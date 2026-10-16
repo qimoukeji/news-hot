@@ -26,4 +26,29 @@ rm "$temp/data/uploads/dangling.png"
 mkfifo "$temp/data/uploads/pipe"
 tar -czf "$temp/pipe.tar.gz" -C "$temp/data" uploads
 expect_reject "$temp/pipe.tar.gz"
-echo '7 attachment archive scenarios passed'
+# Listings exceed pipe buffers, so every validation must still inspect all members.
+mkdir -p "$temp/large/uploads"
+for ((i=0; i<5000; i++)); do
+  printf 'attachment bytes\n' > "$temp/large/uploads/file-$i.png"
+done
+tar -czf "$temp/large-regular.tar.gz" -C "$temp/large" uploads
+validate_attachments "$temp/large-regular.tar.gz"
+
+ln -s /tmp "$temp/large/link"
+for ((i=0; i<5000; i++)); do printf 'link\n'; done > "$temp/link-paths"
+tar -czf "$temp/large-links.tar.gz" --transform='s|^link$|uploads/link|' -C "$temp/large" -T "$temp/link-paths"
+expect_reject "$temp/large-links.tar.gz"
+
+tar -czf "$temp/large-other.tar.gz" --transform='s|^uploads|other|' -C "$temp/large" uploads
+expect_reject "$temp/large-other.tar.gz"
+
+tar -czf "$temp/large-traversal.tar.gz" --transform='s|^uploads|uploads/../outside|' -C "$temp/large" uploads
+expect_reject "$temp/large-traversal.tar.gz"
+
+tar -czf "$temp/large-absolute.tar.gz" --transform='s|^uploads|/uploads|' -C "$temp/large" uploads
+expect_reject "$temp/large-absolute.tar.gz"
+
+printf 'not a gzip archive\n' > "$temp/corrupt.tar.gz"
+expect_reject "$temp/corrupt.tar.gz"
+
+echo '13 attachment archive scenarios passed'

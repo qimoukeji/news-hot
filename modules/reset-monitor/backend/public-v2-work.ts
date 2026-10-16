@@ -16,10 +16,10 @@ export async function clearPublicV2Work(db: Db, id: string) {
 }
 
 /** Accepted facts remain successful; only the optional editorial work needs review. */
-export async function publicV2WorkReview(id: string, error: unknown, version: string, receiptId?: number) {
+export async function publicV2WorkReview(id: string, error: unknown, version: string, receiptId?: number, db: Db = sql) {
   const reason = String(error).replace(/postgres(?:ql)?:\/\/\S+/gi, "[database]").slice(0, 1000);
-  await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${publicV2PendingKey(id)},
-    ${sql.json({ status: "needs_review", reason, version, at: new Date().toISOString(), ...(receiptId !== undefined ? { receiptId } : {}) })})
+  await db`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${publicV2PendingKey(id)},
+    ${db.json({ status: "needs_review", reason, version, at: new Date().toISOString(), ...(receiptId !== undefined ? { receiptId } : {}) })})
     ON CONFLICT(monitor_id,key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()`;
 }
 

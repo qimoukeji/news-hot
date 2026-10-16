@@ -175,7 +175,7 @@ export function projectPublicV2(input: PublicV2Input, definition: ResetMonitorBa
     } satisfies ResetEvent;
   }).sort((a, b) => Date.parse(timeBoundary(b.time)!) - Date.parse(timeBoundary(a.time)!) || byId(a, b));
   const completed = events.filter(event => event.type === "direct_reset" && event.status === "completed");
-  const latest = completed[0];
+  const latest = completed.find(event => exactTime(event) !== null);
   const anchor = latest ? exactTime(latest) : null;
   const forecastSamples = anchor === null ? [] : completed.filter(event => {
     const at = exactTime(event); return at !== null && at >= anchor - 90 * 86_400_000 && at <= anchor;

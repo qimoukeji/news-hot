@@ -57,8 +57,13 @@ const model = await stub(async (_hit, request) => {
     enrichmentInputs.push(input);
     const def = definitions.find(def => def.authors.some(author => author.handle.toLowerCase() === post.author.toLowerCase()))!;
     const status = row.status;
+    const audience = `${row.scope} ${row.scopeLabel ?? ""} ${row.audienceZh ?? ""}`;
+    const productCodes = input.catalog.products.filter((entry: any) => row.productsZh === entry.name.en
+      || row.productsZh === "Grok 普通额度" && entry.code === "grok").map((entry: any) => entry.code);
+    const planCodes = input.catalog.plans.filter((entry: any) => row.scopeLabel === entry.name.en || row.scope === entry.name.en).map((entry: any) => entry.code);
     content = { title: publicV2Title(def.product, row.type, status), summary: properName("Synthetic public business summary."),
-      scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null },
+      scope: { type: /paid|付费|付費/i.test(audience) ? "paid_users" : "all_users", productCodes, planCodes,
+        quotaWindowCodes: row.quotaScope === "weekly" ? ["weekly"] : [], note: null },
       bonusCredit: row.type === "bonus_credit" ? { amount: null, eligibility: properName("All users."), claimMethod: null, usageTerms: null } : null,
       updateSummaries: input.links.filter((link: any) => ["announce", "confirm", "progress", "amend", "withdraw"].includes(link.action)).map((link: any) => ({ postId: link.post_id, summary: properName("Synthetic business update.") })),
       evidence: input.posts.map((source: any) => ({ postId: source.id, excerpt: source.text })), timeEvidence: status === "announced" && post.text.startsWith("ANNOUNCE") ? { postId: post.id, excerpt: post.text } : null };
@@ -68,6 +73,10 @@ const model = await stub(async (_hit, request) => {
     if (badOutput === "code") data.scope.planCodes = ["another-platform-plan"];
     if (badOutput === "unknown-scope") data.scope.type = "unknown";
     if (badOutput === "selected-note") data.scope.type = "selected_users";
+    if (badOutput === "scope-audience") data.scope.type = "all_users";
+    if (badOutput === "scope-plan") data.scope.planCodes = [];
+    if (badOutput === "scope-product") data.scope.productCodes = [];
+    if (badOutput === "scope-window") data.scope.quotaWindowCodes = [];
     if (badOutput === "attribution") data.summary.zh = "原帖称已完成重置。";
     if (badOutput === "update-attribution") data.updateSummaries[0].summary.zh = "原帖称已完成重置。";
     if (badOutput === "update-missing") data.updateSummaries = [];
@@ -309,6 +318,44 @@ test("an admin correction cannot commit without its durable v2 task", async () =
   assert.deepEqual((await read()).events[0], first);
 });
 
+for (const restriction of ["audience", "plan", "product", "window"] as const) test(`enrichment cannot drop an accepted ${restriction} restriction`, async () => {
+  variant = "reset";
+  await inMonitor(codex, () => collectPosts()); await inMonitor(codex, () => processPending());
+  const first = (await read()).events[0]!;
+  const source = restriction === "audience" ? "We reset usage for paid users only."
+    : restriction === "plan" ? "We reset usage for Pro subscribers only."
+    : restriction === "product" ? "We reset Codex usage for all users."
+    : "We reset the weekly quota for all users.";
+  await sql`UPDATE monitor_posts SET text=${source} WHERE monitor_id='codex'`;
+  if (restriction === "window") {
+    await sql`UPDATE monitor_events SET presentation=presentation||'{"quotaScope":"weekly"}'::jsonb WHERE monitor_id='codex' AND id=${first.id}`;
+  } else {
+    const [before] = await sql`SELECT updated_at FROM monitor_events WHERE monitor_id='codex' AND id=${first.id}`;
+    const patch = restriction === "audience" ? { audienceZh: "仅付费用户", scopeLabel: "paid users" }
+      : restriction === "plan" ? { scope: "Pro", scopeLabel: "Pro" } : { productsZh: "Codex" };
+    await inMonitor(codex, () => updateMonitorEvent(first.id, {
+      patch, reason: "Synthetic accepted audience correction", version: new Date(before!.updated_at).toISOString(),
+    }, "synthetic-admin"));
+  }
+  const [accepted] = await sql`SELECT scope,presentation FROM monitor_events WHERE monitor_id='codex' AND id=${first.id}`;
+  badOutput = `scope-${restriction}`;
+  assert.deepEqual(await inMonitor(codex, () => processPublicV2Pending()), { enriched: 0, enrichmentPending: 1 });
+  const [work] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key=${`public_v2:pending:${first.id}`}`;
+  assert.equal(work!.value.status, "needs_review");
+  assert.equal((await read()).events[0]!.summary, null, "a wider model scope must not become public");
+  assert.deepEqual((await sql`SELECT scope,presentation FROM monitor_events WHERE monitor_id='codex' AND id=${first.id}`)[0], accepted);
+  await inMonitor(codex, () => processPublicV2Pending());
+  assert.equal(enrichmentCalls, 1, "the rejected scope is not purchased again without a new edit");
+  badOutput = "";
+  await inMonitor(codex, () => enqueuePublicV2(sql, [first.id]));
+  assert.deepEqual(await inMonitor(codex, () => processPublicV2Pending()), { enriched: 1 });
+  const corrected = (await read()).events[0]!.scope;
+  if (restriction === "audience") assert.equal(corrected.type, "paid_users");
+  if (restriction === "plan") assert.deepEqual(corrected.planCodes, ["pro"]);
+  if (restriction === "product") assert.deepEqual(corrected.productCodes, ["codex"]);
+  if (restriction === "window") assert.deepEqual(corrected.quotaWindowCodes, ["weekly"]);
+});
+
 test("bonus enrichment keeps availability and precise deadlines after a conditional, date-only reminder", async () => {
   await inMonitor(claude, () => monitorTick());
   const original = (await read(claude)).events.find(event => event.type === "bonus_credit")!;
@@ -431,6 +478,33 @@ test("a received model answer is reused when its business transaction fails", as
   await inMonitor(codex, () => monitorTick());
   assert.equal(enrichmentCalls, 1); assert.equal(recognitionCalls, 1);
   assert.equal((await sql`SELECT status FROM receipts WHERE purpose LIKE '%.public_v2'`)[0]!.status, "completed");
+});
+
+for (const invalid of ["language", "quote"]) test(`an invalid ${invalid} answer is reused if saving its review status fails`, async () => {
+  variant = "reset"; badOutput = invalid;
+  await sql`CREATE FUNCTION reject_v2_review_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.key LIKE 'public_v2:pending:%' AND NEW.value->>'status'='needs_review' THEN RAISE EXCEPTION 'Synthetic review persistence failure'; END IF; RETURN NEW; END $$`;
+  await sql`CREATE TRIGGER reject_v2_review_test BEFORE INSERT OR UPDATE ON monitor_state FOR EACH ROW EXECUTE FUNCTION reject_v2_review_test()`;
+  try { await assert.rejects(inMonitor(codex, () => monitorTick()), /Synthetic review persistence failure/); }
+  finally { await sql`DROP TRIGGER reject_v2_review_test ON monitor_state`; await sql`DROP FUNCTION reject_v2_review_test()`; }
+  assert.equal(enrichmentCalls, 1); assert.equal(recognitionCalls, 1);
+  const [receipt] = await sql`SELECT id,status,response,attempts FROM receipts WHERE purpose LIKE '%.public_v2'`;
+  assert.equal(receipt!.status, "received", "rejecting the answer must roll back with its failed review write");
+  assert.equal(receipt!.attempts, 1); assert.ok(receipt!.response);
+  const [pending] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key LIKE 'public_v2:pending:%'`;
+  assert.equal(pending!.value.status, "pending");
+  assert.equal((await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key='cursor:socialdata'`)[0]!.value.scannedThrough, since);
+  badOutput = "";
+  const resumed = await inMonitor(codex, () => monitorTick());
+  assert.ok("enrichmentPending" in resumed && resumed.enrichmentPending === 1, "recovery validates the saved invalid answer");
+  assert.equal(enrichmentCalls, 1); assert.equal(recognitionCalls, 1);
+  const [saved] = await sql`SELECT status,response,attempts FROM receipts WHERE id=${receipt!.id}`;
+  assert.equal(saved!.status, "failed"); assert.equal(saved!.attempts, 1); assert.deepEqual(saved!.response, receipt!.response);
+  const [review] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key LIKE 'public_v2:pending:%'`;
+  assert.equal(review!.value.status, "needs_review"); assert.equal(review!.value.receiptId, receipt!.id);
+  assert.equal((await read()).events[0]!.summary, null);
+  await inMonitor(codex, () => monitorTick());
+  assert.equal(enrichmentCalls, 1); assert.equal(recognitionCalls, 1);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM receipt_attempts WHERE receipt_id=${receipt!.id}`)[0]!.n, 1);
 });
 
 test("an interrupted recognition commit also resumes from its saved paid response", async () => {

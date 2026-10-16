@@ -399,6 +399,21 @@ test("forecast requires three exact completions and expired predictions use tomo
   assert.equal(projectPublicV2(input, codex, now).predictedResetTime, null);
 });
 
+test("newer date and range completions do not discard the latest precise forecast anchor", () => {
+  const input = fixture(), base = input.events[0]!;
+  const times = ["2026-10-04T00:00:00Z", "2026-10-08T00:00:00Z", "2026-10-12T00:00:00Z",
+    "2026-10-13", "2026-10-14T00:00:00Z/2026-10-14T02:00:00Z"];
+  input.events = times.map((_, index) => ({ ...structuredClone(base), id: `event-${index}` }));
+  input.links = input.events.map(row => ({ ...fixture().links[0]!, event_id: row.id }));
+  input.events.forEach((row, index) => {
+    row.presentation = { publicV2: { ...review({ ...input, events: [row] }), time: times[index]!, evidenceVersion: evidenceVersion(row, input) } };
+  });
+  const snapshot = projectPublicV2(input, codex, now);
+  assert.equal(snapshot.predictedResetTime, "2026-10-16T00:00:00.000Z");
+  assert.deepEqual(snapshot.statistics.typicalInterval, { value: 4, unit: "day", sampleCount: 2 });
+  assert.equal(snapshot.events[0]!.id, "event-4");
+});
+
 test("official publication nodes contribute to interval statistics and the forecast", () => {
   const input: PublicV2Input = { events: [], posts: [], links: [] };
   for (const day of [4, 8, 12]) {
@@ -461,6 +476,63 @@ test("source time completion handles explicit years, cross-year dates and missin
   assert.deepEqual(resolve("Jan 4 at 12am PST")!.time, { kind: "deadline", at: "2027-01-04T08:00:00Z" });
   assert.deepEqual(resolve("Jan 4 at 12pm PST")!.time, { kind: "deadline", at: "2027-01-04T20:00:00Z" });
   assert.equal(resolve("Jan 4")!.zoneBasis, "publication");
+});
+
+test("source timezone detection ignores URLs in expressions, posts and activity context", () => {
+  const text = "We will reset usage today at 2pm.";
+  const post = { ...fixture().posts[0]!, published_at: "2026-10-15T12:00:00Z", text };
+  for (const url of ["https://example.com/reset", "https://example.com/America/New_York", "www.example.com/reset"]) {
+    for (const [excerpt, postText, activityText] of [
+      [`${text} Details: ${url}`, `${text} Details: ${url}`, `${text} Details: ${url}`],
+      [text, `${text} Details: ${url}`, `${text} Details: ${url}`],
+      [text, text, `Details: ${url}`],
+    ]) assert.deepEqual(resolveEventExpression(excerpt!, { ...post, text: postText! }, true, activityText!),
+      { kind: "instant", at: "2026-10-15T14:00:00Z" }, `${url}: ${excerpt}`);
+  }
+  assert.deepEqual(resolveEventExpression(text, { ...post, text: `${text} Details: https://example.com/reset` }, true, "PT"),
+    { kind: "instant", at: "2026-10-15T21:00:00Z" });
+  assert.deepEqual(resolveEventExpression(text, { ...post, text: `${text} at 2pm XYZ` }, true, ""), { kind: "unknown" });
+});
+
+test("ISO occurrence timestamps and intervals retain offsets, seconds and fractional precision", () => {
+  const post = { ...fixture().posts[0]!, published_at: "2026-10-15T12:00:00Z" };
+  for (const [expression, time] of [
+    ["2026-10-15T10:00:00Z", { kind: "instant", at: "2026-10-15T10:00:00Z" }],
+    ["2026-10-15T10:00+08:00", { kind: "instant", at: "2026-10-15T02:00:00Z" }],
+    ["2026-10-15T10:00:32.123456789-07:00", { kind: "instant", at: "2026-10-15T17:00:32.123456789Z" }],
+    ["2026-10-15T10:00:00Z/2026-10-15T11:30:45.123Z", { kind: "range", from: "2026-10-15T10:00:00Z", through: "2026-10-15T11:30:45.123Z" }],
+    ["2026-10-15T10:00:00+08:00 to 2026-10-15T11:00:00+08:00", { kind: "range", from: "2026-10-15T02:00:00Z", through: "2026-10-15T03:00:00Z" }],
+  ] as const) {
+    const text = `We reset usage at ${expression}.`;
+    assert.deepEqual(resolveEventExpression(text, { ...post, text }, false, text), time, expression);
+  }
+  for (const expression of ["2026-10-15T25:00:00Z", "2026-02-30T10:00:00Z", "2026-10-15T10:00:00",
+    "2026-10-15T11:00:00Z/2026-10-15T10:00:00Z", "2026-10-15T11:00:00Z/2026-10-16"]) {
+    const text = `We reset usage at ${expression}.`;
+    assert.deepEqual(resolveEventExpression(text, { ...post, text }, false, text), { kind: "unknown" }, expression);
+  }
+});
+
+test("calendar reminders and confirmations infer years from the first announcement while relative times use their own post", () => {
+  const post = { ...fixture().posts[0]!, published_at: "2026-10-08T12:00:00Z" };
+  const resolve = (text: string, announcement = true, activityAnchor = "2026-09-30T12:00:00Z") =>
+    resolveEventExpression(text, { ...post, text }, announcement, text, activityAnchor);
+  for (const announcement of [true, false]) {
+    assert.deepEqual(resolve("Reset on Oct 7 at 10am UTC.", announcement), { kind: "instant", at: "2026-10-07T10:00:00Z" });
+    assert.deepEqual(resolve("Reset on Oct 7.", announcement), { kind: "date", date: "2026-10-07", timeZone: "UTC" });
+  }
+  post.published_at = "2027-01-08T12:00:00Z";
+  for (const announcement of [true, false]) {
+    assert.deepEqual(resolve("Reset on Jan 4 at 10am UTC.", announcement, "2026-12-29T12:00:00Z"),
+      { kind: "instant", at: "2027-01-04T10:00:00Z" });
+  }
+  assert.deepEqual(resolve("Reset on Jan 4, 2028 at 10am UTC."), { kind: "instant", at: "2028-01-04T10:00:00Z" });
+  assert.deepEqual(resolve("Reset today at 2pm UTC."), { kind: "instant", at: "2027-01-08T14:00:00Z" });
+  assert.deepEqual(resolve("Reset tomorrow at 2pm UTC."), { kind: "instant", at: "2027-01-09T14:00:00Z" });
+  assert.deepEqual(resolve("Reset in 2 hours."), { kind: "instant", at: "2027-01-08T14:00:00.000Z" });
+  const confirmation = "Reset on Dec 31 at 10am UTC.";
+  assert.deepEqual(resolveEventExpression(confirmation, { ...post, text: confirmation }, false, confirmation),
+    { kind: "instant", at: "2026-12-31T10:00:00Z" });
 });
 
 test("bonus parsing uses linked originals, respects reviewed times and never invents receipt or expiry state", () => {

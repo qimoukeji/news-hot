@@ -85,6 +85,8 @@ export interface ChatJsonOptions<S extends z.ZodType> {
   extra?: Record<string, unknown>;
   attemptTag?: string;
   retryFailed?: boolean;
+  /** The caller atomically rejects invalid output with its durable review state. */
+  deferOutputRejection?: boolean;
   timeoutMs?: number;
   /** false: the model answers in its own text format (no JSON mode); `parse` turns it into the schema's input. */
   json?: boolean;
@@ -231,7 +233,7 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
     const detail = response.choices?.[0]?.finish_reason === "length"
       ? `output token limit reached (finish_reason=length): a reasoning model may have spent it reasoning; give it room with ${spec.key === "default" ? "LLM_REASONING_TOKENS" : `reasoningTokens on preset ${spec.key}`}. ${String(error)}`
       : String(error);
-    await rejectReceivedResponse(receipt.receiptId, `unusable output: ${detail.slice(0, 500)}`);
+    if (!opts.deferOutputRejection) await rejectReceivedResponse(receipt.receiptId, `unusable output: ${detail.slice(0, 500)}`);
     throw new ModelOutputError(`Model ${opts.model} returned unusable output for ${opts.subject}: ${detail.slice(0, 300)}`, receipt.receiptId);
   }
   return { data: parsed, receiptId: receipt.receiptId, reused: receipt.reused, model: spec.key, usage: response.usage ?? null };
