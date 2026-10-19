@@ -260,6 +260,8 @@ export const ACCESS = {
 
 /** 这个部署自己的几处安排（选填）。 */
 export const DEPLOYMENT = {
+  /** 启用的框架定时任务；模块定时任务独立注册。 */
+  engineSchedules: ["ops.recover", "ops.alerts", "ops.retention"] as string[],
   /** 凭据分组文件（models.env、collectors.env……）默认放在哪个目录，相对仓库根目录；环境变量 AIHOT_CREDENTIALS_DIR 优先，都没有就只读环境变量。 */
   credentialsDir: null as string | null,
   /** 凭据分组的文件名（放在凭据目录下，选填）：没写的分组用“分组名.env”，比如 models.env。 */

@@ -13,17 +13,17 @@ timeSourceId 指向实际说出时间的主帖或直接父帖；相对时间按�
 export function buildResetMonitorPrompt(definition: ResetMonitorDefinition, productRules: string, authorTimeRules: Readonly<Record<string, string>> = {}): string {
   const authors = definition.authors.map(author => `${author.name}（@${author.handle}，时间策略=${author.timePolicy ?? "explicit"}${author.defaultProduct ? `，缺失产品默认=${author.defaultProduct}` : ""}）`).join("、");
   return `你是 ${SITE.name} 的 ${definition.product} 额度动态识别器。主信源是 ${authors}，每个配置账号均可独立提供依据。输入标明实际主帖作者，只允许这些账号提供官方动作和奖励时间；其他作者只能作上下文，不能把其承诺归给主帖作者。已知套餐：${definition.plans.join("、") || "未预设，仅保留原文"}。
-读取主帖、回复及引用上下文，输出严格 JSON。
+读取非回复主帖及采集响应附带的引用正文，输出严格 JSON。不补采回复或父帖。
 
 共同规则：
 - direct_reset=恢复产品已有用量计数；reset_credit=用户可手动兑换的重置次数；bonus_credit=额外可消费的一次性奖励额度，独立消费池，不是恢复计数或可兑换的重置次数。
 - announce=明确承诺将做；progress=执行中未完成；confirm=明确已完成或奖励活动已可领取；amend=更正或补充；withdraw=撤回。活动可领取只表示官方开放，不表示个人已领取或到账。
 - 明确完成且目标唯一使用 confirm，普通解释、对象补充或修复说明使用 amend，不因是后续帖子就使用 confirm。个人账户到账或恢复不能证明整个活动完成；只保留原文明示的个人范围，普通个人反馈用 role=explanation、real=false，不把其改写为全体确认；无法确定动作或目标时保留复核。
 - kind 不明时按最可能的一种填、kindExplicit=false。count 表示同次动作的明确轮数，默认1；复数不证明多轮，奖励 count 永远1，金额、tokens和覆盖人数不得充作轮数。
-- role=action/answer/explanation/policy/uncertain。只有明确动作或直接回答唯一明确事件问题才可 real=true。Yes/Granted/Soon 等简短回复只结合直接父帖；父帖同时问重置和 API 赠金、回复对象不清楚时复核。
+- role=action/answer/explanation/policy/uncertain。只有明确动作或借主帖引用关系直接回答唯一明确事件问题才可 real=true。简短主帖缺少可核验对象时不得借无关历史猜测；引用同时涉及重置和 API 赠金且动作不清楚时复核。
 - 纯解释、惯例、未满足条件、玩笑、假设、暗示和否认不生成事件，也不因此复核。仅有相关暗示但没有明确动作不能借祖先承诺生成事件。
 - 普通限额提升、日常自动周期重置、API credits、API 赠金、赠送 API tokens、模型发布和普通政策不生成事件。自动下发已宣布的一次性重置仍是动作；同帖混合事件与无关内容逐命题提取，不能整帖排除。
-- 主帖引文必须是该主帖自己的真实原句，excerptZh 是忠实中文翻译。不得借父帖引文冒充主帖证据。翻译整条相关主帖及上下文，保留换行、@和链接。
+- 主帖引文必须是该主帖自己的真实原句，excerptZh 是忠实中文翻译。不得借引用正文冒充主帖证据。翻译整条相关主帖及引用正文，保留换行、@和链接。
 - 同一动作重复表述、解释原因、数量或适用对象只记一次；重复命题 duplicateOf 指向之前命题的零起始编号，不增加 count；another/again/新一轮等明确证据才新增。
 - relatesTo 只能逐字复制输入待关联事件数组的 id，不能用帖子 id、自造 id；输入没有目标时填 null。明确完成且没有已知目标可输出 confirm，但回顾事实缺少发生时间或唯一目标时复核，不记作当前日发生。
 - 进度、确认、修正、领取提醒及使用细则关联同一事件；已有确认或相隔多日不证明新轮次。多个目标无法区分时复核，不能取最近事件猜。跨账号关联须有回复/引用、明确同一轮次等可核验依据，作者或时间相近不能证明同一事件。

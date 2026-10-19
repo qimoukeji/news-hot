@@ -216,8 +216,7 @@ export interface AdminMonitorPost {
   needs_review: boolean | null;
   held: Array<{ action: string; excerpt: string; reason?: string }> | null;
   skipped: boolean | null;
-  collection_only?: boolean;
-  collection_failure?: { phase: "context" | "recognition"; at: string; error: string; receiptId?: number } | null;
+  collection_failure?: { at: string; error: string; receiptId?: number } | null;
   source_issue?: string | null;
   relevant: boolean | null;
   outage: unknown;

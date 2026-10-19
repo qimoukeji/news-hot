@@ -1,4 +1,3 @@
-import "../../reset-monitor/tests/automatic-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";

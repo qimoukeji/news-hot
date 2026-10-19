@@ -2,25 +2,13 @@
 
 采集配置账号发布的 Claude 额度重置、重置卡与一次性奖励额度消息，提供中文原帖、公告与确认、北京时间、适用范围和历史日历。初始名单保留 [@ClaudeDevs](https://x.com/ClaudeDevs)，多账号、套餐和采集范围在 `site/reset-monitors.ts` 配置。未配置作者仅作上下文，不能作为官方承诺；跨账号关联须有可核验的同一事件依据。页面使用“Claude 额度动态”，现有 URL、模块与任务标识保持不变。
 
-## 配置与初始化
+## 配置与运行
 
-```dotenv
-CLAUDE_RESET_PROVIDER=socialdata
-CLAUDE_RESET_SCAN_MINUTES=15
-MONITOR_MODEL=default
-# SOCIALDATA_API_KEY=<your-key>
-# 也可使用 twitterapi_io，凭据与 Codex 共用 TWITTERAPI_IO_API_KEY。
-```
+账号在 `site/reset-monitors.ts`，初始账号为 `@ClaudeDevs`。使用 `CLAUDE_RESET_PROVIDER`、`CLAUDE_RESET_SCAN_MINUTES` 与共享 `MONITOR_MODEL`；默认 SocialData、每 15 分钟扫描，支持 TwitterAPI.io。配置修改后重启 API 与 worker。
 
-默认 SocialData、每 15 分钟增量扫描，任务为 `claude-reset.tick`。本站与 Codex、Grok 统一在 `site/reset-monitors.ts` 使用 `processingMode: "collect_only"`：仅采新主帖，原文保存后标记处理完成，不补历史、上下文或自动识别，不注册每日查漏。没有识别结果的帖子显示“仅采集”，不标为无关。首次任务按使用者要求结案，原文、事件和原始判断保留，人工复核仍可使用。修改配置后重启 API 和 worker；共享引擎显式 `automatic` 模式才使用 `MONITOR_MODEL`。
+三个平台统一只采非回复主帖，排除回复、自回复和纯转推，保留非回复引用帖；不加内容关键词。模型识别后关联事件并补齐 v2，没有父帖补采或历史初始化。新安装从首次运行时刻向前采集，已有截止继续完整增量窗口。历史事件及相关证据保留，无关旧采集记录按清单备份后清理。具体流程、失败语义及清理命令见 [共享引擎](../reset-monitor/README.md)。
 
-开发保持 `COLLECT_ENABLED=false`、`MODEL_CALLS_ENABLED=false` 和推送安全阀关闭。采集凭据、预算、代理与 Codex 共用，执行锁、成功检查点、事件、回执用途和通知各自独立。初始化先确认真实有限范围，再执行：
-
-```bash
-npm run initialize -w @aihot/claude-reset -- --since 2026-10-08T00:00:00Z --until 2026-10-09T00:00:00Z
-```
-
-此命令只采主帖，需单独授权开启采集安全阀、配置供应商凭据与预算，无需模型开关或凭据。起止时间必须带时区且 `since < until <= 当前时间`；首次初始化失败保留帖子和分页断点，以相同范围及配置重跑可继续，更换同供应商账号不重采已提交页，全部主帖分页成功才推进采集截止。普通增量不使用分页断点，从成功截止采到本轮开始，失败保留原截止。当前已结案任务从结案时刻继续增量，缺失历史不再补采。Docker 命令、详细采集规则和人工复核见 [共享引擎说明](../reset-monitor/README.md)。
+采集、模型与推送的安全阀默认关闭；真实调用及公开部署按运营授权执行。
 
 ## 识别与时间
 

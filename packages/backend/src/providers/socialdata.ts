@@ -22,6 +22,8 @@ export interface SdTweet {
   text?: string;
   lang?: string;
   user: SdUser;
+  is_reply?: boolean;
+  is_retweet?: boolean;
   in_reply_to_status_id_str?: string | null;
   in_reply_to_screen_name?: string | null;
   quoted_status?: SdTweet | null;
@@ -94,12 +96,12 @@ function validateMonitorTweet(tweet: SdTweet, depth = 0) {
  * Searches recent tweets. `window` makes the receipt identity time-bucketed so a retry in the same
  * bucket reuses the stored response instead of paying again.
  */
-export async function searchTweets(query: string, opts: { purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null; resume?: boolean }): Promise<SearchResult> {
+export async function searchTweets(query: string, opts: { purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null }): Promise<SearchResult> {
   const type = opts.type ?? "Latest";
   const sp = new URLSearchParams({ query, type });
   if (opts.cursor) sp.set("cursor", opts.cursor);
   const receipt = await get<{ tweets?: SdTweet[] }>(`/twitter/search?${sp}`,
-    { purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window }, requestSummary: { query, type }, retryFailed: opts.resume },
+    { purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window }, requestSummary: { query, type } },
     {
       // Deeper pages of a search over two dozen accounts can take well over 20 seconds.
       timeoutMs: 60_000,
@@ -167,17 +169,4 @@ export async function getArticle(tweetId: string, opts: { purpose: string; subje
       },
     });
   return (receipt.response as SdArticle | null) ?? null;
-}
-
-/** One tweet by id (context for replies and quotes). Saved answers are reused without another call. */
-export async function getTweet(id: string, opts: { purpose: string; subject: string; roundId?: string; resume?: boolean }): Promise<SdTweet | null> {
-  const receipt = await get<SdTweet>(`/twitter/tweets/${encodeURIComponent(id)}`,
-    { purpose: opts.purpose, subject: opts.subject, identity: { tweet: id }, requestSummary: { tweet: id }, attemptTag: opts.roundId, retryFailed: opts.resume },
-    { ...LOOKUP, missing: { tweets: 0 }, settle: (json) => ({ response: json, usage: { tweets: 1 }, cost: objectsCost(1) }) });
-  const tweet = (receipt.response as SdTweet | null) ?? null;
-  if (tweet && isMonitorRequest(opts.purpose)) {
-    try { validateMonitorTweet(tweet); }
-    catch (error) { await rejectReceivedResponse(receipt.receiptId, String(error)); throw error; }
-  }
-  return tweet;
 }

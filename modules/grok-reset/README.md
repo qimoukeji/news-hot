@@ -1,6 +1,6 @@
 # Grok 额度动态
 
-采集配置账号的额度重置、重置卡和一次性奖励额度。初始名单保留 [@bot](https://x.com/bot) 与 [@grok](https://x.com/grok)，账号、默认产品、套餐和筛选集中在 `site/reset-monitors.ts`。配置账号均可独立提供事件依据，其他作者仅作上下文。使用 [共享重置监控引擎](../reset-monitor/README.md)，不新建数据表。
+采集配置账号的额度重置、重置卡和一次性奖励额度。初始名单保留 [@bot](https://x.com/bot) 与 [@grok](https://x.com/grok)，账号、默认产品、套餐集中在 `site/reset-monitors.ts`。配置账号均可独立提供事件依据，其他作者仅作上下文。使用 [共享重置监控引擎](../reset-monitor/README.md)，不新建数据表。
 
 ## 产品与时间
 
@@ -10,25 +10,13 @@
 
 只有明确时区的时间或明确相对时长才换算北京时间，缺时间显示“时间未说明”，不采用到账预测。
 
-## 配置与初始化
+## 配置与运行
 
-```dotenv
-GROK_RESET_PROVIDER=socialdata
-GROK_RESET_SCAN_MINUTES=15
-MONITOR_MODEL=default
-```
+账号在 `site/reset-monitors.ts`，初始账号为 `@bot`、`@grok`。使用 `GROK_RESET_PROVIDER`、`GROK_RESET_SCAN_MINUTES` 与共享 `MONITOR_MODEL`；默认 SocialData、每 15 分钟扫描，支持 TwitterAPI.io。配置修改后重启 API 与 worker。
 
-提供商支持 SocialData 与 TwitterAPI.io，凭据和预算与其他监控共用。本站与 Codex、Claude 统一在 `site/reset-monitors.ts` 使用 `processingMode: "collect_only"`，只采新主帖，保存原文并标记处理完成，不补历史、上下文或自动识别；没有识别结果的帖子在后台显示“仅采集”，不冒充无关结论。首次任务按使用者要求结案，未采范围不再续跑，原文、事件和原始判断保留。人工复核仍可使用，外部采集需另行授权。默认每 15 分钟按 `bot`、`grok` 顺序读取同一增量窗口，只有 `grok-reset.tick`，不注册每日查漏；任一作者失败保持原采集截止，下一轮按帖子 ID 去重。
+三个平台统一只采非回复主帖，排除回复、自回复和纯转推，保留非回复引用帖；不加内容关键词。模型识别后关联事件并补齐 v2，没有父帖补采或历史初始化。新安装从首次运行时刻向前采集，已有截止继续完整增量窗口。历史事件及相关证据保留，无关旧采集记录按清单备份后清理。具体流程、失败语义及清理命令见 [共享引擎](../reset-monitor/README.md)。
 
-开发与测试关闭外部采集、模型和推送。新安装或切换提供商的初始化须另行确认有限时间范围、凭据、预算并明确授权付费采集；只开启 `COLLECT_ENABLED`，保持 `MODEL_CALLS_ENABLED=false`：
-
-```bash
-npm run initialize -w @aihot/grok-reset -- --since <带时区ISO时间> --until <带时区ISO时间> --collect-only
-```
-
-持久 `collect_only` 策略保存原文和处理完成标记，`recognition` 保持空；即使省略命令的 `--collect-only` 也不会自动识别。所有主帖分页成功即推进采集截止并清理断点。命令不修改 `.env`，要求 `since < until <= 当前时间`；失败后以相同参数及配置重跑可继续，更换同一供应商账号或密钥不重复采已提交页。当前已结案任务从结案时刻继续增量，不重新启动初始化。Docker 使用 `docker compose run --rm worker npm run initialize -w @aihot/grok-reset -- --since <ISO> --until <ISO>`。
-
-`initial-filter.ts` 保留首次 90 天所用筛选配置：全部非回复帖和额度相关官方回复；查询组与额外范围的定义供审计，已结案任务不再执行这些历史查询。常规增量可选筛选只在当前窗口查询，不补旧范围。未采满的 90 天不能宣称已完整覆盖，查询词和长度测试不代表真实供应商搜索召回率。
+采集、模型与推送的安全阀默认关闭；真实调用及公开部署按运营授权执行。
 
 ## 入口
 

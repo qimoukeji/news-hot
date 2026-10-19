@@ -5,7 +5,7 @@ export const publicV2PendingKey = (id: string) => `public_v2:pending:${id}`;
 
 /** Durable work is recorded with facts, including facts committed just before a worker stops. */
 export async function enqueuePublicV2(db: Db, ids: string[]) {
-  if (monitor().processingMode !== "automatic_incremental" || !monitor().publicV2) return;
+  if (!monitor().publicV2) return;
   for (const id of new Set(ids)) await db`INSERT INTO monitor_state(monitor_id,key,value)
     VALUES(${monitorId()},${publicV2PendingKey(id)},'{"status":"pending"}'::jsonb)
     ON CONFLICT(monitor_id,key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()`;

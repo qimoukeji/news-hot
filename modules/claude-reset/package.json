@@ -2,9 +2,6 @@
   "name": "@aihot/claude-reset",
   "private": true,
   "type": "module",
-  "scripts": {
-    "initialize": "node --env-file-if-exists=../../.env scripts/initialize.ts"
-  },
   "exports": {
     "./module": "./module.ts",
     "./server": "./server.ts",

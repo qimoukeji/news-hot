@@ -1,4 +1,3 @@
-import { collectsForwardOnly } from "./definition.ts";
 import { z } from "zod";
 import { defineServerModule } from "@aihot/backend/modules";
 import { modulePublication } from "@aihot/backend/publication/modules";
@@ -17,7 +16,7 @@ import { paginatePublicV2, type PublicV2Query } from "./backend/public-v2-list.t
 import { platformOverviewSchema } from "./public-v2.ts";
 
 export function monitorNames(id: string): ResetMonitorBackendDefinition["names"] {
-  return { tick: `${id}-reset.tick`, lookback: `${id}-reset.lookback`, purposePrefix: `reset_monitor.${id}`,
+  return { tick: `${id}-reset.tick`, purposePrefix: `reset_monitor.${id}`,
     auditActionPrefix: `reset_monitor.${id}`, auditSubjectPrefix: `reset_monitor.${id}`,
     deliveryKind: `${id}_reset`, deliveryPrefix: id };
 }
@@ -67,7 +66,6 @@ export function createMonitorServer(definition: ResetMonitorBackendDefinition) {
     models: { monitor: { label: "重置监控识别与 v2 补全", env: "MONITOR_MODEL", purposes: [`${definition.names.purposePrefix}.recognize`, `${definition.names.purposePrefix}.public_v2`] } },
     schedules: [
       { name: definition.names.tick, cron: scanCron(), retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick()) },
-      ...(collectsForwardOnly(definition) ? [] : [{ name: definition.names.lookback, cron: "40 4 * * *", retryLimit: 0, when: () => process.env.COLLECT_ENABLED === "true", run: bound(() => monitorTick({ lookbackHours: 24 })) }]),
     ],
     sitemap: { pages: [{ loc: definition.pagePath, changefreq: "hourly" }] },
     llms: bound(() => ({ api: [`- ${subject}：${definition.publicApiPath}/recent（最近七天及未完成事件）；${definition.publicApiPath}（完整历史）`],

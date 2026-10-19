@@ -1,15 +1,16 @@
-import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "../context.ts";
 import { z } from "zod";
 import { credential } from "@aihot/backend/config";
 import { sql } from "@aihot/backend/db";
 import { guardedFetch } from "@aihot/backend/lib/http-fetch";
 import { assertAccepted, assertRequestCanSend, paidRequest, ProviderNotSentError, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
-import type { Tweet, SearchOptions, LookupOptions } from "./collectors.ts";
+import type { Tweet, SearchOptions } from "./collectors.ts";
 import { pacedTwitterApiRequest } from "./twitterapi-pacing.ts";
 
 const Post = z.object({
   id: z.string().regex(/^\d+$/), text: z.string(), createdAt: z.string().refine(s => Number.isFinite(Date.parse(s))),
   author: z.object({ userName: z.string().min(1), name: z.string(), profilePicture: z.string().optional() }),
+  isReply: z.boolean().optional(),
+  isRetweet: z.boolean().optional(),
   inReplyToId: z.string().nullish(), inReplyToUsername: z.string().nullish(),
   entities: z.object({ urls: z.array(z.object({ url: z.string(), expanded_url: z.string() })).optional() }).optional(),
   quoted_tweet: z.unknown().optional(), retweeted_tweet: z.unknown().optional(),
@@ -35,6 +36,8 @@ export function normalizeTweet(raw: unknown, depth = 0): Tweet {
   return {
     id_str: t.id, full_text: t.text, tweet_created_at: t.createdAt,
     user: { name: t.author.name, screen_name: t.author.userName, profile_image_url_https: t.author.profilePicture },
+    is_reply: t.isReply ?? !!(t.inReplyToId || t.inReplyToUsername),
+    is_retweet: t.isRetweet ?? !!t.retweeted_tweet,
     in_reply_to_status_id_str: t.inReplyToId, in_reply_to_screen_name: t.inReplyToUsername,
     entities: t.entities,
     quoted_status: nestedTweet(t.quoted_tweet, depth),
@@ -53,15 +56,14 @@ export async function ensureTwitterApiBudget() {
   if (!budget) throw new Error("Configure a twitterapi_io budget before collection");
 }
 
-async function request(path: string, opts: { purpose: string; subject: string; identity: unknown; summary: Record<string, unknown>; roundId?: string; resume?: boolean; reuseReceivedAcrossAttempts?: boolean }) {
+async function request(path: string, opts: { purpose: string; subject: string; identity: unknown; summary: Record<string, unknown> }) {
   if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
   const key = credential("collectors", "TWITTERAPI_IO_API_KEY");
   if (!key) throw new Error("TWITTERAPI_IO_API_KEY is not configured");
   const base = (credential("collectors", "TWITTERAPI_IO_BASE_URL") ?? "https://api.twitterapi.io").replace(/\/$/, "");
   await ensureTwitterApiBudget();
   const receipt = await paidRequest({ service: "twitterapi_io", purpose: opts.purpose, subject: opts.subject,
-    identity: { base, input: opts.identity }, requestSummary: opts.summary, attemptTag: opts.roundId, retryFailed: opts.resume,
-    reuseReceivedAcrossAttempts: opts.reuseReceivedAcrossAttempts }, () => pacedTwitterApiRequest(async () => {
+    identity: { base, input: opts.identity }, requestSummary: opts.summary }, () => pacedTwitterApiRequest(async () => {
     await assertRequestCanSend("twitterapi_io");
     if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
     const res = await guardedFetch(`${base}${path}`, { route: "egress", headers: { "X-API-Key": key, accept: "application/json" }, timeoutMs: 60_000, maxBytes: 12 * 1024 * 1024 });
@@ -87,8 +89,4 @@ export function searchTweets(query: string, opts: SearchOptions) {
   if (opts.cursor) params.set("cursor", opts.cursor);
   return request(`/twitter/tweet/advanced_search?${params}`, { ...opts,
     identity: { query, queryType, cursor: opts.cursor ?? null, window: opts.window }, summary: { query, queryType } });
-}
-export async function getTweet(id: string, opts: LookupOptions): Promise<Tweet | null> {
-  const page = await request(`/twitter/tweets?${new URLSearchParams({ tweet_ids: id })}`, { ...opts, identity: { id }, summary: { id }, reuseReceivedAcrossAttempts: opts.resume });
-  return page.tweets.find(t => t.id_str === id) ?? null;
 }

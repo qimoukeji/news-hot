@@ -76,7 +76,6 @@ export async function postRows(db: Db, id?: string) {
     p.recognition->'propositions' AS propositions,(${awaitingReviewCondition()}) AS needs_review,
     p.recognition->'held' AS held,
     (p.recognition->>'skipped')::boolean AS skipped,
-    coalesce(p.recognition IS NULL AND p.raw->'processingCompletion'->>'mode' = 'collect_only', false) AS collection_only,
     p.raw->'collectionFailure' AS collection_failure,
     coalesce(p.recognition->>'sourceIssue',p.raw->>'sourceIncomplete') AS source_issue,
     (p.recognition->>'relevant')::boolean AS relevant,p.outage,p.recognition->'manualReview' AS manual_review,

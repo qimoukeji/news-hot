@@ -13,7 +13,6 @@ import { recordRun } from "@aihot/backend/jobs/queue";
 import { publicV2Title, properName } from "../backend/public-v2.ts";
 import { resetsSnapshot, resetVersion } from "../backend/read.ts";
 import { reviewedEventSchema, resetSnapshotSchema, type ResetSnapshot } from "../public-v2.ts";
-import { reconcileCollectionCoverage } from "../backend/collection-coverage.ts";
 import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
@@ -122,13 +121,7 @@ const read = (definition = codex) => modulePublication<ResetSnapshot>(definition
 
 test("site monitors enable forward automatic processing and never schedule or resurrect historical lookback", async () => {
   for (const def of definitions) {
-    assert.equal(def.processingMode, "automatic_incremental");
     assert.deepEqual(createMonitorServer(def).schedules!.map(schedule => schedule.name), [def.names.tick]);
-    assert.deepEqual(await inMonitor(def, () => collectPosts({ lookbackHours: 24 })), { stored: 0, pages: 0 });
-    assert.deepEqual(await inMonitor(def, () => monitorTick({ lookbackHours: 24 })), { skipped: true, reason: "historical_collection_disabled" });
-    const old = { ...def, collectionFilter: { query: "old", version: "old", reason: "Synthetic", accepts: () => true } };
-    const saved = reconcileCollectionCoverage(null, old, since, since);
-    assert.deepEqual(reconcileCollectionCoverage(saved, def, started.toISOString(), null).retiredScopes, []);
     assert.equal(isMonitorRequest(`${def.names.purposePrefix}.public_v2`), true);
   }
 });
@@ -162,17 +155,7 @@ test("new posts flow through recognition, all three event kinds, seven languages
   assert.equal(incomplete!.n, 0);
 });
 
-test("cutover ignores all pre-existing pending and collection-only posts", async () => {
-  variant = "reset";
-  await sql`INSERT INTO monitor_posts(monitor_id,id,author,published_at,text,url,raw,processed_at) VALUES
-    ('codex','old-pending',${codex.authors[0]!.handle},${postAt},'Old unprocessed reset','https://x.com/i/status/old-pending','{"contextPending":true}'::jsonb,NULL),
-    ('codex','old-collected',${codex.authors[0]!.handle},${postAt},'Old collected reset','https://x.com/i/status/old-collected','{"processingCompletion":{"mode":"collect_only"}}'::jsonb,now())`;
-  await inMonitor(codex, () => monitorTick());
-  assert.equal(recognitionCalls, 1); assert.equal(enrichmentCalls, 1);
-  const rows = await sql`SELECT id,recognition,processed_at FROM monitor_posts WHERE id LIKE 'old-%' ORDER BY id`;
-  assert.equal(rows[0]!.recognition, null); assert.equal(rows[1]!.recognition, null); assert.equal(rows[1]!.processed_at, null);
-  assert.equal((await read()).events.length, 1);
-});
+
 
 test("automatic enrichment stores the default audience and latest update when timing is unstated", async () => {
   variant = "reset"; badOutput = "unknown-scope";
@@ -222,7 +205,7 @@ test("a new follow-up refreshes the existing event without changing identity or 
   const id = "10099", text = "AMEND: All users were included in that reset.";
   bodies.set(id, text);
   await sql`INSERT INTO monitor_posts(monitor_id,id,author,published_at,text,url,raw) VALUES
-    ('codex',${id},${codex.authors[0]!.handle},${new Date(postAt.getTime() + 1000)},${text},${`https://x.com/i/status/${id}`},'{"processingMode":"automatic_incremental"}'::jsonb)`;
+    ('codex',${id},${codex.authors[0]!.handle},${new Date(postAt.getTime() + 1000)},${text},${`https://x.com/i/status/${id}`},'{}'::jsonb)`;
   await inMonitor(codex, () => monitorTick());
   const snapshot = await read();
   assert.equal(snapshot.events.length, 1); assert.equal(snapshot.events[0]!.id, first.id);
@@ -252,7 +235,7 @@ test("announcement, individual feedback, progress, confirmation and repair keep 
     bodies.set(id, text);
     const publishedAt = new Date(postAt.getTime() + (index + 1) * 1000);
     await sql`INSERT INTO monitor_posts(monitor_id,id,author,published_at,text,url,raw) VALUES
-      ('codex',${id},${codex.authors[0]!.handle},${publishedAt},${text},${`https://x.com/i/status/${id}`},'{"processingMode":"automatic_incremental"}'::jsonb)`;
+      ('codex',${id},${codex.authors[0]!.handle},${publishedAt},${text},${`https://x.com/i/status/${id}`},'{}'::jsonb)`;
     await inMonitor(codex, () => processPending());
     const pending = await read(), event = pending.events[0]!;
     assert.equal(pending.events.length, 1); assert.equal(event.id, first.id); assert.equal(event.publishedAt, first.publishedAt);

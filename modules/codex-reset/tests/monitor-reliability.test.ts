@@ -1,9 +1,8 @@
-import "../../reset-monitor/tests/automatic-fixture.ts";
 import { installModules } from "@aihot/backend/modules";
 import monitorModule from "../server.ts";
 installModules([monitorModule]);
 // Failure cases fixed before changing the monitor: malformed model output becoming an empty result;
-// overlapping scan/lookback losing cursor updates; truncated initial/lookback scans losing their tail;
+// failed paginated scans losing their tail or advancing the success cutoff;
 // unfinished review advancing the verified watermark; stale estimates/receipt dates after corrections;
 // relinking deleting evidence or leaving stale activity; amendments reaching uninformed groups;
 // cross-midnight windows, a model estimate before the stated time, and a duration counted as resets;
@@ -21,7 +20,7 @@ import { stopBoss } from "@aihot/backend/jobs/queue";
 import { applyRecognition } from "../backend/assemble.ts";
 import { codexResetPage, codexResetVersion, codexResetsRecent, codexResetsSnapshot, presentationStatus } from "../backend/read.ts";
 import { RecognitionSchema, type Recognition, type Proposition } from "../backend/recognize.ts";
-import { collectPosts, collectPendingContext, flushResetPushes, monitorTick, processPending, cleanupMonitorCollectionState } from "../backend/scan.ts";
+import { collectPosts, flushResetPushes, monitorTick, processPending } from "../backend/scan.ts";
 import { estimateFor, resolveStatedTime, scheduleFrom } from "../backend/time.ts";
 import { relinkPost, reviewReceipt, updateMonitorEvent } from "../backend/admin.ts";
 import { monitorPostDetail, previewMonitorReview } from "../backend/manual-review.ts";
@@ -49,6 +48,7 @@ beforeEach(async () => {
   await sql`DELETE FROM monitor_events`;
   await sql`DELETE FROM monitor_posts`;
   await sql`DELETE FROM monitor_state`;
+  await sql`INSERT INTO monitor_state(key,value) VALUES('cursor:socialdata',${sql.json({checkpointVersion:2,scannedThrough:new Date(Date.now()-3600_000).toISOString()})})`;
   await sql`DELETE FROM receipts WHERE purpose LIKE 'monitor.%'`;
   await sql`UPDATE budgets SET per_minute = 1000, per_hour = 10000, per_day = 100000 WHERE service IN ('socialdata', 'deepseek')`;
 });
@@ -83,64 +83,11 @@ test("malformed recognition aborts and the next round preserves every claim", as
   modelAnswer = {};
   await assert.rejects(processPending(), /unusable output/);
   assert.equal((await sql`SELECT processed_at FROM monitor_posts WHERE id = ${id}`)[0]!.processed_at, null);
-  assert.equal((await sql`SELECT raw FROM monitor_posts WHERE id = ${id}`)[0]!.raw.collectionFailure.phase, "recognition");
+  assert.match((await sql`SELECT raw FROM monitor_posts WHERE id = ${id}`)[0]!.raw.collectionFailure.error, /unusable output/);
   modelAnswer = valid;
   assert.deepEqual(await processPending(), { processed: 1, failed: 0 });
   assert.equal((await sql`SELECT raw FROM monitor_posts WHERE id = ${id}`)[0]!.raw.collectionFailure, undefined);
   assert.equal((await codexResetsSnapshot()).events.length, 1);
-});
-
-test("recognition waits for reply context and resumes after separate enrichment", async () => {
-  const id = await post("We will reset tonight");
-  await sql`UPDATE monitor_posts SET raw = ${sql.json({ contextPending: true, tweet: {
-    id_str: id, tweet_created_at: new Date().toISOString(), full_text: "We will reset tonight",
-    user: { screen_name: "thsottiaux" }, in_reply_to_status_id_str: "100",
-  } } as never)} WHERE id = ${id}`;
-  modelAnswer = rec();
-  const hits = model.hits();
-  assert.deepEqual(await processPending(), { processed: 0, failed: 0 });
-  assert.equal(model.hits(), hits);
-  answer = () => ({ id_str: "100", tweet_created_at: new Date().toISOString(), full_text: "Will you reset?", user: { screen_name: "reader" } });
-  assert.equal((await collectPendingContext()).completed, 1);
-  assert.deepEqual(await processPending(), { processed: 1, failed: 0 });
-  assert.equal((await codexResetsSnapshot()).events.length, 1);
-});
-
-test("normal scanning and daily lookback cannot run concurrently", async () => {
-  const entered = gate(); const release = gate();
-  let requests = 0;
-  answer = async () => { requests++; entered.open(); await release.promise; return { tweets: [] }; };
-  const first = monitorTick({ initialRange: { since: new Date(Date.now() - 24 * 3600_000).toISOString(), until: new Date().toISOString() } });
-  await entered.promise;
-  const second = monitorTick({ lookbackHours: 24 });
-  const result = await Promise.race([second, new Promise((r) => setTimeout(() => r(null), 200))]);
-  const beforeRelease = requests;
-  release.open();
-  await Promise.all([first, second]);
-  assert.deepEqual(result, { skipped: true, reason: "busy" });
-  assert.equal(beforeRelease, 1, "no second collection while the first is still running");
-  assert.equal(requests, 1, "a busy trigger skips instead of queuing another round");
-});
-
-for (const lookbackHours of [undefined, 24]) test(`a ${lookbackHours ? "lookback" : "first scan"} finishes all pages within one round`, async () => {
-  const ids = Array.from({ length: 12 }, (_, i) => String(8000000000000000100n - BigInt(i)));
-  // Provider results belong to the requested window, rather than being timestamped
-  // after the scan started as each asynchronous page response is generated.
-  const latestPostAt = Date.now() - 60_000;
-  const queries: string[] = [];
-  answer = (url) => {
-    const params = new URL(url, provider.url).searchParams;
-    const page = Number(params.get("cursor") ?? 0);
-    queries.push(params.get("query")!);
-    const since = Number(params.get("query")?.match(/since_time:(\d+)/)?.[1] ?? 0) * 1000;
-    const available = ids.map((id, i) => ({ id, at: latestPostAt - i * 3600_000 })).filter((p) => p.at >= since);
-    const post = available[page];
-    return { tweets: post ? [{ id_str: post.id, tweet_created_at: new Date(post.at).toISOString(), full_text: "hello", user: { screen_name: "thsottiaux" } }] : [], next_cursor: page + 1 < available.length ? String(page + 1) : null };
-  };
-  assert.equal((await collectPosts(lookbackHours === undefined ? { initialRange: { since: new Date(Date.now() - 24 * 3600_000).toISOString(), until: new Date().toISOString() } } : { lookbackHours })).pages, 12);
-  assert.equal((await sql`SELECT count(*) AS n FROM monitor_posts`)[0]!.n, ids.length);
-  assert.equal((await sql`SELECT key FROM monitor_state WHERE key LIKE 'cursor:%'`).length, 0);
-  assert.ok(queries.every(q => q === queries[0]), "all pages retain the round's exact interval");
 });
 
 test("business review does not prevent the whole-round success watermark", async () => {
@@ -163,43 +110,18 @@ test("page failure saves previous pages and aborts before context or recognition
   answer = url => {
     requests++;
     return new URL(url, provider.url).searchParams.has("cursor") ? new Reply(503, { error: "page two failed" }) : {
-      tweets: [{ id_str: "1001", tweet_created_at: postAt, full_text: "We will reset tonight", user: { screen_name: "thsottiaux" }, in_reply_to_status_id_str: "1000" }], next_cursor: "second",
+      tweets: [{ id_str: "1001", tweet_created_at: postAt, full_text: "We will reset tonight", user: { screen_name: "thsottiaux" } }], next_cursor: "second",
     };
   };
   const hits = model.hits();
   await assert.rejects(monitorTick(), /503/);
   assert.equal(requests, 2);
   assert.equal(model.hits(), hits);
-  assert.equal((await sql`SELECT raw FROM monitor_posts WHERE id='1001'`)[0]!.raw.contextPending, true);
+  assert.equal((await sql`SELECT raw FROM monitor_posts WHERE id='1001'`)[0]!.raw.contextPending, undefined);
   assert.deepEqual((await sql`SELECT value FROM monitor_state WHERE key='cursor:socialdata'`)[0]!.value, checkpoint);
 });
 
-test("context failure aborts before recognition without advancing success coverage", async () => {
-  const checkpoint = { checkpointVersion: 2, scannedThrough: "2026-09-20T00:00:00.000Z" };
-  await state("cursor:socialdata", checkpoint);
-  const postAt = new Date(Date.now() - 60_000).toISOString();
-  answer = url => url.includes("/search") ? { tweets: [{ id_str: "1001", tweet_created_at: postAt, full_text: "We will reset tonight", user: { screen_name: "thsottiaux" }, in_reply_to_status_id_str: "1000" }] }
-    : new Reply(503, { error: "context unavailable" });
-  const hits = model.hits();
-  await assert.rejects(monitorTick(), /503/);
-  assert.equal(model.hits(), hits);
-  assert.equal((await sql`SELECT raw FROM monitor_posts WHERE id='1001'`)[0]!.raw.collectionFailure.phase, "context");
-  await cleanupMonitorCollectionState();
-  assert.match((await sql`SELECT raw FROM monitor_posts WHERE id='1001'`)[0]!.raw.collectionFailure.error, /503/);
-  assert.deepEqual((await sql`SELECT value FROM monitor_state WHERE key='cursor:socialdata'`)[0]!.value, checkpoint);
-});
-
-test("more than twenty pending posts finish before a round advances its checkpoint", async () => {
-  for (let i = 0; i < 25; i++) await post("ordinary unrelated words");
-  modelAnswer = { relevant: false, translationZh: "普通发言", contextZh: [], outage: null, needsReview: false, propositions: [] };
-  const hits = model.hits();
-  const result = await monitorTick({ initialRange: { since: new Date(Date.now() - 24 * 3600_000).toISOString(), until: new Date().toISOString() } });
-  assert.equal("processed" in result ? result.processed : null, 25);
-  assert.equal(model.hits() - hits, 25);
-  assert.equal((await sql`SELECT count(*) AS n FROM monitor_posts WHERE processed_at IS NULL`)[0]!.n, 0);
-});
-
-test("recognition failure stops later posts and the next round completes with new receipts", async () => {
+test("recognition failure stops later posts and resumes the proven invalid request once", async () => {
   const checkpoint = { checkpointVersion: 2, scannedThrough: "2026-09-20T00:00:00.000Z" };
   await state("cursor:socialdata", checkpoint);
   await post("first ordinary post"); await post("second ordinary post");
@@ -211,7 +133,7 @@ test("recognition failure stops later posts and the next round completes with ne
   modelAnswer = { relevant: false, translationZh: "普通发言", contextZh: [], outage: null, needsReview: false, propositions: [] };
   await monitorTick();
   assert.equal(model.hits() - hits, 3);
-  assert.ok((await sql`SELECT attempts FROM receipts WHERE purpose='monitor.recognize'`).every(r => r.attempts === 1));
+  assert.deepEqual((await sql`SELECT attempts FROM receipts WHERE purpose='monitor.recognize' ORDER BY id`).map(r => r.attempts), [2, 1]);
   assert.equal((await sql`SELECT count(*) AS n FROM monitor_posts WHERE processed_at IS NULL`)[0]!.n, 0);
 });
 
@@ -224,17 +146,6 @@ test("global model uncertainty cannot block well-evidenced announcements and wit
   const unsure = rec({ action: "withdraw", excerpt: "No reset tonight", relatesTo: eventId }); unsure.needsReview = true;
   assert.deepEqual((await applyRecognition(withdrawal, unsure)).eventIds, [eventId]);
   assert.equal((await codexResetsSnapshot()).count, 1);
-});
-
-test("obsolete continuation and retry state is removed idempotently", async () => {
-  await state("cursor:socialdata", { sinceId: "900", backlog: [{ next: "rejected", stopAt: "100", since: "2020-01-01T00:00:00Z" }] });
-  await state("context:100", { needsReview: true, count: 2 });
-  await state("failures:100", { count: 5 });
-  await cleanupMonitorCollectionState();
-  await cleanupMonitorCollectionState();
-  assert.deepEqual((await sql`SELECT value FROM monitor_state WHERE key='cursor:socialdata'`)[0]!.value, { checkpointVersion: 2 });
-  assert.equal((await sql`SELECT key FROM monitor_state WHERE key LIKE 'context:%' OR key LIKE 'failures:%'`).length, 0);
-  assert.equal((await sql`SELECT key FROM monitor_state WHERE key='collection:cleanup:v2'`).length, 1);
 });
 
 test("manual schedule changes replace the old estimate; reopening clears confirmation evidence", async () => {

@@ -7,7 +7,7 @@
 // tracking for messages it returns and replacing the default digest policy.
 // Delivery goes through sendAlert (ops chat, internal-chat fallback; off unless FEISHU_INTERNAL_ENABLED).
 import { addDays, beijingAt, beijingDate, isValidDate } from "@aihot/contracts/time";
-import { ALERTS, EDITION_TIMES } from "@aihot/site";
+import { ALERTS, DEPLOYMENT, EDITION_TIMES } from "@aihot/site";
 import { sql } from "../db.ts";
 import { beijingDay, beijingStamp, duration, formatAlert, formatRecovery, sendAlert, type Finding, type Level } from "../notify/feishu.ts";
 import { stepsOnService } from "../editorial/models.ts";
@@ -37,7 +37,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
   // a site that stops changing. Skipped for 20 minutes after the worker starts, and where the valves are off.
   const [hb] = await sql<{ value: { startedAt?: string } }[]>`SELECT value FROM settings WHERE key = 'heartbeat.worker'`;
   const settled = !hb?.value.startedAt || now - Date.parse(hb.value.startedAt) > 20 * 60_000;
-  if (settled && collecting()) {
+  if (settled && collecting() && DEPLOYMENT.engineSchedules.includes("sources.schedule")) {
     const [last] = await sql<{ at: Date | null }[]>`SELECT max(a.discovered_at) AS at FROM articles a
       JOIN sources s ON s.id = a.source_id WHERE s.participation_mode = 'editorial' AND a.discovered_at > now() - interval '1 day'`;
     if (!last?.at || now - last.at.getTime() > QUIET_MINUTES * 60_000) {
@@ -57,7 +57,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
       }
     }
   }
-  if (settled && collecting() && modelsOn()) {
+  if (settled && collecting() && modelsOn() && DEPLOYMENT.engineSchedules.includes("content.sweep")) {
     const waiting = (await waitingSelectedNews()).filter((item) => now - item.since.getTime() >= GROUPING_WARN_AFTER_MS);
     if (waiting.length) {
       const manual = waiting.filter((item) => item.recovery === "manual").length;
@@ -97,8 +97,8 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
         since: p!.waiting >= 10 && p!.oldest ? p!.oldest : undefined,
       });
     }
-    out.push(...await dailyReportFindings(now));
   }
+  if (settled && collecting() && modelsOn() && DEPLOYMENT.engineSchedules.includes("reports.compose")) out.push(...await dailyReportFindings(now));
 
   // Money, and things only the owner can do
   out.push(...(await providerFindings()));
@@ -319,6 +319,12 @@ export async function checkAlerts(now = Date.now()) {
   const found = tell.filter((f) => f.level !== "later");
   const state = await alertState();
   const sent: string[] = [];
+  // Retiring a workflow closes its obsolete alert state without claiming a recovery.
+  for (const key of Object.keys(state)) {
+    if (dailyDate(key) && !DEPLOYMENT.engineSchedules.includes("reports.compose")
+      || key === "content.collect" && !DEPLOYMENT.engineSchedules.includes("sources.schedule")
+      || ["content.process", "content.grouping"].includes(key) && !DEPLOYMENT.engineSchedules.includes("content.sweep")) delete state[key];
+  }
   for (const f of found) {
     const open = state[f.key];
     if (open && now - Date.parse(open.sentAt) <= REPEAT_MS[f.level as Exclude<Level, "later">]) continue;

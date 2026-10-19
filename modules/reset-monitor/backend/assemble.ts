@@ -266,7 +266,7 @@ async function createEvent(tx: Tx, p: Proposition, postId: string, index: number
 
 /**
  * Applies one recognition inside a transaction. Idempotent for the same post: a second run (an
- * overlapping tick, a lookback, a retry) finds the post processed under its row lock and changes
+ * overlapping tick or a retry) finds the post processed under its row lock and changes
  * nothing, so it cannot create a second event or notification.
  */
 export async function applyRecognition(postId: string, rec: Recognition): Promise<Applied> {

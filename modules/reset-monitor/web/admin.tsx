@@ -179,10 +179,10 @@ function PostRow({ post }: { post: AdminMonitorPost }) {
       <div className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-ink-3">
         <span>@{post.author}</span>
         <a href={post.url} target="_blank" rel="noreferrer" className="num hover:text-accent">{bj(post.published_at, true)}</a>
-        {post.collection_only ? <Badge>仅采集</Badge> : post.skipped ? <Badge>已跳过</Badge> : post.relevant ? <Badge tone="accent">相关</Badge> : post.processed_at ? <Badge>无关</Badge> : <Badge tone="warn">待识别</Badge>}
+        {post.skipped ? <Badge>已跳过</Badge> : post.relevant ? <Badge tone="accent">相关</Badge> : post.processed_at ? <Badge>无关</Badge> : <Badge tone="warn">待识别</Badge>}
         {post.needs_review && post.manual_review?.completed !== true && <Badge tone="bad">需要复核</Badge>}
         {post.manual_review?.completed === true && <Badge tone="ok" title={post.manual_review.reason}>人工复核完成</Badge>}
-        {post.collection_failure && <Badge tone="bad" title={post.collection_failure.error}>{post.collection_failure.phase === "context" ? "上下文采集失败" : "识别失败"}</Badge>}
+        {post.collection_failure && <Badge tone="bad" title={post.collection_failure.error}>识别失败</Badge>}
         {post.links.map((l) => <Badge key={l.eventId} tone="info" title={l.eventId}>{l.stage}</Badge>)}
         <span className="ml-auto flex gap-1.5">
           <Link className="text-accent" to={`${adminPath}/posts/${encodeURIComponent(post.id)}/review`}>人工复核</Link>

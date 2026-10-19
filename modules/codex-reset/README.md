@@ -2,23 +2,13 @@
 
 跟踪配置账号的 Codex 额度重置、重置卡和奖励额度，提供公告、北京时间窗口、确认依据、关联原帖和历史日历。初始名单保留 `@thsottiaux`（Tibo）；多账号、套餐和采集范围在 `site/reset-monitors.ts` 配置。采集、事件处理、复核和页面使用 [共享重置监控引擎](../reset-monitor/README.md)。
 
-## 配置与初始化
+## 配置与运行
 
-```dotenv
-CODEX_RESET_PROVIDER=socialdata
-CODEX_RESET_SCAN_MINUTES=15
-# SOCIALDATA_API_KEY=<your-key>
-# 或 CODEX_RESET_PROVIDER=twitterapi_io，使用 TWITTERAPI_IO_API_KEY。
-MONITOR_MODEL=default
-```
+账号在 `site/reset-monitors.ts`，初始账号为 `@thsottiaux`。使用 `CODEX_RESET_PROVIDER`、`CODEX_RESET_SCAN_MINUTES` 与共享 `MONITOR_MODEL`；默认 SocialData、每 15 分钟扫描，支持 TwitterAPI.io。配置修改后重启 API 与 worker。
 
-本站与 Claude、Grok 统一使用 `processingMode: "collect_only"`，在 `site/reset-monitors.ts` 配置。后续只采新主帖，保存原文并标记处理完成，不补历史、上下文或自动识别；没有识别结果的帖子显示“仅采集”，不冒充无关结论。首次任务按使用者要求结案，未采范围不再续跑；原文、事件和原始判断保留，人工复核仍可使用。开发保持采集、模型和推送安全阀关闭，真实采集需另行授权。共享引擎仅在显式 `automatic` 模式使用 `MONITOR_MODEL`。实际新安装或切换提供商前必须确认有限范围：
+三个平台统一只采非回复主帖，排除回复、自回复和纯转推，保留非回复引用帖；不加内容关键词。模型识别后关联事件并补齐 v2，没有父帖补采或历史初始化。新安装从首次运行时刻向前采集，已有截止继续完整增量窗口。历史事件及相关证据保留，无关旧采集记录按清单备份后清理。具体流程、失败语义及清理命令见 [共享引擎](../reset-monitor/README.md)。
 
-```bash
-npm run initialize -w @aihot/codex-reset -- --since 2026-10-08T00:00:00Z --until 2026-10-09T00:00:00Z
-```
-
-命令只采主帖，需单独授权开启采集安全阀，无需模型开关或凭据；参数为带时区 ISO 时间。首次初始化保存分页断点，失败后以相同范围及采集配置重跑可继续，更换同供应商账号不会重采已提交页；主帖分页成功即推进采集截止并清理断点。默认每 15 分钟增量扫描，不注册每日查漏；日常只从成功采集截止采到本轮开始，任一作者失败保持原截止，按帖子 ID 去重。当前已结案任务从结案时刻继续增量。
+采集、模型与推送的安全阀默认关闭；真实调用及公开部署按运营授权执行。
 
 ## Codex 专属规则
 

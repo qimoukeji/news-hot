@@ -9,7 +9,7 @@ import { config } from "@aihot/backend/config";
 import { closeDb, sql } from "@aihot/backend/db";
 import { chatJson, ModelOutputError } from "@aihot/backend/providers/llm";
 import { embeddingsAvailable } from "@aihot/backend/providers/embeddings";
-import { assertRequestCanSend, BudgetExceededError, logicalKeyFor, markStalePendingReceipts, paidRequest, ProviderNotSentError, ProviderRejectedError, ReceiptUnknownError, ReceiptBusyError, ReceiptFailedError, retireMonitorUnknownReceipts, rejectReceivedResponse, completeReceipt } from "@aihot/backend/providers/receipts";
+import { assertRequestCanSend, BudgetExceededError, logicalKeyFor, markStalePendingReceipts, paidRequest, ProviderNotSentError, ProviderRejectedError, ReceiptUnknownError, ReceiptBusyError, ReceiptFailedError, rejectReceivedResponse, completeReceipt } from "@aihot/backend/providers/receipts";
 import { autoReleaseUnknownReceipts } from "@aihot/backend/operations/recover";
 
 const usage = { prompt_tokens: 80, completion_tokens: 20, total_tokens: 100 };
@@ -307,21 +307,9 @@ test("stale monitor placeholders fail while retaining unknown attempt outcomes",
   assert.equal((await sql`SELECT status FROM receipt_attempts WHERE receipt_id = ${receipt.receiptId}`)[0]!.status, "unknown");
 });
 
-test("retiring legacy monitor recovery preserves paid history and leaves other modules untouched", async () => {
-  const monitor = await paidRequest({ service: "invariant-unbudgeted", purpose: "monitor.context", identity: tag() }, async () => ({ response: { original: "saved" }, cost: { amount: 0.2, currency: "USD", basis: "actual" } }));
-  const other = await paidRequest({ service: "invariant-unbudgeted", purpose: "invariant_test", identity: tag() }, async () => ({ response: { original: "other" } }));
-  await sql`UPDATE receipts SET status='unknown' WHERE id IN ${sql([monitor.receiptId, other.receiptId])}`;
-  await sql`UPDATE receipt_attempts SET status='unknown',error='legacy lost response' WHERE receipt_id=${monitor.receiptId}`;
-  const [before] = await sql`SELECT * FROM receipt_attempts WHERE receipt_id=${monitor.receiptId}`;
-  assert.ok(await retireMonitorUnknownReceipts(sql) >= 1);
-  assert.equal(await retireMonitorUnknownReceipts(sql), 0);
-  const [receipt] = await sql`SELECT status,response,cost,currency,cost_basis FROM receipts WHERE id=${monitor.receiptId}`;
-  assert.deepEqual(receipt, { status: "failed", response: { original: "saved" }, cost: 0.2, currency: "USD", cost_basis: "actual" });
-  assert.deepEqual((await sql`SELECT * FROM receipt_attempts WHERE receipt_id=${monitor.receiptId}`)[0], before);
-  assert.equal((await sql`SELECT status FROM receipts WHERE id=${other.receiptId}`)[0]!.status, "unknown");
-});
 
-test("initialization resumes definite failures under one key, but never repeat unknown paid attempts", async () => {
+
+test("model processing resumes definite failures under one key, but never repeat unknown paid attempts", async () => {
   const req = { service: "invariant-unbudgeted", purpose: "reset_monitor.grok.scan", identity: { resume: tag() }, retryFailed: true };
   let sent = 0;
   await assert.rejects(paidRequest(req, async () => {
@@ -338,7 +326,7 @@ test("initialization resumes definite failures under one key, but never repeat u
   assert.deepEqual((await sql`SELECT status FROM receipt_attempts WHERE receipt_id=${receipt!.id} ORDER BY attempt`).map(r => r.status), ["failed", "unknown"]);
 });
 
-test("initialization reuses a received response after business failure and can retry unusable output", async () => {
+test("model processing reuses a received response after business failure and can retry unusable output", async () => {
   const req = { service: "invariant-unbudgeted", purpose: "reset_monitor.grok.recognize", identity: tag(), retryFailed: true };
   let sent = 0;
   const send = async () => { sent++; return { response: { saved: sent } }; };
@@ -353,8 +341,8 @@ test("initialization reuses a received response after business failure and can r
   assert.equal(sent, 2);
 });
 
-test("initialization preserves pending reservations and stale unknown attempts on resume", async () => {
-  const req = { service: "invariant-unbudgeted", purpose: "reset_monitor.grok.context", identity: tag(), retryFailed: true };
+test("model processing preserves pending reservations and stale unknown attempts on resume", async () => {
+  const req = { service: "invariant-unbudgeted", purpose: "reset_monitor.grok.recognize", identity: tag(), retryFailed: true };
   let sent = 0;
   const send = async () => { sent++; return { response: "saved" }; };
   const receipt = await paidRequest(req, send);
@@ -395,80 +383,4 @@ test("stopping a budget after reservation prevents queued sends and records a de
   await sql`UPDATE budgets SET per_minute=10,per_hour=10,per_day=10 WHERE service=${service}`;
   assert.equal((await paidRequest(req, async () => { sent++; return { response: "saved" }; })).receiptId, receipt!.id);
   assert.equal(sent, 1);
-});
-
-test("initial context lookups reuse an exact saved answer across old round tags without another receipt", async () => {
-  const req = {
-    service: "invariant-unbudgeted", purpose: "reset_monitor.grok.context", subject: tag(),
-    identity: { tweet: tag(), baseUrl: "http://127.0.0.1:1" }, attemptTag: "old-round",
-  };
-  let sent = 0;
-  const send = async () => { sent++; return { response: { saved: sent } }; };
-  const first = await paidRequest(req, send);
-  const resumed = { ...req, attemptTag: "initial-context", retryFailed: true, reuseReceivedAcrossAttempts: true };
-  const answer = await paidRequest(resumed, send);
-  assert.equal(answer.receiptId, first.receiptId);
-  assert.equal(answer.reused, true);
-  await completeReceipt(sql, first.receiptId);
-  assert.equal((await paidRequest(resumed, send)).receiptId, first.receiptId);
-  assert.equal((await sql`SELECT 1 FROM receipts WHERE logical_key=${logicalKeyFor(resumed)}`).length, 0);
-  assert.equal(sent, 1);
-  for (const changed of [
-    { ...resumed, identity: { ...req.identity, tweet: tag() } },
-    { ...resumed, identity: { ...req.identity, baseUrl: "http://127.0.0.1:2" } },
-    { ...resumed, service: "invariant-other-provider" },
-    { ...resumed, model: "different-model" },
-    { ...resumed, subject: tag() },
-  ]) assert.equal((await paidRequest(changed, send)).reused, false, "a different request must not reuse the old lookup");
-  assert.equal(sent, 6);
-});
-
-test("old context answers cannot bypass a current pending, failed, or unknown reservation", async () => {
-  for (const status of ["pending", "failed", "unknown"]) {
-    const req = { service: "invariant-unbudgeted", purpose: "reset_monitor.grok.context", subject: tag(), identity: { tweet: tag() }, attemptTag: "old-round" };
-    let sent = 0;
-    const send = async () => { sent++; return { response: { saved: sent } }; };
-    await paidRequest(req, send);
-    const current = { ...req, attemptTag: "current-round" };
-    const receipt = await paidRequest(current, send);
-    await sql`UPDATE receipts SET status=${status},updated_at=now() WHERE id=${receipt.receiptId}`;
-    await sql`UPDATE receipt_attempts SET status=${status} WHERE receipt_id=${receipt.receiptId}`;
-    const error = status === "pending" ? ReceiptBusyError : status === "failed" ? ReceiptFailedError : ReceiptUnknownError;
-    await assert.rejects(paidRequest({ ...current, reuseReceivedAcrossAttempts: true, retryFailed: status === "unknown" }, send), error);
-    assert.equal(sent, 2);
-  }
-});
-
-test("changing initial context round tags cannot repurchase old unresolved lookups", async () => {
-  for (const status of ["pending", "unknown", "failed"]) {
-    const req = { service: "invariant-unbudgeted", purpose: "reset_monitor.grok.context", subject: tag(), identity: { tweet: tag() }, attemptTag: "old-round" };
-    let sent = 0;
-    const send = async () => { sent++; return { response: "saved" }; };
-    const receipt = await paidRequest(req, send);
-    await sql`UPDATE receipts SET status=${status},updated_at=now() WHERE id=${receipt.receiptId}`;
-    await sql`UPDATE receipt_attempts SET status=${status === "pending" ? "pending" : "unknown"} WHERE receipt_id=${receipt.receiptId}`;
-    const resumed = { ...req, attemptTag: "initial-round", retryFailed: true, reuseReceivedAcrossAttempts: true };
-    await assert.rejects(paidRequest(resumed, send), status === "pending" ? ReceiptBusyError : ReceiptUnknownError);
-    assert.equal(sent, 1);
-    assert.equal((await sql`SELECT 1 FROM receipts WHERE logical_key=${logicalKeyFor(resumed)}`).length, 0);
-    if (status === "pending") {
-      await sql`UPDATE receipts SET updated_at=now()-interval '11 minutes' WHERE id=${receipt.receiptId}`;
-      await assert.rejects(paidRequest(resumed, send), ReceiptUnknownError);
-      await assert.rejects(paidRequest(resumed, send), ReceiptUnknownError);
-      assert.equal((await sql`SELECT status FROM receipt_attempts WHERE receipt_id=${receipt.receiptId}`)[0]!.status, "unknown");
-      assert.equal(sent, 1);
-    }
-  }
-});
-
-test("an old context lookup with a definite failure permits a new initial round", async () => {
-  const req = { service: "invariant-unbudgeted", purpose: "reset_monitor.grok.context", subject: tag(), identity: tag(), attemptTag: "old-round" };
-  let sent = 0;
-  await assert.rejects(paidRequest(req, async () => { sent++; throw new ProviderRejectedError("not accepted", 503, true); }), ProviderRejectedError);
-  const resumed = await paidRequest({ ...req, attemptTag: "initial-round", retryFailed: true, reuseReceivedAcrossAttempts: true }, async () => {
-    sent++;
-    return { response: "saved" };
-  });
-  assert.equal(resumed.reused, false);
-  assert.equal(sent, 2);
 });

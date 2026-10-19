@@ -4,6 +4,7 @@ umask 077
 command=${1:?prepare or apply}
 sha=${2:?Full commit SHA}
 approval=${3:-}
+history_approval=${4:-}
 [[ $sha =~ ^[a-f0-9]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 2; }
 [[ $command == prepare || $command == apply ]] || exit 2
 root=${NEWSHOT_ROOT:-/opt/news-hot}
@@ -26,18 +27,21 @@ current_sha=$(get "$current/release.json" sha)
 [[ $current == "$root/releases/$current_sha" ]] || exit 1
 phase=prepare
 migration_started=false
+cleanup_started=false
+worker_was_running=false
 restart_previous() {
   export RELEASE_SHA=$current_sha DEPLOY_IMAGE=news-hot:$current_sha
-  dc "$current" up -d --no-deps api worker web >&2
+  dc "$current" up -d --no-deps api web >&2 || return $?
+  if [[ $worker_was_running == true ]]; then dc "$current" up -d --no-deps worker >&2; fi
 }
 failed() {
   result=$?
   trap - EXIT
   if (( result != 0 )) && [[ $phase != prepare ]]; then
-    if [[ $migration_started == true ]]; then
+    if [[ $migration_started == true || $cleanup_started == true ]]; then
       dc "$release" stop api worker web >&2 || true
       printf '%s\n' "$sha" > "$root/shared/blocked-release"
-      echo 'Migration or subsequent validation failed. Application stays stopped; review backup and database before recovery.' >&2
+      echo 'Migration, history cleanup or subsequent validation failed. Application stays stopped; review backup and database before recovery.' >&2
     else
       # Stop a partially started candidate before returning to the previous version.
       dc "$release" stop api worker web >&2 || true
@@ -50,7 +54,7 @@ failed() {
   exit "$result"
 }
 trap failed EXIT
-[[ ! -e $root/shared/blocked-release ]] || { echo 'A failed migration or recovery requires operator intervention' >&2; exit 1; }
+[[ ! -e $root/shared/blocked-release ]] || { echo 'A failed migration, history cleanup or recovery requires operator intervention' >&2; exit 1; }
 node "$tool" verify "$sha" "$bundle"
 if [[ ! -d $release ]]; then
   # The bundle is made with git archive, and must only contain relative repository paths.
@@ -68,6 +72,29 @@ dc "$release" config --quiet
 dc "$current" exec -T db psql -X -U newshot -d newshot -At -v ON_ERROR_STOP=1 \
   -c 'SELECT name FROM schema_migrations ORDER BY name' > "$bundle/ledger.txt"
 node "$tool" plan "$bundle/release.json" "$current/release.json" "$bundle/ledger.txt" "$current_sha" > "$bundle/plan.json"
+history_transition=false
+if [[ ! -f $current/scripts/cleanup-monitor-history.ts && -f $release/scripts/cleanup-monitor-history.ts ]]; then
+  history_transition=true
+  dc "$release" run --rm --no-deps --entrypoint node setup scripts/cleanup-monitor-history.ts > "$bundle/history-plan.json"
+fi
+# Keep the full data-removal preview private; prepare stdout remains one plan JSON object.
+node - "$bundle/plan.json" "$history_transition" "$bundle/history-plan.json" <<'NODE'
+const fs = require('fs');
+const [file, transition, historyFile] = process.argv.slice(2);
+const plan = JSON.parse(fs.readFileSync(file, 'utf8'));
+plan.historyTransition = transition === 'true';
+plan.needsHistoryCleanup = false;
+plan.historyFingerprint = '';
+if (plan.historyTransition) {
+  const history = JSON.parse(fs.readFileSync(historyFile, 'utf8'));
+  if (!/^[a-f0-9]{64}$/.test(history.fingerprint)) throw new Error('Invalid history preview fingerprint');
+  const changes = ['deletedPosts', 'updatedPosts', 'deletedStates', 'updatedStates'];
+  if (changes.some(key => !Array.isArray(history[key]))) throw new Error('Invalid history preview changes');
+  plan.needsHistoryCleanup = changes.some(key => history[key].length > 0);
+  plan.historyFingerprint = history.fingerprint;
+}
+fs.writeFileSync(file, JSON.stringify(plan) + '\n');
+NODE
 if [[ $command == prepare ]]; then
   cat "$bundle/plan.json"
   exit 0
@@ -79,7 +106,16 @@ if [[ $needs_migration == true ]]; then
 elif [[ -n $approval && $approval != "$digest" ]]; then
   echo 'Release approval is stale' >&2; exit 1
 fi
+history_fingerprint=$(get "$bundle/plan.json" historyFingerprint)
+needs_cleanup=$(get "$bundle/plan.json" needsHistoryCleanup)
+if [[ $needs_cleanup == true ]]; then
+  [[ $history_approval =~ ^[a-f0-9]{64}$ && $history_approval == "$history_fingerprint" ]] || { echo 'History cleanup approval missing or stale; running site unchanged' >&2; exit 1; }
+elif [[ -n $history_approval && $history_approval != "$history_fingerprint" ]]; then
+  echo 'History cleanup approval is stale' >&2; exit 1
+fi
 if [[ $current_sha == "$sha" ]]; then echo 'This release is already published' >&2; exit 0; fi
+worker_id=$(dc "$current" ps --status running -q worker)
+if [[ -n $worker_id ]]; then worker_was_running=true; fi
 phase=stopping
 dc "$current" stop api worker web >&2
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -92,6 +128,7 @@ docker run --rm --network none -v news-hot_data:/data:ro "$DEPLOY_IMAGE" sh -c \
 tar -tzf "$backup/files.tar.gz" > /dev/null
 sha256sum "$backup/newshot.dump" "$backup/files.tar.gz" > "$backup/SHA256SUMS"
 cp "$bundle/plan.json" "$backup/plan.json"
+if [[ $history_transition == true ]]; then cp "$bundle/history-plan.json" "$backup/history-plan.json"; fi
 if [[ $needs_migration == true ]]; then
   migration_started=true
   phase=migrating
@@ -99,8 +136,14 @@ if [[ $needs_migration == true ]]; then
 else
   dc "$release" run --rm --no-deps --entrypoint node setup scripts/seed.ts >&2
 fi
+if [[ $needs_cleanup == true ]]; then
+  cleanup_started=true
+  phase=cleaning
+  dc "$release" run --rm --no-deps --user "$(id -u):$(id -g)" -v "$backup/newshot.dump:/run/newshot-backup.dump:ro" --entrypoint node setup \
+    scripts/cleanup-monitor-history.ts --apply --fingerprint "$history_fingerprint" --backup /run/newshot-backup.dump >&2
+fi
 phase=starting
-dc "$release" up -d --no-deps api worker web >&2
+dc "$release" up -d --no-deps api web >&2
 healthy=false
 for ((i=0; i<90; i++)); do
   if curl --fail --silent --max-time 5 --output /dev/null http://127.0.0.1:3000/api/health; then healthy=true; break; fi
@@ -109,6 +152,7 @@ done
 [[ $healthy == true ]] || { echo 'Candidate health check failed' >&2; exit 1; }
 dc "$release" run --rm --no-deps --entrypoint node setup scripts/smoke.ts --base http://web:3000 >&2
 [[ $(dc "$release" exec -T web printenv AIHOT_RELEASE) == "$sha" ]] || { echo 'Web release identity mismatch' >&2; exit 1; }
+if [[ $history_transition == false && $worker_was_running == true ]]; then dc "$release" up -d --no-deps worker >&2; fi
 # Commit publication only after all checks. The old symlink remains valid on every prior failure.
 ln -s "$release" "$root/current.next"
 mv -Tf "$root/current.next" "$root/current"

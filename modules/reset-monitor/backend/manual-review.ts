@@ -892,7 +892,7 @@ export async function submitMonitorReview(
               }
             : null;
       await tx`UPDATE monitor_posts SET recognition=${tx.json(rec)},translation=${d.translationZh},context=${tx.json(context)},activity=${activity ? tx.json(activity) : null},
-        raw=(coalesce(raw,'{}'::jsonb)-'collectionFailure')||'{"contextPending":false}'::jsonb,processed_at=now() WHERE monitor_id = ${monitorId()} AND (id=${id}) `;
+        raw=coalesce(raw,'{}'::jsonb)-'collectionFailure',processed_at=now() WHERE monitor_id = ${monitorId()} AND (id=${id}) `;
       await tx`DELETE FROM monitor_state WHERE monitor_id = ${monitorId()} AND (key IN ${tx([`failures:${id}`, `context:${id}`])}) `;
       for (const c of planned.outageChanges)
         await tx`UPDATE monitor_posts SET outage=${c.after ? tx.json(c.after as never) : null} WHERE monitor_id = ${monitorId()} AND (id=${c.postId}) `;

@@ -3,7 +3,7 @@
 // 1. A logical request has a stable key bound to task, input revision, provider, model, prompt and config.
 // 2. Before calling, a placeholder row and an attempt row are persisted; budgets count attempts.
 // 3. The raw response is saved before any business write; recovery reuses a received response.
-// 4. Monitor attempts retain unknown billing outcomes; initialization resumes never buy them again.
+// 4. Monitor attempts retain unknown billing outcomes; model processing never buys them again.
 //    Only definite failures can resume under one key. Other callers retain operations/recover.ts.
 import { sql, type Db } from "../db.ts";
 import { sha256, stableJson } from "../lib/ids.ts";
@@ -84,10 +84,8 @@ export interface ReceiptRequest {
   requestSummary?: Record<string, unknown>;
   /** Distinguishes an explicit re-run (e.g. admin "re-evaluate") from recovery of the same request. */
   attemptTag?: string;
-  /** An explicit initialization resume may retry definite failures under the same persisted key. */
+  /** A resumed model operation may retry definite failures under the same persisted key. */
   retryFailed?: boolean;
-  /** Initialization context lookups may reuse old answers to the exact same input across round tags. */
-  reuseReceivedAcrossAttempts?: boolean;
 }
 
 export interface ReceiptResult {
@@ -159,27 +157,6 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
     const [existing] = await tx<ReceiptRow[]>`
       SELECT id, status, response, created_at, updated_at, attempts, error FROM receipts WHERE logical_key = ${logicalKey} FOR UPDATE`;
     if (existing?.status === "received" || existing?.status === "completed") return { kind: "reuse" as const, row: existing };
-    if (!existing && req.reuseReceivedAcrossAttempts) {
-      const prefix = [req.service, req.purpose, req.model ?? "-", sha256(stableJson(req.identity)), ""].join(":");
-      const [received] = await tx<ReceiptRow[]>`
-        SELECT id, status, response, created_at, updated_at, attempts, error FROM receipts
-        WHERE left(logical_key, ${prefix.length}) = ${prefix} AND subject IS NOT DISTINCT FROM ${req.subject ?? null}
-          AND status IN ('received', 'completed')
-        ORDER BY updated_at DESC, id DESC LIMIT 1 FOR UPDATE`;
-      if (received) return { kind: "reuse" as const, row: received };
-      const [unresolved] = await tx<ReceiptRow[]>`
-        SELECT id, status, response, created_at, updated_at, attempts, error FROM receipts r
-        WHERE left(logical_key, ${prefix.length}) = ${prefix} AND subject IS NOT DISTINCT FROM ${req.subject ?? null}
-          AND (status IN ('pending', 'unknown') OR EXISTS (
-            SELECT 1 FROM receipt_attempts a WHERE a.receipt_id = r.id AND a.status = 'unknown'))
-        ORDER BY updated_at DESC, id DESC LIMIT 1 FOR UPDATE`;
-      if (unresolved?.status === "pending") {
-        if (Date.now() - unresolved.updated_at.getTime() < PENDING_STALE_MS) return { kind: "busy" as const, row: unresolved };
-        await markUnknown(tx, unresolved.id, "placeholder went stale without a recorded result", isMonitorRequest(req.purpose));
-      }
-      // A new processing window cannot make an unresolved old lookup safe to buy again.
-      if (unresolved) return { kind: "unknown" as const, row: unresolved };
-    }
     // Finish business writes from saved answers during shutdown, but never reserve or send the
     // next paid page/batch. An answer already in flight still saves below, without this check.
     shutdownSignal.signal.throwIfAborted();
@@ -298,13 +275,6 @@ export async function markStalePendingReceipts(): Promise<number> {
     }
     return stale.length;
   });
-}
-
-/** Retire old monitor recovery state without changing attempts or their unknown billing outcomes. */
-export async function retireMonitorUnknownReceipts(db: Db, purposes?: string[]): Promise<number> {
-  const changed = await db`UPDATE receipts SET status = 'failed', updated_at = now() WHERE status = 'unknown'
-    AND purpose ~ ${MONITOR_PURPOSE_PATTERN} AND (${purposes === undefined} OR purpose = ANY(${purposes ?? []}::text[]))`;
-  return changed.count;
 }
 
 /**

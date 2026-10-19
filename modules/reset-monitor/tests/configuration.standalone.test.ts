@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RESET_MONITORS, validateResetMonitorConfig } from "@aihot/site/reset-monitors";
 import { RESET_EVENT_KINDS } from "../definition.ts";
-import { buildCollectionFilter } from "../collection-filter.ts";
 import { buildResetMonitorPrompt } from "../prompt.ts";
 import { excludeNonEvent } from "../backend/recognition-policy.ts";
 import { productForAuthor, scopeConflicts, quotaScope, plansFromScopeLabel } from "../backend/scope-policy.ts";
@@ -25,10 +24,8 @@ const scope = (productsZh: string, plans: string[] | null = null) => ({ audience
 
 test("the three monitors share event kinds and configure authors, plans and defaults without credentials", () => {
   for (const definition of [codex, claude, grok]) {
-    assert.equal(definition.processingMode, "automatic_incremental");
     assert.equal(definition.eventKinds, RESET_EVENT_KINDS);
     assert.deepEqual(definition.authors, RESET_MONITORS[definition.monitorId as keyof typeof RESET_MONITORS].authors);
-    assert.equal(buildCollectionFilter(definition.collection), undefined);
   }
   assert.equal(productForAuthor(grok.authors, "@BOT"), "Grok Bot");
   assert.equal(productForAuthor([{ handle: "Another", name: "Other", defaultProduct: "New Product" }], "another"), "New Product");
@@ -38,7 +35,6 @@ test("the three monitors share event kinds and configure authors, plans and defa
   });
   assert.throws(() => validateResetMonitorConfig({ authors: [{ handle: "one", name: "One" }, { handle: "ONE", name: "Two" }], plans: [] }), /Invalid X/);
   assert.throws(() => validateResetMonitorConfig({ authors: [], plans: [] }), /Invalid X/);
-  assert.throws(() => validateResetMonitorConfig({ ...RESET_MONITORS.codex, processingMode: "invalid" as never }), /processing mode/);
   assert.throws(() => validateResetMonitorConfig({ authors: [{ handle: "one", name: "One" }], plans: ["Plan", "plan"] }), /Invalid reset monitor plans/);
 });
 
@@ -93,27 +89,4 @@ test("shared scopes distinguish explicit products and plans and preserve quota a
   assert.equal(plansFromScopeLabel("business accounts (all paid users)", codex.plans), null);
   assert.deepEqual(plansFromScopeLabel("Plus, Pro", codex.plans), ["Plus", "Pro"]);
   assert.deepEqual(plansFromScopeLabel("Plan A", []), ["Plan A"]);
-});
-
-test("shared filtered collection preserves announcements and configured relevant replies", () => {
-  const filter = buildCollectionFilter({ mode: "announcements_and_relevant_replies", productWords: ["NewProduct"], words: ["reset"], benefitWords: ["reward"], selfPhrases: ["my quota"] })!;
-  assert.equal(filter.accepts({ text: "A product release", isReply: false }), true);
-  assert.equal(filter.accepts({ text: "@reader NewProduct RESET ready", isReply: true }), true);
-  assert.equal(filter.accepts({ text: "My quota refreshed", isReply: true }), true);
-  assert.equal(filter.accepts({ text: "Another service reward", isReply: true }), false);
-  assert.deepEqual(filter.query, ["-filter:replies", 'filter:replies (reset OR reward OR "my quota")']);
-  assert.equal(buildCollectionFilter({ mode: "announcements_and_relevant_replies", words: ["reset"] })!.accepts({ text: "We reset usage", isReply: true }), true);
-  assert.throws(() => buildCollectionFilter({ mode: "announcements_and_relevant_replies" }), /relevance terms/);
-});
-
-test("collection signatures bind acceptance data independently of legacy query version and prose", () => {
-  const configuration = { mode: "announcements_and_relevant_replies" as const, words: ["reset"], productWords: ["Product"],
-    queryGroups: { query: ["-filter:replies", "filter:replies reset"], version: "paid-legacy-version", reason: "Original description" } };
-  const original = buildCollectionFilter(configuration)!;
-  const changed = buildCollectionFilter({ ...configuration, productWords: ["NewProduct"] })!;
-  assert.equal(changed.version, original.version);
-  assert.deepEqual(changed.query, original.query);
-  assert.notEqual(changed.signature, original.signature);
-  assert.equal(buildCollectionFilter({ ...configuration, queryGroups: { ...configuration.queryGroups, reason: "Updated description" } })!.signature, original.signature);
-  assert.equal(buildCollectionFilter(original.configuration)!.signature, original.signature);
 });

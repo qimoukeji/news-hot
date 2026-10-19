@@ -8,7 +8,7 @@ import { backendDefinition as codex } from "../../codex-reset/backend-definition
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
 
 export const third: ResetMonitorBackendDefinition = {
-  ...claude, processingMode: "automatic", monitorId: "testai", moduleName: "testai-reset", authors: [{ handle: "TestAI", name: "TestAI" }], authorName: "TestAI", product: "TestAI",
+  ...claude, monitorId: "testai", moduleName: "testai-reset", authors: [{ handle: "TestAI", name: "TestAI" }], authorName: "TestAI", product: "TestAI",
   pagePath: "/testai-reset", adminPath: "/admin/testai-reset", adminApiPath: "/api/admin/testai-reset",
   siteApiPath: "/api/site/testai-reset", publicApiPath: "/api/v1/testai-resets", agentPath: "/testai-resets",
   mcpTool: "get_testai_resets", names: monitorNames("testai"), providerEnv: "TESTAI_RESET_PROVIDER",
@@ -35,17 +35,9 @@ test("monitor scopes follow parallel awaits and restore the caller scope", async
 test("a third monitor registers unique backend and page entries without engine edits", () => {
   const backend = createMonitorServer(third);
   assert.equal(backend.name, "testai-reset");
-  assert.deepEqual(backend.schedules!.map((schedule) => [schedule.name, schedule.retryLimit]), [["testai-reset.tick", 0], ["testai-reset.lookback", 0]]);
+  assert.deepEqual(backend.schedules!.map((schedule) => [schedule.name, schedule.retryLimit]), [["testai-reset.tick", 0]]);
   assert.equal(backend.models!.monitor!.env, "MONITOR_MODEL");
   assert.equal(backend.agent!.abilities![0]!.mcp.tool, "get_testai_resets");
   assert.match(JSON.stringify(createMonitorModule(third)), /testai-reset/);
   assert.throws(() => createMonitorServer({ ...third, monitorId: "untrusted/monitor" }), /Invalid reset monitor ID/);
-});
-
-test("an empty collection filter cannot register a monitor that would falsely advance coverage", () => {
-  const filter = { version: "synthetic", reason: "Synthetic selected scope", accepts: () => true };
-  for (const query of [[], [" "], ""]) {
-    assert.throws(() => createMonitorServer({ ...third, collectionFilter: { ...filter, query } }), /Invalid reset monitor collection filter/);
-  }
-  assert.equal(createMonitorServer({ ...third, collectionFilter: { ...filter, query: ["-filter:replies", "filter:replies quota"] } }).name, "testai-reset");
 });

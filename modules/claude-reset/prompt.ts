@@ -2,7 +2,7 @@ import definition from "./definition.ts";
 import { buildResetMonitorPrompt } from "@aihot/reset-monitor/prompt";
 import type { ResetMonitorDefinition } from "@aihot/reset-monitor/definition";
 
-export const promptVersion = "claude-reset-2026-10-15.1";
+export const promptVersion = "claude-reset-2026-10-19.1";
 export const productRules = `只把明确的一次性云会话奖励活动作为 Claude 的 bonus_credit；API 赠金、每月 API credits 与普通限额提升继续排除。
 cloud sessions 的 one time bonus credit 是独立消费池，先消费赠额再计入套餐限额，不是 reset_credit。
 “You can still claim the one time bonus credit for cloud sessions ... Run /claim-credit ...”是 bonus_credit、confirm，表示官方活动开放，不代表个人到账；“We will offer a one time bonus credit for cloud sessions”是 announce。

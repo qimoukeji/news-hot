@@ -95,7 +95,7 @@ function createReview(data: z.infer<typeof generatedPublicV2Schema>, row: Public
 
 /** Worker-only enrichment. No imports from this module into read/publication paths. */
 export async function processPublicV2Pending() {
-  if (monitor().processingMode !== "automatic_incremental" || !monitor().publicV2 || !config.modelCallsEnabled || process.env.COLLECT_ENABLED !== "true") return { enriched: 0 };
+  if (!monitor().publicV2 || !config.modelCallsEnabled || process.env.COLLECT_ENABLED !== "true") return { enriched: 0 };
   const input = await sql.begin("isolation level repeatable read read only", db => loadPublicV2Input(db));
   const pending = await sql<{ key: string; value: { status?: string; version?: string } }[]>`SELECT key,value FROM monitor_state WHERE monitor_id=${monitorId()} AND key LIKE 'public_v2:pending:%'`;
   const requested = new Set(pending.map(row => row.key.slice("public_v2:pending:".length)));

@@ -8,6 +8,7 @@ import { upsertMaterial } from "@aihot/backend/content/materials";
 import { getBoss, stopBoss } from "@aihot/backend/jobs/queue";
 import { checkAlerts, collectFindings, sendDigest } from "@aihot/backend/operations/alerts";
 import { runsOverview } from "@aihot/backend/admin/runs";
+import { DEPLOYMENT } from "@aihot/site";
 
 process.env.COLLECT_ENABLED = "false";
 process.env.MODEL_CALLS_ENABLED = "false";
@@ -15,7 +16,9 @@ process.env.MODEL_CALLS_ENABLED = "false";
 const T = tag();
 const SOURCE = `test-alerts-${T}`;
 const stuckIds: string[] = [];
+const originalSchedules = [...DEPLOYMENT.engineSchedules];
 before(async () => {
+  DEPLOYMENT.engineSchedules = [...originalSchedules, "sources.schedule", "content.sweep", "reports.compose"];
   await getBoss(); // collectFindings reads the job tables
   await sql`INSERT INTO sources (id, name, kind, next_fetch_at) VALUES (${SOURCE}, 'Test alerts', 'rss', '2100-01-01')`;
   // Ten new articles that have waited three hours: new content is stuck, readers see nothing new.
@@ -26,6 +29,7 @@ before(async () => {
   await sql`UPDATE articles SET discovered_at = now() - interval '3 hours', processing_state = 'new' WHERE id IN ${sql(stuckIds)}`;
 });
 after(async () => {
+  DEPLOYMENT.engineSchedules = originalSchedules;
   await stopBoss();
   await closeDb();
 });
@@ -50,6 +54,26 @@ test("an outage is announced once, repeated hourly, and closed with one recovery
     r = await checkAlerts(t0 + 80 * 60_000);
     assert.deepEqual(stuck(r.sent), []);
   } finally {
+    process.env.COLLECT_ENABLED = "false";
+    process.env.MODEL_CALLS_ENABLED = "false";
+  }
+});
+
+test("disabled news workflows do not alert or report false recovery while monitors remain enabled", async () => {
+  const schedules = [...DEPLOYMENT.engineSchedules];
+  DEPLOYMENT.engineSchedules = ["ops.recover", "ops.alerts", "ops.retention"];
+  process.env.COLLECT_ENABLED = "true";
+  process.env.MODEL_CALLS_ENABLED = "true";
+  try {
+    await sql`INSERT INTO settings(key,value) VALUES('alerts.state','{"content.collect":{"title":"Missing news","since":"2026-10-01T00:00:00Z","sentAt":"2026-10-01T00:00:00Z"},"content.process":{"title":"Stuck news","since":"2026-10-01T00:00:00Z","sentAt":"2026-10-01T00:00:00Z"}}'::jsonb)
+      ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`;
+    const findings = await collectFindings();
+    assert.ok(!findings.some(f => f.key.startsWith("content.") || f.key.startsWith("report.daily")));
+    const result = await checkAlerts();
+    assert.ok(!result.open.some(key => key.startsWith("content.")));
+    assert.ok(!result.sent.some(key => key.startsWith("content.")));
+  } finally {
+    DEPLOYMENT.engineSchedules = schedules;
     process.env.COLLECT_ENABLED = "false";
     process.env.MODEL_CALLS_ENABLED = "false";
   }

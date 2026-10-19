@@ -9,6 +9,7 @@ import { upsertMaterial } from "@aihot/backend/content/materials";
 import { getBoss, stopBoss } from "@aihot/backend/jobs/queue";
 import { collectFindings } from "@aihot/backend/operations/alerts";
 import { sourceHealthWeekly } from "@aihot/backend/operations/reports";
+import { DEPLOYMENT } from "@aihot/site";
 
 const T = tag();
 const now = Date.now();
@@ -16,8 +17,9 @@ const old = new Date(now - 8 * 86400_000);
 process.env.COLLECT_ENABLED = "true";
 process.env.MODEL_CALLS_ENABLED = "false";
 process.env.FEISHU_INTERNAL_ENABLED = "false";
-before(async () => { await getBoss(); });
-after(async () => { await stopBoss(); await closeDb(); });
+const originalSchedules = DEPLOYMENT.engineSchedules;
+before(async () => { DEPLOYMENT.engineSchedules = [...originalSchedules, "sources.schedule"]; await getBoss(); });
+after(async () => { DEPLOYMENT.engineSchedules = originalSchedules; await stopBoss(); await closeDb(); });
 async function source(id: string, mode = "editorial", created = old) {
   id = `${T}-${id}`;
   await sql`INSERT INTO sources(id,name,kind,participation_mode,health,created_at,last_ok_at,next_fetch_at)

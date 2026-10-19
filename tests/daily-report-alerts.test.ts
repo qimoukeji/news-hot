@@ -5,6 +5,7 @@ import { beijingAt } from "@aihot/contracts/time";
 import { closeDb, sql } from "@aihot/backend/db";
 import { getBoss, stopBoss } from "@aihot/backend/jobs/queue";
 import { checkAlerts, collectFindings } from "@aihot/backend/operations/alerts";
+import { DEPLOYMENT } from "@aihot/site";
 
 const at = (date: string, time = "10:00") => beijingAt(date, time).getTime();
 const key = (date: string) => `report.daily:${date}`;
@@ -12,14 +13,15 @@ const daily = (keys: string[]) => keys.filter(k => k.startsWith("report.daily"))
 async function report(date: string) {
   await sql`INSERT INTO reports(kind,key,window_start,window_end,content,generated_at) VALUES('daily',${date},${new Date(at(date))},${new Date(at(date))},'{}',${new Date(at(date))})`;
 }
-before(async () => { await getBoss(); });
+const originalSchedules = [...DEPLOYMENT.engineSchedules];
+before(async () => { DEPLOYMENT.engineSchedules = [...originalSchedules, "reports.compose"]; await getBoss(); });
 beforeEach(async () => {
   Object.assign(process.env, { COLLECT_ENABLED: "true", MODEL_CALLS_ENABLED: "true", FEISHU_INTERNAL_ENABLED: "false" });
   await sql`DELETE FROM reports`;
   await sql`DELETE FROM job_runs WHERE job='reports.compose'`;
   await sql`DELETE FROM settings WHERE key IN ('alerts.state','heartbeat.worker')`;
 });
-after(async () => { await stopBoss(); await closeDb(); });
+after(async () => { DEPLOYMENT.engineSchedules = originalSchedules; await stopBoss(); await closeDb(); });
 
 test("midnight preserves a missing edition; each date recovers only when its report exists", async () => {
   let result = await checkAlerts(at("2026-10-06", "23:30"));
@@ -73,4 +75,18 @@ test("legacy alert migrates its date and preserves reminder timing", async () =>
   assert.deepEqual(daily(result.sent), []);
   result = await checkAlerts(at("2026-10-07", "00:31"));
   assert.deepEqual(daily(result.sent), [key("2026-10-06")]);
+});
+
+test("disabled report schedules retire old alerts without inventing recovery messages", async () => {
+  await sql`INSERT INTO job_runs(job,started_at,status) VALUES('reports.compose',${new Date(at("2026-10-05"))},'failed')`;
+  await sql`INSERT INTO settings(key,value) VALUES('alerts.state',${sql.json({[key("2026-10-05")]:{title:"Missing report",since:new Date(at("2026-10-05")).toISOString(),sentAt:new Date(at("2026-10-05")).toISOString()}})})`;
+  const schedules = DEPLOYMENT.engineSchedules;
+  DEPLOYMENT.engineSchedules = schedules.filter(name => name !== "reports.compose");
+  try {
+    assert.deepEqual(daily((await collectFindings(at("2026-10-07"))).map(f => f.key)), []);
+    const result = await checkAlerts(at("2026-10-07"));
+    assert.deepEqual(daily(result.open), []);
+    assert.deepEqual(daily(result.sent), []);
+    assert.equal((await sql`SELECT count(*)::int n FROM job_runs WHERE job='reports.compose'`)[0]!.n, 1);
+  } finally { DEPLOYMENT.engineSchedules = schedules; }
 });

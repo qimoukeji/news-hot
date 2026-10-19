@@ -135,7 +135,7 @@ function MonitorReview({ loaderData: detail }: { loaderData: AdminMonitorPostDet
         <p className="mt-2 whitespace-pre-wrap text-[14px] leading-relaxed">{detail.post.text}</p>
         {detail.post.translation && <p className="mt-2 whitespace-pre-wrap text-[13px] text-ink-3">{detail.post.translation}</p>}
         {detail.post.source_issue && <p role="status" className="mt-3 text-[13px] text-amber">资料不完整：{detail.post.source_issue}</p>}
-        {detail.post.collection_failure && <p role="status" className="mt-3 text-[13px] text-amber">{detail.post.collection_failure.phase === "context" ? "上下文采集失败" : "识别失败"} · {bj(detail.post.collection_failure.at, true)}：{detail.post.collection_failure.error}</p>}
+        {detail.post.collection_failure && <p role="status" className="mt-3 text-[13px] text-amber">识别失败 · {bj(detail.post.collection_failure.at, true)}：{detail.post.collection_failure.error}</p>}
         {detail.post.held?.map((held, index) => <p className="mt-2 text-[13px] text-amber" key={index}>{held.reason ?? "需要核对依据"} · {held.excerpt}</p>)}
         {detail.context.map((context) => <div key={context.id} className="mt-4 border-t border-line pt-3">
           <a className="text-[13px] text-accent" href={context.url} target="_blank" rel="noreferrer">{context.relation === "reply" ? "回复" : "引用"} @{context.author} · {context.publishedAt ? bj(context.publishedAt, true) : "发布时间缺失"}</a>
