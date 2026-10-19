@@ -1,6 +1,6 @@
 import { Reply, stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
-import { after, beforeEach, test } from "node:test";
+import { after, afterEach, beforeEach, mock, test } from "node:test";
 import { sql, closeDb } from "@aihot/backend/db";
 import { config } from "@aihot/backend/config";
 import { installModules } from "@aihot/backend/modules";
@@ -22,7 +22,8 @@ import { isMonitorRequest } from "@aihot/backend/providers/receipts";
 import { updateMonitorEvent, reviewReceipt, setWithdrawn } from "../backend/admin.ts";
 
 const definitions = [codex, claude, grok];
-const started = new Date();
+// Keep the yearless bonus deadlines anchored before Oct 17, independent of the test run date.
+const started = new Date("2026-10-16T12:00:00Z");
 const postAt = new Date(started.getTime() - 10_000);
 const since = new Date(started.getTime() - 60_000).toISOString();
 let variant = "all", badOutput = "", conflict = false;
@@ -107,6 +108,7 @@ Object.assign(process.env, { SOCIALDATA_BASE_URL: provider.url, SOCIALDATA_API_K
 config.allowPrivateNetworkFetch = true;
 installModules(definitions.map(createMonitorServer));
 beforeEach(async () => {
+  mock.timers.enable({ apis: ["Date"], now: started });
   await sql`DELETE FROM monitor_event_posts`; await sql`DELETE FROM monitor_events`; await sql`DELETE FROM monitor_posts`;
   await sql`DELETE FROM monitor_state`; await sql`DELETE FROM audit_log`; await sql`DELETE FROM receipts`; await sql`DELETE FROM budgets`;
   for (const def of definitions) await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${def.monitorId},'cursor:socialdata',${sql.json({ checkpointVersion: 2, scannedThrough: since })})`;
@@ -114,6 +116,7 @@ beforeEach(async () => {
   enrichmentInputs.length = 0;
   config.modelCallsEnabled = true; process.env.COLLECT_ENABLED = "true";
 });
+afterEach(() => mock.timers.reset());
 after(async () => { await provider.close(); await model.close(); installModules([]); await closeDb(); });
 const read = (definition = codex) => modulePublication<ResetSnapshot>(definition.moduleName, "snapshotV2");
 
