@@ -64,6 +64,36 @@ before(async () => { web = await startWebServer(api); browser = await chromium.l
 beforeEach(() => { subscriptions = [{ ...initial }]; delivery = { ...deliveryFixture }; failRetry = false; writes.length = 0; reads.length = 0; });
 after(async () => { await browser?.close(); await web?.stop(); });
 
+test("dialog autofocus preserves rapid typing in a field the admin already chose", async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  try {
+    await page.goto(`${web.origin}/admin/reset-subscriptions`);
+    await expect(page.getByRole("heading", { level: 1, name: "事件订阅", exact: true })).toBeVisible();
+    const clockAt = new Date("2026-10-19T08:00:00.000Z");
+    await page.clock.install({ time: clockAt });
+    await page.clock.pauseAt(new Date(clockAt.getTime() + 1000));
+    // Dispatch while the opening animation is paused so the 60 ms focus delay is controlled exactly.
+    await page.getByRole("button", { name: "新增订阅", exact: true }).dispatchEvent("click");
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await page.clock.runFor(60);
+    await expect(dialog.locator("textarea")).toBeFocused();
+    await dialog.getByRole("button", { name: "取消", exact: true }).dispatchEvent("click");
+    await page.clock.runFor(250);
+    await page.getByRole("button", { name: "新增订阅", exact: true }).dispatchEvent("click");
+    const name = dialog.locator("label").filter({ hasText: "名称" }).locator("input");
+    await name.focus();
+    await page.keyboard.type("Codex");
+    await page.clock.runFor(60);
+    await expect(name).toBeFocused();
+    await page.keyboard.type(" 与 Grok 通知");
+    await expect(name).toHaveValue("Codex 与 Grok 通知");
+    await expect(dialog.locator("textarea")).toHaveValue("");
+    await expect(dialog.getByRole("button", { name: "创建", exact: true })).toBeDisabled();
+    assert.equal(writes.length, 0);
+  } finally { await page.close(); }
+});
+
 test("admin creates a disabled platform subscription and reveals signing secrets only in the current page", async () => {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   try {

@@ -293,7 +293,11 @@ export function ReasonDialog({
   useEffect(() => {
     if (!open) return;
     setReason("");
-    const t = setTimeout(() => ref.current?.focus(), 60);
+    const t = setTimeout(() => {
+      const field = ref.current;
+      // Opening animation must not move focus away from a field the admin already chose.
+      if (field && !field.form?.contains(document.activeElement)) field.focus();
+    }, 60);
     return () => clearTimeout(t);
   }, [open]);
   useEffect(() => {
