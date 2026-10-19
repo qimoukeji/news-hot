@@ -11,7 +11,7 @@ import { monitorTick } from "./backend/scan.ts";
 import { scanCron, scanMinutes } from "./config.ts";
 import { registerHttp } from "./api/routes.ts";
 import { eventDisplayLabel } from "./event-kind.ts";
-import { publicV2Snapshot } from "./backend/public-v2.ts";
+import { publicV2Snapshot, publicV2Sources } from "./backend/public-v2.ts";
 import { paginatePublicV2, type PublicV2Query } from "./backend/public-v2-list.ts";
 import { platformOverviewSchema } from "./public-v2.ts";
 
@@ -58,7 +58,7 @@ export function createMonitorServer(definition: ResetMonitorBackendDefinition) {
         eventsV2: bound(async (query: Record<string, unknown>) => paginatePublicV2(await publicV2Snapshot(), query as unknown as PublicV2Query)),
         overviewV2: bound(async ({ now }: Record<string, unknown>) => {
           const { schemaVersion: _schema, generatedAt: _generated, events: _events, ...overview } = await publicV2Snapshot(Number(now));
-          return platformOverviewSchema.parse(overview);
+          return platformOverviewSchema.parse({ ...overview, sources: publicV2Sources(definition) });
         }),
       } : {}),
     },

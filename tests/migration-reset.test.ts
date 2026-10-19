@@ -111,8 +111,8 @@ test("shared monitor migration preserves Codex evidence, manual review and state
   assert.equal(await runMigrations(db, root), 1);
   assert.ok((await constraints()).every((constraint) => constraint.convalidated), "new check is validated before old check is removed");
   await assert.rejects(insertBonus(), /migration_monitor_events_type_check/);
-  stage(shared, 9107);
-  assert.equal(await runMigrations(db, root), 1);
+  const allSharedMigrations = stage(shared, 9107);
+  assert.equal(await runMigrations(db, root), allSharedMigrations - 26);
   assert.deepEqual(await constraints(), [{ conname: "migration_monitor_events_event_type_check", convalidated: true }]);
   assert.deepEqual(await snapshot(), beforeBonus, "type expansion preserves evidence, manual audit, checkpoint and notification state");
   await insertBonus();

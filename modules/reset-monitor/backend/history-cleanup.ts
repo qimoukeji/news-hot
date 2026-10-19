@@ -55,7 +55,9 @@ export function monitorHistoryPlan(snapshot: MonitorHistorySnapshot) {
     if (row.key.startsWith("cursor:")) value = { checkpointVersion: 2, scannedThrough: row.value.scannedThrough };
     else if (row.key.startsWith("watermarks:")) value = Object.fromEntries(["lastAttemptAt", "lastCollectedAt", "lastVerifiedAt"].filter(key => row.value[key] !== undefined).map(key => [key, row.value[key]]));
     else if (row.key.startsWith("collection:coverage:v1:")) value = { authors: row.value.authors, scopeEffectiveAt: row.value.scopeEffectiveAt };
-    else if (row.key === "publication_revision" || row.key.startsWith("public_v2:pending:") && eventIds.has(`${row.monitor_id}:${row.key.slice("public_v2:pending:".length)}`)) value = row.value;
+    else if (row.key === "publication_revision" || row.key === "webhook:initialized"
+      || row.key.startsWith("webhook:event:") && eventIds.has(`${row.monitor_id}:${row.key.slice("webhook:event:".length)}`)
+      || row.key.startsWith("public_v2:pending:") && eventIds.has(`${row.monitor_id}:${row.key.slice("public_v2:pending:".length)}`)) value = row.value;
     if (!value) deletedStates.push({ monitor_id: row.monitor_id, key: row.key });
     else if (stableJson(value) !== stableJson(row.value)) updatedStates.push({ ...row, value });
   }

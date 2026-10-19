@@ -36,6 +36,21 @@ test("preview preserves withdrawn events and transitive evidence, and isolates i
   assert.ok(!after.states.some(s => s.key.startsWith("initial:") || s.key.endsWith(":missing")));
 });
 
+test("history cleanup preserves webhook initialization and existing-event notification revisions", async () => {
+  await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES
+    ('codex','webhook:initialized','{"initialized":true}'::jsonb),
+    ('codex','webhook:event:event','{"revision":7,"fingerprint":"saved","withdrawn":true,"notified":true}'::jsonb),
+    ('codex','webhook:event:missing','{"revision":1}'::jsonb)`;
+  const before = await monitorHistorySnapshot(["codex"]);
+  const plan = monitorHistoryPlan(before);
+  assert.ok(!plan.deletedStates.some(state => state.key === "webhook:initialized" || state.key === "webhook:event:event"));
+  assert.ok(plan.deletedStates.some(state => state.key === "webhook:event:missing"));
+  await cleanupMonitorHistory(["codex"], plan.fingerprint);
+  const after = await monitorHistorySnapshot(["codex"]);
+  assert.deepEqual(after.states.find(state => state.key === "webhook:event:event")!.value,
+    before.states.find(state => state.key === "webhook:event:event")!.value);
+});
+
 test("a fact edit after preview rejects cleanup before any deletion", async () => {
   const plan = monitorHistoryPlan(await monitorHistorySnapshot(["codex"]));
   await sql`UPDATE monitor_events SET title='A new manual decision' WHERE monitor_id='codex' AND id='event'`;

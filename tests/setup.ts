@@ -17,6 +17,7 @@ process.env.AIHOT_CREDENTIALS_DIR = "/nonexistent-test-credentials";
 process.env.SESSION_SECRET ??= "test-session-secret-0123456789";
 process.env.IMG_PROXY_SIGN_SECRET ??= "test-img-secret-0123456789";
 process.env.FEISHU_CONTENT_PUSH_ENABLED = "false";
+process.env.WEBHOOK_PUSH_ENABLED = "false";
 process.env.INDEXNOW_SUBMIT_ENABLED = "false";
 process.env.LOG_LEVEL ??= "error";
 // Paid providers are local stubs in these tests: calls and collection may run (the valves default off).

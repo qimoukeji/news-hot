@@ -132,14 +132,17 @@ function medianInterval(events: ResetEvent[]) {
   return { value: intervals.length % 2 ? intervals[middle]! : (intervals[middle - 1]! + intervals[middle]!) / 2, unit: "day" as const, sampleCount: intervals.length };
 }
 
+export function publicV2Sources(definition: ResetMonitorBackendDefinition): ResetSnapshot["sources"] {
+  return definition.authors.map(author => ({
+    id: `x-account:${author.handle.toLowerCase()}`, type: "official_social", name: properName(author.name), url: `https://x.com/${author.handle}`,
+  }));
+}
+
 /** Pure projection: no write, model, collection, clock-derived event state or v1 presentation. */
 export function projectPublicV2(input: PublicV2Input, definition: ResetMonitorBackendDefinition, now = Date.now()): ResetSnapshot {
   const config = definition.publicV2;
   if (!config) throw new Error("Public v2 configuration is missing");
-  const sourceMap = new Map<string, ResetSnapshot["sources"][number]>();
-  for (const author of definition.authors) sourceMap.set(`x-account:${author.handle.toLowerCase()}`, {
-    id: `x-account:${author.handle.toLowerCase()}`, type: "official_social", name: properName(author.name), url: `https://x.com/${author.handle}`,
-  });
+  const sourceMap = new Map(publicV2Sources(definition).map(source => [source.id, source]));
   const posts = new Map(input.posts.map(post => [post.id, post]));
   const events = input.events.filter(event => !event.withdrawn).map(row => {
     const linkedPosts = input.links.filter(link => link.event_id === row.id).map(link => {

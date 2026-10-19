@@ -23,7 +23,7 @@ async function command(...args: string[]) {
 
 test("site schedule reconciliation previews, removes retired execution work and keeps history without running tasks", async () => {
   installModules(SERVER_MODULES);
-  const expected = ["cron.claude-reset.tick", "cron.grok-reset.tick", "cron.monitor.tick", "cron.ops.alerts", "cron.ops.recover", "cron.ops.retention"];
+  const expected = ["cron.claude-reset.tick", "cron.grok-reset.tick", "cron.monitor.tick", "cron.ops.alerts", "cron.ops.recover", "cron.ops.retention", "cron.reset-subscriptions.sweep"];
   assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), expected);
   await boss.start();
   for (const name of ["cron.sources.schedule", "cron.old.unscheduled", "business.saved", "cron.monitor.tick"]) {

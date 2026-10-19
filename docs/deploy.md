@@ -62,6 +62,8 @@ MCP 默认接受 `SITE_URL` 的主机以及 `localhost`、`127.0.0.1`、`[::1]`�
 
 ### 更新
 
+事件 Webhook 订阅需要新增模块迁移 `0092`–`0096`：三张独立表和两个并发索引，不修改已有业务表或删除数据。应用迁移后启动 API／worker，历史事件自动建立比较基线，不补发旧事件。新增 `WEBHOOK_PUSH_ENABLED=false`，默认不发送；管理员在 `/admin/reset-subscriptions` 创建订阅，配置接收方验签后再启用订阅与安全阀。安全阀关闭期间保留待发记录，重新开启会继续投递；要取消待发内容应停用订阅。备份包含订阅签名密钥，应按其他凭据保护。数据库迁移、真实通知与生产部署分别按授权执行，详见[订阅协议](reset-monitor-webhooks.md)。
+
 公共重置 v2 提供一个 `/api/v2/overview` 总览和三个原地址的事件列表。列表根仅 `list/pagination`，支持 timeZone（IANA 命名时区，默认 UTC），日期空值默认所选时区本月，最多六个自然月；limit 空值返回范围内全部，有值 1–100 使用绑定时区的游标。公开 time 的精确时间与区间两端统一输出 UTC（Z），纯日期不变。此前按北京时间筛选的客户端需显式传 timeZone=Asia/Shanghai；旧游标失效，升级后从第一页重新请求。总览返回各平台来源、目录、统计和 predictedResetTime/announcedResetTime/resetTime；旧完整快照、overview/history/calendar 和旧三个最新事件／预测字段移除。预测过期后读取时返回北京时间明天日期，不修改原事件。无需迁移或重识别历史数据，但客户端必须按[接口规范](reset-monitor-v2.md)适配，原 when-reset 页面与 HTTP 客户端本次未接入新响应。
 
 采集后的自动识别和帖子复核继续登记既有 V2 补全任务；管理员修改、回执核对及撤回／恢复也在事实事务内登记。V2 模型只提供有原帖证据的内容，不计算总览预测或筛选分页。升级代码不自动开启采集、模型或推送，不批量补全历史记录。
@@ -271,7 +273,7 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 ## 重置监控
 ### 非回复主帖流程与历史清理
 
-本站定时任务由 `site/site.ts` 的 `DEPLOYMENT.engineSchedules` 固定保留三个运维任务，加上三个模块监控共六个 cron。部署新代码后保持 worker 停止，先运行 `node --env-file=.env scripts/reconcile-schedules.ts` 查看当前、保留和待删除队列；核对后执行同一命令加 `--apply --worker-stopped`。该参数声明已停止全部 worker；存在活跃 cron 作业时拒绝操作。同步不执行任何任务，不启动调度或维护循环，不改变 schema，不删除运行审计、付费记录或非 cron 业务队列。完成后核对只剩 `monitor.tick`、`claude-reset.tick`、`grok-reset.tick`、`ops.recover`、`ops.alerts`、`ops.retention`，再按运营授权恢复 worker。重启继续使用同一配置，已停用任务不会重新生成。
+本站定时任务由 `site/site.ts` 的 `DEPLOYMENT.engineSchedules` 固定保留三个运维任务，加上三个模块监控和共享 Webhook 扫描，共七个 cron。部署新代码后保持 worker 停止，先运行 `node --env-file=.env scripts/reconcile-schedules.ts` 查看当前、保留和待删除队列；核对后执行同一命令加 `--apply --worker-stopped`。该参数声明已停止全部 worker；存在活跃 cron 作业时拒绝操作。同步不执行任何任务，不启动调度或维护循环，不改变 schema，不删除运行审计、付费记录或非 cron 业务队列。完成后核对只剩 `monitor.tick`、`claude-reset.tick`、`grok-reset.tick`、`ops.recover`、`ops.alerts`、`ops.retention`、`reset-subscriptions.sweep`，再按运营授权恢复 worker。Webhook 扫描每分钟建立比较基线并恢复待发任务，仅在发送安全阀打开时投递。重启继续使用同一配置，已停用任务不会重新生成。
 
 三个额度监控统一执行非回复主帖增量采集、模型识别、事件关联与 v2 补全。移除旧处理模式、关键词回复筛选、历史初始化、每日查漏和回复父帖补采。账号及时间策略仍在 `site/reset-monitors.ts`，不修改 `.env`、凭据或数据库结构，不修改已发布迁移。
 

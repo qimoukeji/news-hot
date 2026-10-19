@@ -2,6 +2,10 @@
 
 此目录是 Codex、Claude 及后续 AI 重置监控共用的实现，不在站点清单中单独安装。
 
+- Webhook 订阅共用本引擎，站点仅注册一次管理入口和发送队列。公开契约放 `webhooks.ts`，事务内事件记录在 `backend/webhook-events.ts`，订阅管理与投递在 `backend/webhooks.ts`，后台页面在 `web/subscriptions.tsx`；长期实现不得放入 `.data/`。
+- Webhook 首次通知只使用当前证据版本对应的有效 v2 内容；自动补全和人工操作均在业务事务内登记变化，worker 提交后发送。历史事件先建立基线、不补发。撤回已公开事件发送空事件通知，恢复等待有效 v2 内容。订阅启停或目的地／平台变化使旧待发任务失效。
+- Webhook 请求使用独立订阅密钥签名，密钥只在创建和轮换时返回，不写日志、审计或前端持久存储。只允许 HTTPS 公网回调，不跟随重定向。超时可能已投递，使用稳定通知 ID、事件版本及有限重试；测试只用本地假服务。`WEBHOOK_PUSH_ENABLED` 仅为 true 时发送，默认关闭。
+
 - 三个监控统一启用 `direct_reset`、`reset_credit`、`bonus_credit`，使用共享常量、提示词模板与通用校验。语义见根目录 `CONTEXT.md`。
 - 账号、显示名、默认产品、作者时间策略、套餐集中在 `site/reset-monitors.ts`；不包含凭据。产品专属语义留在对应模块，共享引擎不得写死账号或产品。
 - 时间策略按实际作者和时间证据选择，默认只解析明确时间。作者预测仅适用于显式绑定的账号，奖励不预测。新事件保存时间策略，公开投影按事件读取，历史记录不回填。
@@ -29,7 +33,7 @@
 - v2 列表事件不返回 bonusCredit 字段（包括 null）；奖励事件仍使用 type=bonus_credit，并保留标题、摘要、范围和更新。内部事件投影、核验、奖励处理及已存 bonusCredit 保留，列表契约与内部事件契约分别校验。
 - v2 的列表与内部事件投影按 time 倒序、ID 升序排列，区间取起点。公开 time 的精确时间和区间两端统一输出 UTC（Z），纯日期保留原样；纯日期排序仅按 UTC 零点比较，不代表实际发生时刻，查询时区不改变排序。列表根只有 list/pagination；from/to 只接受日期，timeZone 接受 IANA 命名时区、空值默认 UTC，日期全空查所选时区本月，单边补所在月边界，最多六个自然月。精确时间按当地 from 零点至 to 次日零点的左闭右开范围筛选，区间取起点，纯日期直接比较。limit 空值返回范围内全部数据，有值为 1–100 并使用绑定平台、有效日期、规范化时区和 limit 的游标；非法参数返回 400。
 - v2 总览独立由站点注册一次，聚合各平台 sources/catalog/statistics 与三个标量时间：predictedResetTime 按历史已完成直接重置间隔推算，过期返回北京时间明天日期；announcedResetTime/resetTime 只检查全部类型按 time 排序的最近一条，按是否 announced 互斥返回。派生时间不落库，不改变识别事实。公开不再返回旧 overview/history/calendar 或旧三个字段。
-- v2 总览各平台的 sources 只列账号或发布主体及主页，按账号去重，保留配置账号及公开事件关联的历史账号。事件返回非空 updates，逐条包含原帖 id、action、publishedAt、七语言 summary 或 null、source:{sourceId,url}。只包含已接受的 announce、confirm、progress、amend、withdraw 关联，按发布时间倒序、ID 升序；同一事件内更新 ID 唯一。sourceId 引用总览对应平台的 sources，url 使用各自已存原帖地址，引用缺失或 URL 不合法时失败。不返回 primarySource/sourceIds，不拼接地址，不因更新条数增加事件统计。更新摘要与原帖证据绑定，内容失效时不公开旧摘要。
+- v2 总览各平台的 sources 只列账号或发布主体及主页，按账号去重，只返回 site/reset-monitors.ts 中配置的来源账号，不从历史事件补充作者或维护排除名单。事件返回非空 updates，逐条包含原帖 id、action、publishedAt、七语言 summary 或 null、source:{sourceId,url}。只包含已接受的 announce、confirm、progress、amend、withdraw 关联，按发布时间倒序、ID 升序；同一事件内更新 ID 唯一。sourceId 使用内部快照的账号 ID，未配置的历史账号不出现在总览中，url 使用各自已存原帖地址，引用缺失或 URL 不合法时失败。不返回 primarySource/sourceIds，不拼接地址，不因更新条数增加事件统计。更新摘要与原帖证据绑定，内容失效时不公开旧摘要。
 - 核验后的七语言文本、范围、时间与证据保存在现有 `presentation.publicV2`。自动生成与人工核验导入的 time 在写入前共用 UTC 归一化，精确时间和区间两端使用 Z，纯日期保留原样。预览展示归一化后的待写入值，审计记录实际保存值；不批量重写历史数据或改动来源时间依据。内容依据变化后旧补充信息不再公开；数据整理命令默认只导出或预览，正式库应用需另行确认，不修改表结构、不请求外部服务。详细规则见 `docs/reset-monitor-v2.md`。
 - v2 的明确月日、时分可按使用者口径自动补全年份与时区：明示值优先，缺年份按同一活动首次公告的时间确定并处理跨年，缺时区先用同帖、再用同一活动的明示时区，均无时区时使用数据库原帖时间戳的统一归档时区 UTC。记录原话、来源与补全依据；仅日期保留 date，不补成午夜，不使用当前年份或滚动延长已确定的日期。此规则不改变 v1、自动识别安全阀或采集模式。
 

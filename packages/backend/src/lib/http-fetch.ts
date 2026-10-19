@@ -33,18 +33,20 @@ function proxied(url: URL, route: EgressRoute): boolean {
   return net.isIP(host) === 0 && !host.endsWith(".cn") && !host.endsWith(".local") && !DEPLOYMENT.directFetchHosts.includes(host);
 }
 
-function dispatcherFor(viaProxy: boolean): Dispatcher | undefined {
+function dispatcherFor(viaProxy: boolean, allowPrivate: boolean): Dispatcher | undefined {
   if (viaProxy) {
     proxyAgent ??= createEgressProxy(config.egressProxyUrl!, egressResolver());
     return proxyAgent;
   }
-  if (config.allowPrivateNetworkFetch) return undefined;
+  if (allowPrivate) return undefined;
   // Direct connections resolve through the guarded lookup: the address actually dialled is checked.
   directAgent ??= new Agent({ ...OUTBOUND_HTTP_OPTIONS, connect: { lookup: guardedLookup as never } });
   return directAgent;
 }
 
 export interface GuardedFetchOptions {
+  /** A caller may require public destinations even when local collection permits private networks. */
+  allowPrivateNetwork?: boolean;
   method?: string;
   headers?: Record<string, string>;
   body?: string;
@@ -66,6 +68,13 @@ export interface GuardedResponse {
   text(): string;
 }
 
+/** Preflight uses the same resolver and routing as the eventual guarded request. */
+export function assertOutboundUrl(input: string, opts: Pick<GuardedFetchOptions, "route" | "allowPrivateNetwork"> = {}) {
+  const route = opts.route ?? "egress";
+  return assertPublicUrl(input, opts.allowPrivateNetwork ?? config.allowPrivateNetworkFetch,
+    proxied(new URL(input), route) ? egressResolver() : undefined);
+}
+
 /** How the collectors introduce themselves: the site's own crawler name and address (site/site.ts). */
 export const DEFAULT_UA = `Mozilla/5.0 (compatible; ${SITE.crawlerName}; +${config.siteUrl}/about)`;
 
@@ -74,8 +83,7 @@ export async function guardedFetch(input: string, opts: GuardedFetchOptions = {}
   // nominal 20 s image request to occupy the API for minutes.
   const signal = AbortSignal.timeout(opts.timeoutMs ?? 20_000);
   const route = opts.route ?? "egress";
-  const check = (target: string) => withinDeadline(assertPublicUrl(target, config.allowPrivateNetworkFetch,
-    proxied(new URL(target), route) ? egressResolver() : undefined), signal);
+  const check = (target: string) => withinDeadline(assertOutboundUrl(target, opts), signal);
   let url = await check(input);
   const maxRedirects = opts.maxRedirects ?? 5;
   const maxBytes = opts.maxBytes ?? 8 * 1024 * 1024;
@@ -92,7 +100,7 @@ export async function guardedFetch(input: string, opts: GuardedFetchOptions = {}
       headers: Object.fromEntries(headers),
       body: requestBody,
       redirect: "manual",
-      dispatcher: dispatcherFor(proxied(url, route)),
+      dispatcher: dispatcherFor(proxied(url, route), opts.allowPrivateNetwork ?? config.allowPrivateNetworkFetch),
       signal,
     });
     if ([301, 302, 303, 307, 308].includes(res.status) && res.headers.get("location")) {

@@ -6,7 +6,7 @@ import { after, test } from "node:test";
 import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { DEPLOYMENT } from "@aihot/site";
 import { config } from "@aihot/backend/config";
-import { guardedFetch } from "@aihot/backend/lib/http-fetch";
+import { assertOutboundUrl, guardedFetch } from "@aihot/backend/lib/http-fetch";
 
 const deployment = DEPLOYMENT as unknown as { directFetchHosts?: string[] };
 const previousHosts = deployment.directFetchHosts;
@@ -60,4 +60,13 @@ test("direct host exceptions never grant permission to fetch a private address",
   config.allowPrivateNetworkFetch = false;
   try { await assert.rejects(guardedFetch("http://localhost/metadata"), /Blocked/); }
   finally { config.allowPrivateNetworkFetch = true; }
+});
+
+test("outbound URL preflight uses proxy DNS while refusing private destinations even during local debugging", async () => {
+  const before = proxyHits;
+  await assert.rejects(assertOutboundUrl("https://preflight.abroad.invalid/webhook", { allowPrivateNetwork: false }), /Egress DNS lookup failed/);
+  assert.ok(proxyHits > before, "preflight must use the configured proxy rather than system DNS");
+  const after = proxyHits;
+  await assert.rejects(assertOutboundUrl("https://127.0.0.1/webhook", { allowPrivateNetwork: false }), /Blocked/);
+  assert.equal(proxyHits, after, "private destinations are rejected before connecting to the proxy");
 });

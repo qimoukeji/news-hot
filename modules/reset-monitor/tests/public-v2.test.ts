@@ -96,6 +96,36 @@ test("v2 HTTP supports anonymous 200/304, platform isolation, strict queries and
   } finally { config.devAdmin = oldAdmin; await app.close(); }
 });
 
+test("overview sources only contain configured accounts while historical updates remain available", async () => {
+  for (const monitorId of ["grok", "codex"]) for (const author of ["SpaceXSI", "ELONMUSK", "HistoricalAuthor"]) {
+    await sql`INSERT INTO monitor_posts(monitor_id,id,author,published_at,text,url) VALUES
+      (${monitorId},${author},${author},'2026-10-01T13:00:00Z','Synthetic historical update.',${`https://x.com/${author}/status/${author}`})`;
+    await sql`INSERT INTO monitor_event_posts(monitor_id,event_id,post_id,stage,action,text,original_text) VALUES
+      (${monitorId},'same-event',${author},'confirmed','confirm','Synthetic historical update.','Synthetic historical update.')`;
+  }
+  const app = await buildApp();
+  try {
+    const listUrl = "/api/v2/grok-resets?from=2026-10-01&to=2026-10-31";
+    const before = eventListSchema.parse((await app.inject(listUrl)).json());
+    const response = await app.inject("/api/v2/overview");
+    assert.equal(response.statusCode, 200);
+    const overview = overviewSchema.parse(response.json());
+    const grokOverview = overview.platforms.find(platform => platform.platform === "grok")!;
+    assert.deepEqual(grokOverview.sources.map(source => source.id), ["x-account:bot", "x-account:grok"]);
+    for (const definition of definitions) {
+      const platform = overview.platforms.find(platform => platform.platform === definition.publicV2!.platform)!;
+      assert.deepEqual(platform.sources.map(source => source.id), definition.authors.map(author => `x-account:${author.handle.toLowerCase()}`));
+    }
+    const unchanged = await app.inject({ url: "/api/v2/overview", headers: { "if-none-match": String(response.headers.etag) } });
+    assert.equal(unchanged.statusCode, 304);
+    assert.deepEqual(eventListSchema.parse((await app.inject(listUrl)).json()), before);
+    for (const author of ["SpaceXSI", "ELONMUSK"]) {
+      assert.ok(before.list[0]!.updates.some(update => update.source.sourceId === `x-account:${author.toLowerCase()}`
+        && update.source.url === `https://x.com/${author}/status/${author}`));
+    }
+  } finally { await app.close(); }
+});
+
 test("invalid stored editorial metadata returns 503 independently of other platforms", async () => {
   await sql`UPDATE monitor_events SET presentation='{"publicV2":{"unexpected":true}}'::jsonb WHERE monitor_id='claude'`;
   const app = await buildApp();

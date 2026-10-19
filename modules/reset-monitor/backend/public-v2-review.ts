@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
+import { captureWebhookEvent } from "./webhook-events.ts";
 import { audit, Conflict } from "@aihot/backend/audit";
 import { sql, type Db } from "@aihot/backend/db";
 import { stableJson, sha256 } from "@aihot/backend/lib/ids";
@@ -140,6 +141,7 @@ export async function applyPublicV2(value: unknown, definitions: ResetMonitorBac
         WHERE monitor_id=${change.monitorId} AND id=${change.id}`;
       const definition = definitions.find(definition => definition.monitorId === change.monitorId)!;
       await inMonitor(definition, () => audit(actor, auditAction("public_v2"), auditSubject("event", change.id), reason, change.before, change.after, { db }));
+      await inMonitor(definition, () => captureWebhookEvent(db, change.id));
     }
     return { operationId: randomUUID(), ...prepared };
   });

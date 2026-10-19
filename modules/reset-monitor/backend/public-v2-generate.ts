@@ -104,7 +104,7 @@ export async function processPublicV2Pending() {
   for (const row of input.events) {
     const stored = currentReview(row);
     if (!requested.has(row.id) && (!stored || stored.evidenceVersion === evidenceVersion(row, input))) continue;
-    if (row.withdrawn || stored?.evidenceVersion === evidenceVersion(row, input)) { await clearPublicV2Work(sql, row.id); continue; }
+    if (row.withdrawn || stored?.evidenceVersion === evidenceVersion(row, input)) { await sql.begin(db => clearPublicV2Work(db, row.id)); continue; }
     const version = editionVersion(row, input);
     if (work.get(row.id)?.status === "needs_review" && work.get(row.id)?.version === version) { enrichmentPending++; continue; }
     shutdownSignal.signal.throwIfAborted();

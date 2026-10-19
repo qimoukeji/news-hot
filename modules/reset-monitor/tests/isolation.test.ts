@@ -133,7 +133,7 @@ test("third monitor shares publications, HTTP and Agent without new tables, and 
     await addPost(definition, "same-third");
     await inMonitor(definition, () => applyRecognition("same-third", recognition(definition)));
   }
-  const tables = await sql`SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'monitor_%' ORDER BY tablename`;
+  const tables = await sql`SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'monitor_%' AND tablename NOT LIKE 'monitor_webhook_%' ORDER BY tablename`;
   assert.deepEqual(tables.map((row) => row.tablename), ["monitor_event_posts", "monitor_events", "monitor_posts", "monitor_state"]);
   const [thirdData, claudeData] = await Promise.all([
     modulePublication<ResetMonitorSnapshot>(third.moduleName, "snapshot"), modulePublication<ResetMonitorSnapshot>(claude.moduleName, "snapshot"),

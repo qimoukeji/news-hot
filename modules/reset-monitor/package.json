@@ -7,7 +7,8 @@
     "./web": "./web.tsx",
     "./web/page": "./web/page.tsx",
     "./web/admin": "./web/admin.tsx",
-    "./web/review": "./web/review.tsx"
+    "./web/review": "./web/review.tsx",
+    "./subscriptions-web": "./subscriptions-web.tsx"
   },
   "dependencies": {
     "@aihot/backend": "*",

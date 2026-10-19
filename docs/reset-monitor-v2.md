@@ -9,7 +9,7 @@
 | /api/v2/claude-resets | list、pagination |
 | /api/v2/grok-resets | list、pagination |
 
-总览每个平台包含 platform、sources、catalog、statistics、predictedResetTime、announcedResetTime、resetTime。来源覆盖全部公开事件引用账号。最近事件包含直接重置、重置卡和奖励额度，按 time 倒序、ID 升序取第一条：状态 announced 时只返回 announcedResetTime，其他状态只返回 resetTime，无事件两者均 null。三个时间字段是 ISO 时间字符串或 null，不返回事件对象。
+总览每个平台包含 platform、sources、catalog、statistics、predictedResetTime、announcedResetTime、resetTime。来源只返回站点配置账号。最近事件包含直接重置、重置卡和奖励额度，按 time 倒序、ID 升序取第一条：状态 announced 时只返回 announcedResetTime，其他状态只返回 resetTime，无事件两者均 null。三个时间字段是 ISO 时间字符串或 null，不返回事件对象。
 
 predictedResetTime 以最近已完成直接重置的精确时间为锚点，取此前 90 天至少三次精确已完成记录的正间隔中位数推算。样本不足 null，预测不晚于当前时刻则返回北京时间明天的 YYYY-MM-DD，每天重算，不修改事实。统计覆盖全部公开事件，不受列表筛选影响。
 
@@ -31,9 +31,9 @@ limit 空值返回范围内全部，响应 limit=null、hasMore=false、nextCurs
 
 每次核验绑定事件事实、关联与来源的内容摘要；事实变化后旧文本、范围和时间失效，回到保守投影，再通过整理命令补齐。首次发布时间不因失效漂移。公开范围遵守既有撤回规则。
 
-`sources` 只包含配置账号及公开事件关联的历史账号，使用账号名称与主页，不按帖子重复建立来源。账号 ID 使用小写 handle 生成的 `x-account:<handle>`，同一账号不区分大小写，配置中的显示名优先保留；没有事件时也返回全部配置账号。
+`sources` 只返回 `site/reset-monitors.ts` 中各平台配置的来源账号，使用配置名称与主页，不从历史事件补充作者。账号 ID 使用小写 handle 生成的 `x-account:<handle>`；没有事件时也返回全部配置账号。Grok 当前配置为 `@bot`、`@grok`。
 
-每个事件返回非空 `updates`，完整列出该事件已接受的业务更新，不包含顶层 `primarySource` 或 `sourceIds`。每条更新为 `{id,action,publishedAt,summary,source:{sourceId,url}}`：id 使用原帖 ID，在同一事件内唯一；action 为 announce、confirm、progress、amend、withdraw；publishedAt 为该条原帖的实际发布时间；summary 为本次更新的七语言业务摘要或 null，不复制整段原帖、不复用事件总摘要。sourceId 引用总览对应平台 sources 的账号，url 使用该更新已存原帖地址。引用缺失或 URL 不合法时返回 503，不以主页或拼接地址补位。
+每个事件返回非空 `updates`，完整列出该事件已接受的业务更新，不包含顶层 `primarySource` 或 `sourceIds`。每条更新为 `{id,action,publishedAt,summary,source:{sourceId,url}}`：id 使用原帖 ID，在同一事件内唯一；action 为 announce、confirm、progress、amend、withdraw；publishedAt 为该条原帖的实际发布时间；summary 为本次更新的七语言业务摘要或 null，不复制整段原帖、不复用事件总摘要。sourceId 使用内部快照的账号 ID，未配置的历史账号不会出现在总览 sources 中；url 使用该更新已存原帖地址。引用缺失或 URL 不合法时返回 503，不以主页或拼接地址补位。
 
 更新按 publishedAt 倒序、ID 升序。顶层 status/time/summary 表示事件当前结果，updates.action 表示每次更新做了什么，updates.publishedAt 不用预计执行时间替代。同一事件有多条更新仍只算一次重置或发放。来源链接使用对应更新的 source；事件列表可用首条更新来源，并可展开完整时间线访问各条来源。
 
