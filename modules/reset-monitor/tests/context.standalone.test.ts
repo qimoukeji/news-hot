@@ -10,7 +10,7 @@ import { backendDefinition as claude } from "../../claude-reset/backend-definiti
 export const third: ResetMonitorBackendDefinition = {
   ...claude, monitorId: "testai", moduleName: "testai-reset", authors: [{ handle: "TestAI", name: "TestAI" }], authorName: "TestAI", product: "TestAI",
   pagePath: "/testai-reset", adminPath: "/admin/testai-reset", adminApiPath: "/api/admin/testai-reset",
-  siteApiPath: "/api/site/testai-reset", publicApiPath: "/api/v1/testai-resets", agentPath: "/testai-resets",
+  publicApiPath: "/api/v2/testai-resets", agentPath: "/testai-resets",
   mcpTool: "get_testai_resets", names: monitorNames("testai"), providerEnv: "TESTAI_RESET_PROVIDER",
   scanMinutesEnv: "TESTAI_RESET_SCAN_MINUTES",
 };
@@ -35,9 +35,10 @@ test("monitor scopes follow parallel awaits and restore the caller scope", async
 test("a third monitor registers unique backend and page entries without engine edits", () => {
   const backend = createMonitorServer(third);
   assert.equal(backend.name, "testai-reset");
-  assert.deepEqual(backend.schedules!.map((schedule) => [schedule.name, schedule.retryLimit]), [["testai-reset.tick", 0]]);
+  assert.deepEqual(backend.schedules!.map((schedule) => [schedule.name, schedule.retryLimit]), [["testai-reset.translate", 0], ["testai-reset.tick", 0]]);
   assert.equal(backend.models!.monitor!.env, "MONITOR_MODEL");
   assert.equal(backend.agent!.abilities![0]!.mcp.tool, "get_testai_resets");
   assert.match(JSON.stringify(createMonitorModule(third)), /testai-reset/);
   assert.throws(() => createMonitorServer({ ...third, monitorId: "untrusted/monitor" }), /Invalid reset monitor ID/);
+  assert.throws(() => createMonitorServer({ ...third, collection: { includeReplies: true, includeSelfReplies: true, resetOnly: true, keywords: [] } }), /Invalid reset monitor collection/);
 });

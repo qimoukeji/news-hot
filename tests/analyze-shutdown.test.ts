@@ -42,6 +42,7 @@ const children = new Set<ReturnType<typeof spawn>>();
 
 function worker(queue: string) {
   const script = `
+    import './tests/setup.ts';
     import { getBoss, stopBoss, shutdownSignal, QUEUES } from '@aihot/backend/jobs/queue';
     import { registerContentJobs } from '@aihot/backend/jobs/content';
     import { closeDb } from '@aihot/backend/db';

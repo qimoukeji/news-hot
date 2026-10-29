@@ -1,7 +1,7 @@
 // SocialData (X search). Paid per request: every call goes through receipts and the budget.
 import { credential } from "../config.ts";
 import { guardedFetch } from "../lib/http-fetch.ts";
-import { assertAccepted, assertRequestCanSend, isMonitorRequest, paidRequest, rejectReceivedResponse, type CallOutcome, type ReceiptRequest, type ReceiptResult } from "./receipts.ts";
+import { assertAccepted, assertRequestCanSend, canResumeDefiniteFailure, isMonitorRequest, paidRequest, ProviderNotSentError, rejectReceivedResponse, type CallOutcome, type ReceiptRequest, type ReceiptResult } from "./receipts.ts";
 
 export interface SdUser {
   name: string;
@@ -45,6 +45,17 @@ export interface SearchResult {
   reused: boolean;
 }
 
+export interface TweetLookupResult {
+  tweets: SdTweet[];
+  /** The provider did not return these IDs; this alone does not prove deletion. */
+  missingIds: string[];
+  receiptIds: number[];
+  receiptById: Record<string, number>;
+  reused: boolean;
+}
+
+export interface TweetLookupOptions { purpose: string; subject: string }
+
 /**
  * SocialData bills US$0.20 per 1,000 objects returned by a successful response. Recorded per call as an
  * estimate.
@@ -69,6 +80,7 @@ async function get<T>(path: string, request: Omit<ReceiptRequest, "service">,
   if (!key) throw new Error("SOCIALDATA_API_KEY is not configured");
   return paidRequest({ service: "socialdata", ...request }, async () => {
     await assertRequestCanSend("socialdata");
+    if (isMonitorRequest(request.purpose) && process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
     const res = await guardedFetch(`${apiBase()}${path}`, {
       headers: { authorization: `Bearer ${key}`, accept: "application/json" },
       timeoutMs: read.timeoutMs,
@@ -96,18 +108,20 @@ function validateMonitorTweet(tweet: SdTweet, depth = 0) {
  * Searches recent tweets. `window` makes the receipt identity time-bucketed so a retry in the same
  * bucket reuses the stored response instead of paying again.
  */
-export async function searchTweets(query: string, opts: { purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null }): Promise<SearchResult> {
+export async function searchTweets(query: string, opts: { purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null; resume?: boolean }): Promise<SearchResult> {
   const type = opts.type ?? "Latest";
   const sp = new URLSearchParams({ query, type });
   if (opts.cursor) sp.set("cursor", opts.cursor);
+  const request = { purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window }, requestSummary: { query, type, cursor: opts.cursor ?? null } };
+  const retryFailed = opts.resume === true && await canResumeDefiniteFailure({ service: "socialdata", ...request });
   const receipt = await get<{ tweets?: SdTweet[] }>(`/twitter/search?${sp}`,
-    { purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window }, requestSummary: { query, type } },
+    { ...request, retryFailed },
     {
       // Deeper pages of a search over two dozen accounts can take well over 20 seconds.
       timeoutMs: 60_000,
       maxBytes: 12 * 1024 * 1024,
       settle: (json) => {
-        const tweets = json.tweets?.length ?? 0;
+        const tweets = json?.tweets?.length ?? 0;
         return { response: json, usage: { tweets }, cost: objectsCost(tweets) };
       },
     });
@@ -119,6 +133,32 @@ export async function searchTweets(query: string, opts: { purpose: string; subje
     } catch (error) { await rejectReceivedResponse(receipt.receiptId, String(error)); throw error; }
   }
   return { tweets: json.tweets ?? [], nextCursor: json.next_cursor ?? null, receiptId: receipt.receiptId, reused: receipt.reused };
+}
+
+/** Context lookups have a stable identity: a failed business write reuses the paid answer. */
+export async function lookupTweets(ids: readonly string[], opts: TweetLookupOptions): Promise<TweetLookupResult> {
+  const sorted = [...new Set(ids)].sort();
+  if (sorted.some(id => !/^\d+$/.test(id))) throw new Error("Invalid context post ID");
+  const result: TweetLookupResult = { tweets: [], missingIds: [], receiptIds: [], receiptById: {}, reused: true };
+  for (const id of sorted) {
+    if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
+    const receipt = await get<SdTweet>(`/twitter/tweets/${encodeURIComponent(id)}`,
+      { purpose: opts.purpose, subject: opts.subject, identity: { base: apiBase(), tweet: id }, retryFailed: false, requestSummary: { tweet: id } },
+      { ...LOOKUP, missing: { tweets: 0 }, settle: json => ({ response: json, usage: { tweets: 1 }, cost: objectsCost(1) }) });
+    try {
+      if (receipt.response === null) result.missingIds.push(id);
+      else {
+        const tweet = receipt.response as SdTweet;
+        validateMonitorTweet(tweet);
+        if (tweet.id_str !== id) throw new Error("SocialData returned a different context post ID");
+        result.tweets.push(tweet);
+      }
+    } catch (error) { await rejectReceivedResponse(receipt.receiptId, String(error)); throw error; }
+    result.receiptIds.push(receipt.receiptId);
+    result.receiptById[id] = receipt.receiptId;
+    result.reused &&= receipt.reused;
+  }
+  return result;
 }
 
 /** The provider escapes these three plain-text characters. One pass preserves literal entity text. */

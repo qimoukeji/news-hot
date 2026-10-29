@@ -1,7 +1,0 @@
-import * as shared from "@aihot/reset-monitor/backend/scan";
-import { bindMonitor } from "@aihot/reset-monitor/backend/context";
-import { backendDefinition } from "../backend-definition.ts";
-export const collectPosts = bindMonitor(backendDefinition, shared.collectPosts);
-export const processPending = bindMonitor(backendDefinition, shared.processPending);
-export const flushResetPushes = bindMonitor(backendDefinition, shared.flushResetPushes);
-export const monitorTick = bindMonitor(backendDefinition, shared.monitorTick);

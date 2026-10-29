@@ -29,12 +29,25 @@ export async function runMigrations(sql: postgres.Sql, root: string): Promise<nu
     await session`SET statement_timeout = '10s'`;
     await session`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
     const applied = new Set((await session<{ name: string }[]>`SELECT name FROM schema_migrations`).map((row) => row.name));
+    const assertEmpty = async (table: string) => {
+      const [relation] = await session`SELECT to_regclass(${table}) AS id`;
+      if (!relation.id) return false;
+      const [row] = await session.unsafe(`SELECT EXISTS (SELECT 1 FROM ${table} LIMIT 1) AS populated`);
+      if (row.populated) throw new Error(`refusing to drop nonempty table ${table}; restore a verified current-schema backup into an empty database or handle existing data separately`);
+      return true;
+    };
+    for (const { name, plan } of prepared) {
+      if (!applied.has(name) && plan.kind === "drop-table") {
+        try { await assertEmpty(plan.table); }
+        catch (error) { throw new Error(`migration ${name} preflight failed: ${(error as Error).message}`, { cause: error }); }
+      }
+    }
     let count = 0;
     for (const { name, text, plan } of prepared) {
       if (applied.has(name)) continue;
       const start = Date.now();
       try {
-        const metadataOnly = plan.kind === "transaction" || plan.kind === "primary-key";
+        const metadataOnly = plan.kind === "transaction" || plan.kind === "primary-key" || plan.kind === "drop-table";
         await session`SELECT set_config('lock_timeout', ${metadataOnly ? "1s" : "30s"}, false)`;
         await session`SELECT set_config('statement_timeout', ${metadataOnly ? "10s" : "30min"}, false)`;
         if (plan.kind === "index") {
@@ -53,6 +66,15 @@ export async function runMigrations(sql: postgres.Sql, root: string): Promise<nu
         } else {
           await session`BEGIN`;
           try {
+            let execute = true;
+            if (plan.kind === "drop-table") {
+              const [relation] = await session`SELECT to_regclass(${plan.table}) AS id`;
+              execute = Boolean(relation.id);
+              if (relation.id) {
+                await session.unsafe(`LOCK TABLE ${plan.table} IN ACCESS EXCLUSIVE MODE`);
+                await assertEmpty(plan.table);
+              }
+            }
             if (plan.kind === "primary-key") {
               // Hold the same lock as ALTER TABLE before inspecting the catalog: no concurrent DDL
               // may drop NOT NULL or replace the index between this check and its attachment.
@@ -84,7 +106,7 @@ export async function runMigrations(sql: postgres.Sql, root: string): Promise<nu
               if (!index.suitable) throw new Error(`primary key index ${plan.index} must be an unattached unique btree index with plain columns and default ordering`);
               if (!index.columns_not_null) throw new Error(`primary key index ${plan.index} has nullable columns; refusing an implicit NOT NULL table scan`);
             }
-            await session.unsafe(text);
+            if (execute) await session.unsafe(text);
             await session`INSERT INTO schema_migrations (name) VALUES (${name})`;
             await session`COMMIT`;
           } catch (error) {

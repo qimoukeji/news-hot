@@ -6,8 +6,11 @@ import { collectorName } from "../../config.ts";
 
 export type Tweet = socialdata.SdTweet;
 export type SearchOptions = Parameters<typeof socialdata.searchTweets>[1];
+export type LookupOptions = socialdata.TweetLookupOptions;
+export type LookupResult = socialdata.TweetLookupResult;
 export interface Collector {
   searchTweets(query: string, options: SearchOptions): Promise<socialdata.SearchResult>;
+  lookupTweets(ids: readonly string[], options: LookupOptions): Promise<LookupResult>;
 }
 const collectors: Record<string, Collector> = { socialdata, twitterapi_io: twitterapi };
 function current(): Collector {
@@ -18,4 +21,5 @@ function current(): Collector {
   return collector;
 }
 export const searchTweets = (query: string, options: SearchOptions) => current().searchTweets(query, options);
+export const lookupTweets = (ids: readonly string[], options: LookupOptions) => current().lookupTweets(ids, options);
 export const tweetText = socialdata.tweetText;

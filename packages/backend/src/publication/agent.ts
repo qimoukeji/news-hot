@@ -287,7 +287,7 @@ export function agentGuide(): string {
     "| 某个热点的来龙去脉、后续进展 | 热点结果里每个事件的「来龙去脉」地址 |",
     `| ${SITE.name} 日报 | ${u("/daily")}（最新一期）；指定日期：${u("/daily/2026-09-30")} |`,
     `| 这一周、这个月的重点（周报、月报） | ${u("/weekly")}、${u("/monthly")}（最新一期）；指定一期：${u("/weekly/2026-W39")}、${u("/monthly/2026-09")} |`,
-    ...abilities.map((a) => `| ${a.ask} | ${u(a.path)} |`),
+    ...abilities.map((a) => `| ${a.ask} | ${a.apiPath ? siteUrl(a.apiPath) : u(a.path)} |`),
     "",
     `参数可以组合，例如 ${u(`/latest?window=7d&category=${sample}`)}；关键词要做 URL 编码。`,
     "",

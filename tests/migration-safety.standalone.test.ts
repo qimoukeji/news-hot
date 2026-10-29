@@ -48,8 +48,9 @@ test("online migrations permit metadata changes and split constraint validation"
 // Dropping a table nothing uses: a dependent object must stop it (no CASCADE), and one statement may not
 // lock several tables at once.
 test("a table nothing uses can be dropped alone, never with its dependents", () => {
-  assert.equal(migrationPlan("DROP TABLE IF EXISTS retired_example;").kind, "transaction");
-  assert.equal(migrationPlan("-- retired\nDROP TABLE IF EXISTS public.retired_example;").kind, "transaction");
+  assert.deepEqual(migrationPlan("DROP TABLE IF EXISTS retired_example;"), { kind: "drop-table", table: "retired_example" });
+  assert.deepEqual(migrationPlan("-- retired\nDROP TABLE IF EXISTS public.retired_example;"), { kind: "drop-table", table: "public.retired_example" });
+  assert.deepEqual(migrationPlan('DROP TABLE IF EXISTS public . "retired . example";'), { kind: "drop-table", table: 'public."retired . example"' });
   for (const statement of [
     "DROP TABLE IF EXISTS retired_example CASCADE;",
     "DROP TABLE retired_example;",

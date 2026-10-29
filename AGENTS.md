@@ -28,8 +28,9 @@
 - 前端（`apps/web`）只通过 HTTP 读 `apps/api`，数据库、模型调用和密钥只在后端。
 - 所有公开出口都从 `packages/backend/src/publication/` 这一个读取层读，新增公开出口也一样。
 - 读者打开页面不触发模型调用；模型只在 worker 的任务里调用。
+- 本站任务队列由 `site/site.ts` 的 `DEPLOYMENT.queues` 白名单控制，允许三个平台的 X 采集 cron、各平台独立的多语言翻译 cron、独立的事件确认检查，以及订阅 sweep 和 deliver；其余队列仍停用，不将独立任务并入采集 tick。框架测试用显式测试配置恢复需要的队列，不根据 `NODE_ENV` 绕过站点限制。
 - 付费请求都经过回执（`providers/receipts.ts`）和预算熔断，不要绕开。
-- 安全阀只有设成 `true` 才打开。开发时保持关闭：`COLLECT_ENABLED`、`MODEL_CALLS_ENABLED`、`FEISHU_*_ENABLED`、`INDEXNOW_SUBMIT_ENABLED`。测试里推送一直关着，采集和模型调用只连本地假服务，不访问任何外部服务。
+- 安全阀只有设成 `true` 才打开。开发时默认关闭：`COLLECT_ENABLED`、`MODEL_CALLS_ENABLED`、`FEISHU_*_ENABLED`、`INDEXNOW_SUBMIT_ENABLED`。用户明确授权自动翻译后，可仅在开发 worker 进程开启 `MODEL_CALLS_ENABLED`，采集、识别、真实推送和 IndexNow 仍关闭，API 和页面读取不得触发模型。测试里推送一直关着，采集和模型调用只连本地假服务，不访问任何外部服务。
 - 信源默认只展示摘要和原文链接（`site_fulltext` 关）；只有来源明确允许时才打开全文。
 - 公开内容匿名，管理员和访客看到的一样；后台只允许管理员。
 - 停用或替换一个功能、机制时，同一个改动删掉它的代码、测试、文档和存下的状态（库表与列、定时任务、settings、环境变量和 `.env.example` 里的项）；会删掉使用者已有数据的，在 `docs/deploy.md` 的更新说明里写明。加锁、重试、兼容旧格式、开关和兜底，先要有证据：真实部署里发生过，或平台的语义决定它会发生。
@@ -43,6 +44,8 @@
 
 ## 开发与部署分支
 
+- `dev/codex` 是测试环境，该工作区 `.env` 配置的数据库也是测试数据库；不能仅凭数据库在远程服务器或已有服务运行就判定为生产环境。
+- 测试与部署工作区各自维护 `.env`。部署时保留 `dev/codex` 的 `.env`，部署环境配置只在 `codex/deploy` 工作区的 `.env` 调整；`.env` 不进入 Git，也不随分支合并覆盖。
 - 所有代码、测试、文档和规则修改都在开发分支 `dev/codex` 完成，不在部署分支 `codex/deploy` 直接修改。
 - 仅在使用者明确要求部署时，将已验证并推送的 `dev/codex` 合并到 `codex/deploy`，再推送部署分支触发部署；部署结束后回到开发分支。
 - 部署前先更新远端引用，检查开发工作区（包括关联 worktree）没有未提交、暂存或未跟踪的待提交变更，且本地 `dev/codex` 与 `origin/dev/codex` 的提交完全一致。开发分支有未推送提交、未提交变更、远端未同步或无法核验远端状态时，禁止合并发布和部署；不能跳过开发分支推送，直接把工作区或本地提交发布。

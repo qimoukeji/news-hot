@@ -39,7 +39,7 @@
    确认原库没有客户端会话，记录数据库原有设置，再由 PostgreSQL 管理员在 `postgres` 库执行 `ALTER DATABASE newshot SET default_transaction_read_only=on`。保持原应用停止；此设置只约束新会话的默认事务，不能替代停写与会话核对。本站原生 PostgreSQL 管理程序位于 `/www/server/pgsql/bin/`，数据库业务账户没有修改数据库设置的权限。
 6. 运行 `audit.cjs capture` 输出原库所有业务表的条数、内容哈希、序列状态和本地附件引用。使用 `/www/server/pgsql/bin/pg_dump` 18 导出 custom-format 备份并校验 `pg_restore --list`。密码通过私有 `PGPASSFILE` 提供，不放进命令参数。打包本机 `.data/uploads` 与 `.data/feedback-screenshots`；不存在时使用空 tar 包。停写期间生成数据库、审计文件和附件包，期间不恢复旧应用写入。
 7. 上传 SHA 对应发布包，将 `stage-first.sh` 与 `manifest.cjs` 传到同一工具目录，执行 `stage-first.sh <SHA>`，核验 checksum、解包并加载两个镜像。保持原库停写，执行发布目录中的 `rehearse.sh <SHA> <dump> <files.tar.gz> <source-audit.json>`，在 `news-hot-import-rehearsal` 独立库恢复并核对全部内容。它还检查附件引用及逐文件 SHA256；演练卷停止后保留，记录绑定数据库、附件和审计文件三份输入。
-8. 执行发布目录中的 `import.sh <SHA> <dump> <files.tar.gz> <source-audit.json>`。它拒绝已有目标卷、未完成演练、变更后的任一输入或开启的付费开关。恢复后再次核对数据库和附件清单，以 UID 1000 运行应用，完成 smoke 和重启检查后才写入初始化状态。
+8. 执行发布目录中的 `import.sh <SHA> <dump> <files.tar.gz> <source-audit.json>`。它拒绝已有目标卷、未完成演练、变更后的任一输入或开启的采集、模型、飞书、Webhook、IndexNow 开关。恢复后再次核对数据库和附件清单，以 UID 1000 仅启动 API/web，完成 smoke 和重启检查后才写入初始化状态；worker 保持停止，须在后续运营验收后单独恢复。
 9. 原库、原备份及演练库都保留。初始仅通过管理员 SSH 隧道访问 `127.0.0.1:3000`，验收三个监控页面、后台、API、检查点、回执和附件引用。源库写入保持暂停，避免两套应用各自推进同一批数据。
 
 业务数据备份与源库审计文件仅在本机及服务器之间传送，不成为 Actions artifacts。当前审计值是参考值；正式迁移必须在停写后重新生成，不能拿不停写时的报告冒充迁移基准。
@@ -49,6 +49,20 @@
 正常切换后保持原库只读。若经批准恢复原应用，先停止新库的 API、worker 和所有人工写入，再由原 PostgreSQL 管理员恢复记录中的数据库设置；原来未设置只读时执行 `ALTER DATABASE newshot RESET default_transaction_read_only`。恢复原应用前确认切换后新库产生的数据如何保留，不能直接忽略新增数据。
 
 通过已有管理员连接建立预览隧道：`ssh -N -L 13000:127.0.0.1:3000 centos-server`，浏览器访问 `http://127.0.0.1:13000`。部署账户的密钥禁止端口转发，预览使用原管理员连接。
+
+## 重新部署并导入测试环境数据
+
+本站重建时，数据源是开发环境 `newshot` 中已核验的当前动作结构。保留测试源库，用数据库与附件的完整备份导入新建空卷；不用旧部署库执行跨结构迁移。准备方案不代表已经授权删除卷、数据导入、push 或公开部署。
+
+1. 先按“更新和失败处理”核对开发分支、工作区和远端提交，源库迁移账本与待发布 SHA 必须完全一致。源库为 PostgreSQL 18，导出与演练使用 PostgreSQL 18 客户端，不用 17 客户端导出 18 数据库。
+2. 停止测试环境所有写入后，按“首次配置与导入”生成 custom-format dump、附件包及 `audit.cjs capture` 清单。数据库、附件、审计三份文件计算校验值，后续演练和正式导入必须使用同一组输入；测试源库不删除。
+3. 停止旧部署的 API/worker/web 及人工写入，备份旧数据库、附件、`shared/.env`、初始化状态和当前发布标识。列出 `news-hot` 项目的容器、镜像、实际数据库及附件挂载，确认它们是命名卷还是 bind mount，核验绝对路径及 Docker 项目标记；此时保留旧容器、镜像和数据库挂载，演练成功后才按清单处理。
+4. 首次导入要求 `/opt/news-hot/current` 和 `shared/initialized` 不存在，且 `news-hot_db`、`news-hot_data` 两个目标卷不存在。旧 `current`、`shared/initialized`、`shared/published-sha` 及故障标记先移入受保护的带时间戳归档；保留 `shared/.env` 和发布锁。故障标记只能在核实旧故障已处置且本次重建已批准后归档。旧发布目录与镜像先保留至少一份可恢复版本，待新站验收后再按清单删除。
+5. 准备全新发布包；在独立 `news-hot-import-rehearsal` 项目运行 `rehearse.sh <SHA> <dump> <files.tar.gz> <source-audit.json>`。失败时保留现场且不运行 import。若已存在上次演练卷或记录，先单独审阅并批准处理，不覆盖演练结果。
+6. 演练成功后，核对旧数据库及附件已有可恢复备份，且挂载没有其他容器使用。按本次明确批准的对象清单清理旧构建、容器和目标数据库挂载，不执行全局 prune，不处理其他站点、证书、备份及刚验收的新发布包。按“首次配置与导入”使用 `import.sh` 恢复到两个空目标卷。源库备份已经包含 schema，导入前不运行 setup 建表，导入中不隐式迁移。导入后的表内容、序列、附件引用与逐文件哈希必须匹配审计清单。
+7. 运行 API/web 验收前后台、公开接口、附件和重启，worker 保持停止。部署专用 `.env` 不用测试配置覆盖；安全阀保持关闭。核对备份中带来的 Webhook 订阅、待发任务、会话和采集检查点，确认生产接收地址及待发内容后再单独批准运营恢复，不能因恢复数据库自动发送测试通知。
+
+若新版本验收失败，停止新实例并保留新卷、日志与备份；恢复旧站必须使用归档的旧数据库、附件及匹配代码，不把新结构数据交给旧代码。保留旧备份和测试源库，不能以重试为由删除唯一可恢复副本。
 
 ## 更新和失败处理
 
@@ -83,6 +97,7 @@ bash release.sh apply <完整SHA> '<迁移approvalDigest或空字符串>' '<历�
 node --test deploy/news-hot/tests/manifest.test.cjs deploy/news-hot/tests/attachments.test.cjs
 bash deploy/news-hot/tests/release.integration.sh
 bash deploy/news-hot/tests/attachments.integration.sh
+bash deploy/news-hot/tests/import.integration.sh
 bash deploy/news-hot/tests/audit.pg18.sh
 bash deploy/news-hot/tests/bootstrap.sh
 for script in deploy/news-hot/*.sh; do bash -n "$script" || exit; done

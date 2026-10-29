@@ -101,6 +101,15 @@ export function logicalKeyFor(req: ReceiptRequest): string {
   return [req.service, req.purpose, req.model ?? "-", identity, req.attemptTag ?? "0"].join(":");
 }
 
+/** A later collection round may resume a definite refusal, never an already-paid or uncertain answer. */
+export async function canResumeDefiniteFailure(req: ReceiptRequest): Promise<boolean> {
+  const [row] = await sql<{ receipt_status: string; attempt_status: string | null }[]>`
+    SELECT r.status AS receipt_status,
+      (SELECT status FROM receipt_attempts WHERE receipt_id=r.id ORDER BY attempt DESC LIMIT 1) AS attempt_status
+    FROM receipts r WHERE logical_key=${logicalKeyFor(req)}`;
+  return row?.receipt_status === "failed" && row.attempt_status === "failed";
+}
+
 interface ReceiptRow {
   id: number;
   status: string;

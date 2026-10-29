@@ -2,8 +2,8 @@ import { z } from "zod";
 import { credential } from "@aihot/backend/config";
 import { sql } from "@aihot/backend/db";
 import { guardedFetch } from "@aihot/backend/lib/http-fetch";
-import { assertAccepted, assertRequestCanSend, paidRequest, ProviderNotSentError, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
-import type { Tweet, SearchOptions } from "./collectors.ts";
+import { assertAccepted, assertRequestCanSend, canResumeDefiniteFailure, paidRequest, ProviderNotSentError, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
+import type { Tweet, SearchOptions, LookupOptions, LookupResult } from "./collectors.ts";
 import { pacedTwitterApiRequest } from "./twitterapi-pacing.ts";
 
 const Post = z.object({
@@ -56,14 +56,16 @@ export async function ensureTwitterApiBudget() {
   if (!budget) throw new Error("Configure a twitterapi_io budget before collection");
 }
 
-async function request(path: string, opts: { purpose: string; subject: string; identity: unknown; summary: Record<string, unknown> }) {
+async function request(path: string, opts: { purpose: string; subject: string; identity: unknown; summary: Record<string, unknown>; resume?: boolean }) {
   if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
   const key = credential("collectors", "TWITTERAPI_IO_API_KEY");
   if (!key) throw new Error("TWITTERAPI_IO_API_KEY is not configured");
   const base = (credential("collectors", "TWITTERAPI_IO_BASE_URL") ?? "https://api.twitterapi.io").replace(/\/$/, "");
   await ensureTwitterApiBudget();
-  const receipt = await paidRequest({ service: "twitterapi_io", purpose: opts.purpose, subject: opts.subject,
-    identity: { base, input: opts.identity }, requestSummary: opts.summary }, () => pacedTwitterApiRequest(async () => {
+  const req = { service: "twitterapi_io", purpose: opts.purpose, subject: opts.subject,
+    identity: { base, input: opts.identity }, requestSummary: opts.summary };
+  const retryFailed = opts.resume === true && await canResumeDefiniteFailure(req);
+  const receipt = await paidRequest({ ...req, retryFailed }, () => pacedTwitterApiRequest(async () => {
     await assertRequestCanSend("twitterapi_io");
     if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
     const res = await guardedFetch(`${base}${path}`, { route: "egress", headers: { "X-API-Key": key, accept: "application/json" }, timeoutMs: 60_000, maxBytes: 12 * 1024 * 1024 });
@@ -71,9 +73,27 @@ async function request(path: string, opts: { purpose: string; subject: string; i
     assertAccepted("twitterapi_io", res.status, text.replaceAll(key, "[redacted]"));
     // Keep the received raw answer first; validation failures must never repurchase it.
     const response = JSON.parse(text);
-    return { response, usage: { tweets: Array.isArray(response.tweets) ? response.tweets.length : 0 }, cost: null };
+    return { response, usage: { tweets: Array.isArray(response?.tweets) ? response.tweets.length : 0 }, cost: null };
   }));
+  return receipt;
+}
+
+const Envelope = z.object({ status: z.string().optional(), code: z.number().optional() });
+function assertSuccessful(response: unknown) {
+  const envelope = Envelope.parse(response);
+  if (envelope.status !== undefined && envelope.status !== "success" || envelope.code !== undefined && envelope.code !== 0) {
+    throw new Error("TwitterAPI.io returned an unsuccessful response");
+  }
+}
+
+export async function searchTweets(query: string, opts: SearchOptions) {
+  const queryType = opts.type ?? "Latest";
+  const params = new URLSearchParams({ query, queryType });
+  if (opts.cursor) params.set("cursor", opts.cursor);
+  const receipt = await request(`/twitter/tweet/advanced_search?${params}`, { ...opts,
+    identity: { query, queryType, cursor: opts.cursor ?? null, window: opts.window }, summary: { query, queryType, cursor: opts.cursor ?? null } });
   try {
+    assertSuccessful(receipt.response);
     const page = Page.parse(receipt.response);
     if (page.has_next_page && !page.next_cursor) throw new Error("TwitterAPI.io returned a page without its next cursor");
     return { tweets: page.tweets.map(t => normalizeTweet(t)), nextCursor: page.has_next_page === false ? null : page.next_cursor || null, receiptId: receipt.receiptId, reused: receipt.reused };
@@ -83,10 +103,35 @@ async function request(path: string, opts: { purpose: string; subject: string; i
   }
 }
 
-export function searchTweets(query: string, opts: SearchOptions) {
-  const queryType = opts.type ?? "Latest";
-  const params = new URLSearchParams({ query, queryType });
-  if (opts.cursor) params.set("cursor", opts.cursor);
-  return request(`/twitter/tweet/advanced_search?${params}`, { ...opts,
-    identity: { query, queryType, cursor: opts.cursor ?? null, window: opts.window }, summary: { query, queryType } });
+/** Responses can omit unavailable IDs or return an empty-ID placeholder. Match by ID, never order. */
+export async function lookupTweets(ids: readonly string[], opts: LookupOptions): Promise<LookupResult> {
+  const sorted = [...new Set(ids)].sort();
+  if (sorted.some(id => !/^\d+$/.test(id))) throw new Error("Invalid context post ID");
+  const result: LookupResult = { tweets: [], missingIds: [], receiptIds: [], receiptById: {}, reused: true };
+  for (let offset = 0; offset < sorted.length; offset += 50) {
+    const batch = sorted.slice(offset, offset + 50), wanted = new Set(batch);
+    const params = new URLSearchParams({ tweet_ids: batch.join(",") });
+    const receipt = await request(`/twitter/tweets?${params}`, { ...opts,
+      identity: { tweet_ids: batch }, summary: { tweet_ids: batch } });
+    try {
+      assertSuccessful(receipt.response);
+      const page = Page.parse(receipt.response), found = new Map<string, Tweet>();
+      for (const raw of page.tweets) {
+        if (raw && typeof raw === "object" && "id" in raw && raw.id === "") continue;
+        const tweet = normalizeTweet(raw);
+        if (!wanted.has(tweet.id_str)) throw new Error("TwitterAPI.io returned an unrequested context post ID");
+        if (found.has(tweet.id_str)) throw new Error("TwitterAPI.io returned a repeated context post ID");
+        found.set(tweet.id_str, tweet);
+      }
+      for (const id of batch) {
+        const tweet = found.get(id);
+        if (tweet) result.tweets.push(tweet);
+        else result.missingIds.push(id);
+      }
+    } catch (error) { await rejectReceivedResponse(receipt.receiptId, String(error)); throw error; }
+    result.receiptIds.push(receipt.receiptId);
+    for (const id of batch) result.receiptById[id] = receipt.receiptId;
+    result.reused &&= receipt.reused;
+  }
+  return result;
 }

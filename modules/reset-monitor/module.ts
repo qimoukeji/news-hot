@@ -12,9 +12,9 @@ export function createMonitorModule(definition: ResetMonitorWebDefinition) {
       { path: `${definition.pagePath.slice(1)}/history/:date`, file: "web/page.tsx", id: `${definition.moduleName}-day` },
     ],
     adminPages: [
-      { path: definition.adminPath.slice(1), file: "web/admin.tsx" },
-      { path: `${definition.adminPath.slice(1)}/posts/:id/review`, file: "web/review.tsx" },
+      { path: definition.adminPath.slice(1), file: "web/admin.tsx", id: `${definition.moduleName}-admin-events` },
+      { path: `${definition.adminPath.slice(1)}/events/:id`, file: "web/event.tsx" },
     ],
-    apiPaths: [new RegExp(`^(?:${[definition.siteApiPath, definition.publicApiPath, ...(definition.publicV2 ? [publicV2Path(definition)] : []), definition.adminApiPath, `/api/v1/agent${definition.agentPath}`].map(escapePattern).join("|")})(?:/|$)`)],
+    apiPaths: [new RegExp(`^(?:${[publicV2Path(definition), definition.adminApiPath, `/api/v2/agent${definition.agentPath}`].map(escapePattern).join("|")})(?:/|$)`)],
   });
 }

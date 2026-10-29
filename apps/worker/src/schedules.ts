@@ -1,7 +1,7 @@
 // Cron-style schedules (Asia/Shanghai), the engine's and then the site's modules'. Each run is recorded in
 // job_runs; missed slots run once.
 import type { PgBoss } from "pg-boss";
-import { recordRun } from "@aihot/backend/jobs/queue";
+import { recordRun, queueEnabled } from "@aihot/backend/jobs/queue";
 import { DEPLOYMENT } from "@aihot/site";
 import { sql } from "@aihot/backend/db";
 import { responder, serverModules, type Scheduled } from "@aihot/backend/modules";
@@ -63,11 +63,13 @@ const ENGINE_SCHEDULES: Scheduled[] = [
 
 export function currentSchedules(): Scheduled[] {
   const allowed = DEPLOYMENT.engineSchedules;
-  return [...ENGINE_SCHEDULES.filter(s => allowed.includes(s.name)), ...serverModules().flatMap((m) => m.schedules ?? [])].filter(s => s.when?.() ?? true);
+  return [...ENGINE_SCHEDULES.filter(s => allowed.includes(s.name)), ...serverModules().flatMap((m) => m.schedules ?? [])]
+    .filter(s => queueEnabled(`cron.${s.name}`) && (s.when?.() ?? true));
 }
 
 /** Reconcile definitions only. The operator CLI uses this without registering any task handlers. */
 export async function reconcileSchedules(boss: PgBoss, schedules = currentSchedules()) {
+  schedules = schedules.filter(s => queueEnabled(`cron.${s.name}`));
   for (const s of schedules) {
     const queue = `cron.${s.name}`;
     const retryLimit = s.retryLimit ?? 1;

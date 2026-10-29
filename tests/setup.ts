@@ -6,13 +6,16 @@
 import { createHash } from "node:crypto";
 import http from "node:http";
 import { beijingAt } from "@aihot/contracts/time";
-import { EDITION_TIMES } from "@aihot/site";
+import { DEPLOYMENT, EDITION_TIMES } from "@aihot/site";
 import { DEFAULTS, PRESETS } from "@aihot/site/models";
 
 const database = new URL(process.env.DATABASE_URL ?? "postgres://unset/unset").pathname.slice(1);
 if (!/_(test|ci)$/.test(database)) {
   throw new Error(`Invariant tests write rows: point DATABASE_URL at a throwaway database named *_test or *_ci (got "${database}")`);
 }
+// Framework fixtures exercise every capability. Site-policy tests explicitly restore this saved selection.
+export const siteQueueSelection = DEPLOYMENT.queues === null ? null : [...DEPLOYMENT.queues];
+DEPLOYMENT.queues = null;
 process.env.AIHOT_CREDENTIALS_DIR = "/nonexistent-test-credentials";
 process.env.SESSION_SECRET ??= "test-session-secret-0123456789";
 process.env.IMG_PROXY_SIGN_SECRET ??= "test-img-secret-0123456789";

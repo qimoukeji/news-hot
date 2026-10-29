@@ -111,8 +111,9 @@ test("shared monitor migration preserves Codex evidence, manual review and state
   assert.equal(await runMigrations(db, root), 1);
   assert.ok((await constraints()).every((constraint) => constraint.convalidated), "new check is validated before old check is removed");
   await assert.rejects(insertBonus(), /migration_monitor_events_type_check/);
-  const allSharedMigrations = stage(shared, 9107);
-  assert.equal(await runMigrations(db, root), allSharedMigrations - 26);
+  // This fixture verifies the historical type expansion, before old tables are retired.
+  stage(shared, 9107, 27);
+  assert.equal(await runMigrations(db, root), 1);
   assert.deepEqual(await constraints(), [{ conname: "migration_monitor_events_event_type_check", convalidated: true }]);
   assert.deepEqual(await snapshot(), beforeBonus, "type expansion preserves evidence, manual audit, checkpoint and notification state");
   await insertBonus();
@@ -125,15 +126,14 @@ test("shared monitor migration preserves Codex evidence, manual review and state
 
 test("a fresh full migration accepts all shared event types and keeps rejecting unknown types", async () => {
   const [constraint] = await db`SELECT convalidated, pg_get_constraintdef(oid) AS definition FROM pg_constraint
-    WHERE conrelid = 'monitor_events'::regclass AND conname = 'monitor_events_event_type_check'`;
+    WHERE conrelid = 'monitor_event_records'::regclass AND conname = 'monitor_event_records_type_check'`;
   assert.equal(constraint.convalidated, true);
   assert.match(constraint.definition, /bonus_credit/);
-  assert.equal((await db`SELECT 1 FROM pg_constraint WHERE conrelid = 'monitor_events'::regclass AND conname = 'monitor_events_type_check'`).length, 0);
   for (const type of ["direct_reset", "reset_credit", "bonus_credit"]) {
-    await db`INSERT INTO monitor_events (monitor_id, id, type, status, title, created_at, updated_at)
-      VALUES ('migration-fixture', ${type}, ${type}, 'announced', '迁移验证', now(), now())`;
+    await db`INSERT INTO monitor_event_records (monitor_id, id, type, title, created_at, updated_at)
+      VALUES ('migration-fixture', ${type}, ${type}, '{"zh":"迁移验证"}', now(), now())`;
   }
-  assert.equal((await db`SELECT 1 FROM monitor_events WHERE monitor_id = 'migration-fixture'`).length, 3);
-  await assert.rejects(db`INSERT INTO monitor_events (monitor_id, id, type, status, title, created_at, updated_at)
-    VALUES ('migration-fixture', 'invalid', 'unknown_credit', 'announced', '非法类型', now(), now())`, /monitor_events_event_type_check/);
+  assert.equal((await db`SELECT 1 FROM monitor_event_records WHERE monitor_id = 'migration-fixture'`).length, 3);
+  await assert.rejects(db`INSERT INTO monitor_event_records (monitor_id, id, type, title, created_at, updated_at)
+    VALUES ('migration-fixture', 'invalid', 'unknown_credit', '{"zh":"非法类型"}', now(), now())`, /monitor_event_records_type_check/);
 });

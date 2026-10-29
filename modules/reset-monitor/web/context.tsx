@@ -1,10 +1,6 @@
-import { createContext, useContext, type ComponentType, type ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import type { ResetMonitorWebDefinition } from "../definition.ts";
-import type { ResetMonitorSitePage } from "../contracts.ts";
-
-export interface ResetMonitorWebProfile extends ResetMonitorWebDefinition {
-  timingHelp?: ComponentType<{ data: ResetMonitorSitePage }>;
-}
+export type ResetMonitorWebProfile = ResetMonitorWebDefinition;
 
 const MonitorContext = createContext<ResetMonitorWebProfile | null>(null);
 

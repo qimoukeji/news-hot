@@ -1,0 +1,1 @@
+ALTER TABLE monitor_event_actions DROP CONSTRAINT IF EXISTS monitor_event_actions_action_check;

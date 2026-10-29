@@ -1,6 +1,5 @@
 import { stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
-import { setTimeout as delay } from "node:timers/promises";
 import { after, beforeEach, test } from "node:test";
 import { sql, closeDb, type Db } from "@aihot/backend/db";
 import { config } from "@aihot/backend/config";
@@ -12,59 +11,61 @@ import { backendDefinition as claude } from "../../claude-reset/backend-definiti
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
 import { inMonitor } from "../backend/context.ts";
 import { setWithdrawn } from "../backend/admin.ts";
+import { monitorEventDetail, previewMonitorEventReview, submitMonitorEventReview } from "../backend/manual-review.ts";
 import { exportPublicV2, applyPublicV2 } from "../backend/public-v2-review.ts";
 import { processPublicV2Pending } from "../backend/public-v2-generate.ts";
-import { enqueuePublicV2, clearPublicV2Work } from "../backend/public-v2-work.ts";
+import { enqueuePublicV2 } from "../backend/public-v2-work.ts";
 import { createMonitorServer } from "../server.ts";
-import { evidenceVersion, loadPublicV2Input, properName, projectPublicV2 } from "../backend/public-v2.ts";
-import { initializeWebhookBaselines, captureWebhookEvent } from "../backend/webhook-events.ts";
+import { properName, projectPublicV2 } from "../backend/public-v2.ts";
+import { loadActionInput, sourcePost, writePostActions, rowVersion } from "../backend/action-store.ts";
+import type { ActionDraft, EditorialText } from "../actions.ts";
+import { initializeWebhookBaselines, captureWebhookEvent, sweepConfirmationResults } from "../backend/webhook-events.ts";
 import { createSubscription, updateSubscription, listSubscriptions, rotateSubscriptionSecret,
   listWebhookDeliveries, retryWebhookDelivery, deliverWebhook, webhookSignature, webhookRetryDelays,
   sweepWebhookDeliveries, type WebhookTransport } from "../backend/webhooks.ts";
 import { createSubscriptionsServer } from "../subscriptions-server.ts";
-import type { ReviewedEvent } from "../public-v2.ts";
 import { webhookPayloadSchema, type WebhookPlatform } from "../webhooks.ts";
 
 const definitions = [codex, claude, grok];
 const sourceAt = "2026-10-01T12:00:00Z";
 const eventId = "shared-event";
+const scope = { type: "all_users" as const, productCodes: [], planCodes: [], quotaWindowCodes: [], note: null };
 
 beforeEach(async () => {
   installModules([]);
   await sql`DELETE FROM monitor_webhook_deliveries`;
   await sql`DELETE FROM monitor_webhook_notifications`;
   await sql`DELETE FROM monitor_webhook_subscriptions`;
-  await sql`DELETE FROM monitor_event_posts`;
-  await sql`DELETE FROM monitor_events`;
-  await sql`DELETE FROM monitor_posts`;
-  await sql`DELETE FROM monitor_state WHERE key LIKE 'webhook:%'`;
+  await sql`DELETE FROM monitor_event_actions`;
+  await sql`DELETE FROM monitor_event_records`;
+  await sql`DELETE FROM monitor_source_posts`;
+  await sql`DELETE FROM monitor_state WHERE key LIKE 'webhook:%' OR key LIKE 'public_v2:%'`;
   await sql`DELETE FROM audit_log`;
 });
+
 after(async () => { installModules([]); await stopBoss(); await closeDb(); });
 
-async function addEvent(definition = codex, db: Db = sql) {
-  await db`INSERT INTO monitor_posts(monitor_id,id,author,published_at,text,url) VALUES
-    (${definition.monitorId},'source-post',${definition.authors[0]!.handle},${sourceAt},'Synthetic: we reset usage at 12:00 UTC.',${`https://x.com/${definition.authors[0]!.handle}/status/source-post`})`;
-  await db`INSERT INTO monitor_events(monitor_id,id,type,status,title,created_at,updated_at,confirmation_basis) VALUES
-    (${definition.monitorId},${eventId},'direct_reset','confirmed','',${sourceAt},${sourceAt},'source_post')`;
-  await db`INSERT INTO monitor_event_posts(monitor_id,event_id,post_id,stage,action,text,original_text) VALUES
-    (${definition.monitorId},${eventId},'source-post','confirmed','confirm','Synthetic reset completed.','Synthetic reset completed.')`;
+async function addPost(definition = codex, id = "source-post", at = sourceAt, db: Db = sql) {
+  await db`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,title,summary,processing_status) VALUES
+    (${definition.monitorId},${id},${definition.authors[0]!.handle},${at},${`https://x.com/${definition.authors[0]!.handle}/status/${id}`},${db.json(properName("Synthetic source"))},NULL,'processed')`;
 }
-
-async function saveReview(definition = codex, patch: Partial<ReviewedEvent> = {}, db: Db = sql) {
-  return inMonitor(definition, async () => {
-    const input = await loadPublicV2Input(db), event = input.events.find(event => event.id === eventId)!;
-    const review: ReviewedEvent = {
-      evidenceVersion: evidenceVersion(event, input), evidence: [{ postId: "source-post", excerpt: input.posts[0]!.text }],
-      publishedAt: sourceAt, status: "completed", title: properName(`Synthetic ${definition.monitorId} reset`), summary: properName("Synthetic reset completed."),
-      time: sourceAt, updateSummaries: [{ postId: "source-post", summary: properName("Synthetic reset completed.") }],
-      scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null }, bonusCredit: null,
-      ...patch,
-    };
-    await db`UPDATE monitor_events SET presentation=jsonb_set(coalesce(presentation,'{}'::jsonb),'{publicV2}',${db.json(review)},true)
-      WHERE monitor_id=${definition.monitorId} AND id=${eventId}`;
-    return review;
-  });
+async function addEvent(definition = codex, ready = false) {
+  await addPost(definition);
+  await sql.begin(db => inMonitor(definition, async () => {
+    const post = await sourcePost("source-post", db);
+    await writePostActions(db, post!, [{ eventId, action: "confirm",
+      title: ready ? properName("Synthetic reset completed") : { zh: "Synthetic reset completed" },
+      summary: null, time: sourceAt }], { events: [{ id: eventId, type: "direct_reset", scope }] });
+  }));
+}
+type ReviewPatch = { title?: EditorialText; summary?: EditorialText | null; time?: string; scope?: typeof scope | { type: "paid_users"; productCodes: string[]; planCodes: string[]; quotaWindowCodes: string[]; note: null } };
+async function saveReview(definition = codex, patch: ReviewPatch = {}, db: Db = sql) {
+  await db`UPDATE monitor_event_actions SET title=${db.json(properName("Synthetic reset completed"))}
+    WHERE monitor_id=${definition.monitorId} AND event_id=${eventId}`;
+  if ("title" in patch) await db`UPDATE monitor_event_records SET title=${db.json(patch.title!)} WHERE monitor_id=${definition.monitorId} AND id=${eventId}`;
+  if ("summary" in patch) await db`UPDATE monitor_event_records SET summary=${patch.summary ? db.json(patch.summary) : null} WHERE monitor_id=${definition.monitorId} AND id=${eventId}`;
+  if (patch.time) await db`UPDATE monitor_event_actions SET time=${patch.time} WHERE monitor_id=${definition.monitorId} AND event_id=${eventId}`;
+  if (patch.scope) await db`UPDATE monitor_event_records SET scope=${db.json(patch.scope)} WHERE monitor_id=${definition.monitorId} AND id=${eventId}`;
 }
 const capture = (definition = codex) => sql.begin(db => inMonitor(definition, () => captureWebhookEvent(db, eventId)));
 async function subscriber(platforms: WebhookPlatform[] = ["codex"], enabled = true) {
@@ -75,92 +76,184 @@ async function notifications() {
   const rows = await sql`SELECT payload FROM monitor_webhook_notifications ORDER BY monitor_id,event_id,revision`;
   return rows.map(row => webhookPayloadSchema.parse(row.payload));
 }
+
+test("time checks establish history without replay and notify inference and later official proof only once", async () => {
+  await addEvent(codex, true);
+  const starts = Date.now(), future = new Date(starts + 60_000).toISOString();
+  await sql`UPDATE monitor_event_actions SET action='announce',time=${future} WHERE monitor_id='codex' AND event_id=${eventId}`;
+  await subscriber(["codex"]);
+  await sweepConfirmationResults(definitions, starts);
+  assert.equal((await notifications()).length, 0);
+  await sweepConfirmationResults(definitions, starts + 60_001);
+  let events = await notifications();
+  assert.equal(events.length, 1); assert.equal(events[0]!.event!.updates[0]!.action, "confirm"); assert.deepEqual(events[0]!.event!.updates[0]!.sources, []);
+  const revision = events[0]!.revision;
+  await sweepConfirmationResults(definitions, starts + 120_000);
+  assert.equal((await notifications()).length, 1);
+  await sql.begin(db => inMonitor(codex, async () => writePostActions(db, (await sourcePost("source-post", db))!, [{ eventId, action: "confirm", time: new Date(starts).toISOString(), title: properName("Official confirmation"), summary: null }])));
+  await sweepConfirmationResults(definitions, starts + 120_000);
+  events = await notifications(); assert.equal(events.length, 2);
+  assert.equal(events[1]!.revision, revision + 1); assert.ok(events[1]!.event!.updates.some(update => update.action === "confirm" && update.sources.length > 0));
+  await sweepConfirmationResults(definitions, starts + 180_000);
+  assert.equal((await notifications()).length, 2);
+});
+
+test("historical elapsed plans establish confirmation baselines without sending old notifications", async () => {
+  await addEvent(codex, true);
+  await sql`UPDATE monitor_event_actions SET action='announce' WHERE monitor_id='codex' AND event_id=${eventId}`;
+  await subscriber(["codex"]);
+  await sweepConfirmationResults(definitions);
+  assert.equal((await notifications()).length, 0);
+});
+
+test("ordinary manual confirmations publish their entered title without waiting for model translation", async () => {
+  await addEvent(codex, true);
+  await sql`UPDATE monitor_event_actions SET action='announce',time=${new Date(Date.now() + 86_400_000).toISOString()} WHERE monitor_id='codex'`;
+  await initializeWebhookBaselines(definitions); await subscriber();
+  await inMonitor(codex, async () => {
+    const detail = (await monitorEventDetail(eventId))!;
+    const body = { version: detail.version, versions: detail.versions, reason: "Private manual evidence", actions: { create: [{ localKey: "manual", eventId, action: "confirm", time: sourceAt, title: { zh: "人工核实已生效" }, summary: { zh: "管理员已核实生效，无官方帖子" } }] } };
+    const preview = (await previewMonitorEventReview(eventId, body))!;
+    await submitMonitorEventReview(eventId, { ...body, previewToken: preview.previewToken }, "private-admin");
+  });
+  const rows = await notifications(); assert.equal(rows.length, 1);
+  const confirmation = rows[0]!.event!.updates.find(update => update.action === "confirm")!;
+  assert.deepEqual(confirmation.sources, []); assert.equal(confirmation.title.zh, "人工核实已生效");
+  assert.equal(confirmation.summary!.zh, "管理员已核实生效，无官方帖子");
+  assert.equal(JSON.stringify(rows).includes("Private manual evidence"), false);
+});
+
 async function delivery(id: string) {
   const [row] = await sql`SELECT * FROM monitor_webhook_deliveries WHERE id=${id}`;
   assert.ok(row); return row;
 }
 async function withdraw(withdrawn: boolean) {
-  const [event] = await sql`SELECT updated_at FROM monitor_events WHERE monitor_id='codex' AND id=${eventId}`;
-  return inMonitor(codex, () => setWithdrawn(eventId, { withdrawn, version: new Date(event!.updated_at).toISOString(), reason: "Synthetic manual withdrawal test" }, "test-admin"));
+  return inMonitor(codex, async () => {
+    const event = (await loadActionInput()).events.find(event => event.id === eventId)!;
+    return setWithdrawn(eventId, { withdrawn, version: rowVersion(event), reason: "Synthetic manual withdrawal test" }, "test-admin");
+  });
+}
+async function mutateAction(patch: Partial<ActionDraft>) {
+  await sql.begin(db => inMonitor(codex, async () => {
+    const input = await loadActionInput(db), action = input.actions[0]!, post = input.posts[0]!;
+    await writePostActions(db, post, [{ id: action.id, eventId, action: action.action,
+      title: action.title, summary: action.summary, time: action.time, ...patch }], { replace: true, editExisting: true });
+    await enqueuePublicV2(db, [eventId]);
+  }));
 }
 
-test("ready-only first notifications match public v2 and isolate identical event IDs across three platforms", async () => {
+test("complete seven-language actions notify immediately and isolate identical IDs across all platforms", async () => {
   await initializeWebhookBaselines(definitions);
   const subscriptions = await Promise.all(definitions.map(definition => subscriber([definition.publicV2!.platform])));
   for (const definition of definitions) {
-    await addEvent(definition);
-    await capture(definition);
-    assert.equal((await notifications()).length, definitions.indexOf(definition), "unreviewed public fallback is not ready for notification");
-    await saveReview(definition);
-    await capture(definition);
-    await capture(definition);
+    await addEvent(definition, true);
+    await capture(definition); await capture(definition);
     const notification = (await notifications()).find(row => row.platform === definition.publicV2!.platform)!;
     assert.equal(notification.action, "created"); assert.equal(notification.revision, 1);
-    const snapshot = await inMonitor(definition, async () => projectPublicV2(await loadPublicV2Input(sql), definition));
-    const { bonusCredit: _bonus, ...publicEvent } = snapshot.events[0]!;
-    assert.deepEqual(notification.event, publicEvent);
-    assert.equal(Object.keys(notification.event!.title).length, 7);
+    const snapshot = await inMonitor(definition, async () => projectPublicV2(await loadActionInput(), definition));
+    const event = snapshot.events[0]!;
+    assert.deepEqual(notification.event, event);
+    assert.equal(Object.keys(event.updates[0]!.title).length, 7);
+    assert.deepEqual(event.updates[0]!.sources.map(source => source.postId), ["source-post"]);
   }
   assert.equal((await notifications()).length, 3);
   for (const { subscription } of subscriptions) {
     const deliveries = (await listWebhookDeliveries(subscription.id))!.deliveries;
-    assert.equal(deliveries.length, 1);
-    assert.equal(deliveries[0]!.platform, subscription.platforms[0]);
+    assert.equal(deliveries.length, 1); assert.equal(deliveries[0]!.platform, subscription.platforms[0]);
   }
 });
 
-test("stale and failed enrichment waits, then changed content sends once; withdrawal and restoration keep monotonic revisions", async () => {
-  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent();
-  await saveReview(); await capture();
-  await sql`UPDATE monitor_posts SET text='Synthetic: revised source statement.' WHERE monitor_id='codex'`;
-  await capture();
-  assert.equal((await notifications()).length, 1, "stale evidence cannot notify an unreviewed fallback");
-  await saveReview(codex, { summary: properName("Synthetic corrected summary.") }); await capture(); await capture();
-  await withdraw(true);
+test("standard scope labels notify without model translation and custom eligibility still waits", async () => {
+  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent(codex, true);
+  const setScope = async (type: string, note: Record<string, string>) => {
+    await sql`UPDATE monitor_event_records SET scope=${sql.json({ ...scope, type, note })} WHERE monitor_id='codex' AND id=${eventId}`;
+  };
+  for (const [type, note] of [["selected_users", { zh: "所有用户" }], ["all_users", { zh: "仅限注册满一年的用户" }],
+    ["all_users", { zh: "所有用户", en: "Paid users" }]] as const) {
+    await setScope(type, note); await capture();
+    assert.equal((await notifications()).length, 0);
+  }
+  await setScope("all_users", { zh: "所有用户" });
   await capture(); await capture();
-  assert.equal((await notifications()).at(-1)!.event, null);
-  await withdraw(false);
-  await capture();
-  assert.equal((await notifications()).length, 3, "restoration waits for current evidence review");
-  await saveReview(); await capture();
   const rows = await notifications();
-  assert.deepEqual(rows.map(row => row.action), ["created", "updated", "withdrawn", "restored"]);
-  assert.deepEqual(rows.map(row => row.revision), [1, 2, 3, 4]);
-  assert.equal(new Set(rows.map(row => row.id)).size, 4);
+  assert.equal(rows.length, 1);
+  const snapshot = await inMonitor(codex, async () => projectPublicV2(await loadActionInput(), codex));
+  assert.deepEqual(rows[0]!.event, snapshot.events[0]);
+  assert.equal(rows[0]!.event!.scope.note!.en, "All users");
 });
 
-test("title, summary, time, scope, status and accepted business updates each trigger a public revision", async () => {
-  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent(); await saveReview(); await capture();
-  let patch: Partial<ReviewedEvent> = {};
-  for (const change of [
-    { title: properName("Synthetic corrected title") }, { summary: properName("Synthetic corrected explanation.") },
-    { time: "2026-10-01T13:00:00Z" },
-    { scope: { type: "paid_users" as const, productCodes: [], planCodes: [], quotaWindowCodes: [], note: null } },
+test("partial action or event titles and summaries wait for translation", async () => {
+  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent();
+  await capture(); assert.equal((await notifications()).length, 0);
+  await saveReview(codex, { summary: { zh: "Synthetic pending summary" } });
+  await capture(); assert.equal((await notifications()).length, 0);
+  await saveReview(codex, { summary: properName("Synthetic pending summary"), title: { zh: "Synthetic pending title" } });
+  await capture(); assert.equal((await notifications()).length, 0);
+  await saveReview(codex, { title: properName("Synthetic pending title") });
+  await capture(); assert.equal((await notifications()).length, 1);
+  await sql`UPDATE monitor_event_actions SET summary='{"zh":"Synthetic action summary"}'::jsonb WHERE monitor_id='codex'`;
+  await capture(); assert.equal((await notifications()).length, 1);
+  await sql`UPDATE monitor_event_actions SET summary=${sql.json(properName("Synthetic action summary"))} WHERE monitor_id='codex'`;
+  await capture(); await capture();
+  assert.deepEqual((await notifications()).map(row => row.action), ["created", "updated"]);
+});
+
+test("title, summary, action time, scope and accepted action changes each trigger one revision", async () => {
+  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent(codex, true); await capture();
+  for (const patch of [
+    { title: properName("Synthetic corrected title") }, { summary: properName("Synthetic corrected explanation") },
+    { time: "2026-10-01T13:00:00Z" }, { scope: { ...scope, type: "paid_users" as const } },
   ]) {
     const count = (await notifications()).length;
-    patch = { ...patch, ...change }; await saveReview(codex, patch); await capture(); await capture();
+    await saveReview(codex, patch); await capture(); await capture();
     assert.equal((await notifications()).length, count + 1);
-    assert.equal((await notifications()).at(-1)!.action, "updated");
   }
-  await sql`UPDATE monitor_events SET status='announced',confirmation_basis=NULL WHERE monitor_id='codex' AND id=${eventId}`;
-  patch.status = "announced"; await saveReview(codex, patch); await capture();
+  await mutateAction({ action: "announce" });
   assert.equal((await notifications()).at(-1)!.event!.status, "announced");
-  await sql`INSERT INTO monitor_posts(monitor_id,id,author,published_at,text,url) VALUES
-    ('codex','business-update',${codex.authors[0]!.handle},'2026-10-01T14:00:00Z','Synthetic: reset rollout is in progress.','https://x.com/test/status/business-update')`;
-  await sql`INSERT INTO monitor_event_posts(monitor_id,event_id,post_id,stage,action,text,original_text) VALUES
-    ('codex',${eventId},'business-update','announced','progress','Synthetic progress.','Synthetic progress.')`;
-  patch.evidence = [{ postId: "source-post", excerpt: "Synthetic: we reset usage at 12:00 UTC." },
-    { postId: "business-update", excerpt: "Synthetic: reset rollout is in progress." }];
-  patch.updateSummaries = [{ postId: "source-post", summary: properName("Synthetic reset completed.") },
-    { postId: "business-update", summary: properName("Synthetic progress.") }];
-  await saveReview(codex, patch); await capture(); await capture();
+  await addPost(codex, "business-update", "2026-10-01T14:00:00Z");
+  await sql.begin(db => inMonitor(codex, async () => {
+    const post = await sourcePost("business-update", db);
+    await writePostActions(db, post!, [{ eventId, action: "progress", title: properName("Synthetic rollout progress"), summary: properName("Synthetic progress"), time: null }]);
+    await enqueuePublicV2(db, [eventId]);
+  }));
   const rows = await notifications();
   assert.deepEqual(rows.map(row => row.revision), [1, 2, 3, 4, 5, 6, 7]);
-  assert.equal(rows.at(-1)!.event!.updates[0]!.id, "business-update");
-  assert.equal(rows.at(-1)!.event!.updates[0]!.summary!.zh, "Synthetic progress.");
+  assert.equal(rows.at(-1)!.event!.status, "in_progress");
+  assert.equal(rows.at(-1)!.event!.updates[0]!.action, "progress");
 });
 
-test("business changes and notification records roll back together, without consuming a revision", async () => {
+test("another post enriches one action with all sources without duplicating its update", async () => {
+  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent(codex, true); await capture();
+  await addPost(codex, "additional-source", "2026-10-01T13:00:00Z");
+  await sql.begin(db => inMonitor(codex, async () => {
+    const input = await loadActionInput(db), action = input.actions[0]!, post = input.posts.find(post => post.id === "additional-source")!;
+    await writePostActions(db, post, [{ id: action.id, eventId, action: action.action, title: action.title, summary: action.summary, time: action.time }]);
+    await enqueuePublicV2(db, [eventId]);
+  }));
+  const event = (await notifications()).at(-1)!.event!;
+  assert.equal(event.updates.length, 1);
+  assert.deepEqual(event.updates[0]!.sources.map(source => source.postId), ["source-post", "additional-source"]);
+  assert.equal(event.updates[0]!.publishedAt, new Date(sourceAt).toISOString());
+  assert.equal((await notifications()).length, 2);
+});
+
+test("removing the only valid initial action withdraws and restoring an initial action restores", async () => {
+  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent(codex, true); await capture();
+  await sql.begin(db => inMonitor(codex, async () => {
+    const post = await sourcePost("source-post", db);
+    await writePostActions(db, post!, [], { replace: true });
+    await enqueuePublicV2(db, [eventId]);
+  }));
+  assert.equal((await notifications()).at(-1)!.event, null);
+  await sql.begin(db => inMonitor(codex, async () => {
+    const post = await sourcePost("source-post", db);
+    await writePostActions(db, post!, [{ eventId, action: "confirm", title: properName("Synthetic restored confirmation"), summary: null, time: sourceAt }]);
+    await enqueuePublicV2(db, [eventId]);
+  }));
+  assert.deepEqual((await notifications()).map(row => row.action), ["created", "withdrawn", "restored"]);
+});
+
+test("business changes and notification records roll back together without consuming a revision", async () => {
   await initializeWebhookBaselines(definitions); await subscriber(); await addEvent();
   await assert.rejects(sql.begin(async db => {
     await saveReview(codex, {}, db);
@@ -169,160 +262,79 @@ test("business changes and notification records roll back together, without cons
   }), /Synthetic rollback/);
   assert.equal((await notifications()).length, 0);
   assert.equal((await sql`SELECT count(*)::int AS n FROM monitor_webhook_deliveries`)[0]!.n, 0);
-  assert.equal((await sql`SELECT presentation FROM monitor_events WHERE monitor_id='codex'`)[0]!.presentation, null);
+  const input = await inMonitor(codex, () => loadActionInput());
+  assert.deepEqual(input.actions[0]!.title, { zh: "Synthetic reset completed" });
   await saveReview(); await capture();
   assert.equal((await notifications())[0]!.revision, 1);
 });
 
-test("concurrent pending cleanup and enqueue both commit and preserve the newly requested work", async () => {
-  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent(); await saveReview();
-  await inMonitor(codex, () => sql.begin(db => enqueuePublicV2(db, [eventId])));
-  await saveReview(codex, { summary: properName("Synthetic change during pending cleanup.") });
-  const acquired = Promise.withResolvers<number>();
-  const release = Promise.withResolvers<void>();
-  const cleaningStarted = Promise.withResolvers<number>();
-  const holding = sql.begin(async db => {
-    await db`SELECT 1 FROM monitor_state WHERE monitor_id='codex' AND key=${`webhook:event:${eventId}`} FOR UPDATE`;
-    acquired.resolve((await db<{pid:number}[]>`SELECT pg_backend_pid() AS pid`)[0]!.pid);
-    await release.promise;
-  });
-  async function blockedBy(pid: number, operation: Promise<unknown>) {
-    const deadline = performance.now() + 5_000;
-    while (!(await sql`SELECT 1 FROM pg_stat_activity WHERE ${pid}=ANY(pg_blocking_pids(pid))`).length) {
-      assert.ok(performance.now() < deadline, "operation reaches the held database lock");
-      await Promise.race([operation.then(() => assert.fail("operation finished before its blocker committed")), delay(10)]);
-    }
-  }
-  let cleaning: Promise<unknown> | undefined, enqueuing: Promise<unknown> | undefined;
-  try {
-    const holder = await acquired.promise;
-    cleaning = sql.begin(async db => {
-      await db`SET LOCAL lock_timeout='5s'`;
-      cleaningStarted.resolve((await db<{pid:number}[]>`SELECT pg_backend_pid() AS pid`)[0]!.pid);
-      await inMonitor(codex, () => clearPublicV2Work(db, eventId));
-    });
-    const cleaner = await cleaningStarted.promise;
-    await blockedBy(holder, cleaning);
-    enqueuing = sql.begin(async db => {
-      await db`SET LOCAL lock_timeout='5s'`;
-      await inMonitor(codex, () => enqueuePublicV2(db, [eventId]));
-    });
-    await blockedBy(cleaner, enqueuing);
-    release.resolve();
-    await holding;
-    await Promise.all([cleaning, enqueuing]);
-    const pending = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key=${`public_v2:pending:${eventId}`}`;
-    assert.equal(pending[0]?.value.status, "pending", "enqueue after cleanup keeps the new work");
-    assert.deepEqual((await notifications()).map(row => row.action), ["created", "updated"]);
-  } finally {
-    release.resolve();
-    await Promise.allSettled([holding, cleaning, enqueuing]);
-  }
-});
-
-test("applying an administrator v2 review publishes its notification through the real review transaction", async () => {
+test("administrator editorial review publishes in its transaction and rejects stale records", async () => {
   await initializeWebhookBaselines(definitions); await subscriber(); await addEvent();
-  const review = await saveReview();
-  await sql`UPDATE monitor_events SET presentation=NULL WHERE monitor_id='codex' AND id=${eventId}`;
   const bundle = await exportPublicV2([codex]);
-  bundle.monitors[0]!.reviews[0]!.publicV2 = review;
-  await applyPublicV2(bundle, [codex], "Publish reviewed synthetic event", "test-reviewer");
-  const rows = await notifications();
-  assert.equal(rows.length, 1); assert.equal(rows[0]!.action, "created");
-  assert.deepEqual(rows[0]!.event!.title, review.title);
-  const [stored] = await sql`SELECT presentation->'publicV2' AS review FROM monitor_events WHERE monitor_id='codex' AND id=${eventId}`;
-  assert.deepEqual(stored!.review.title, rows[0]!.event!.title);
+  const action = bundle.monitors[0]!.reviews.find(review => review.kind === "action")!;
+  action.editorial.title = properName("Synthetic accepted action title");
+  await applyPublicV2(bundle, [codex], "Publish translated synthetic event", "test-reviewer");
+  assert.equal((await notifications()).length, 1);
+  assert.deepEqual((await notifications())[0]!.event!.title, action.editorial.title);
   const stale = await exportPublicV2([codex]);
-  stale.monitors[0]!.reviews[0]!.expectedVersion = "stale-review-version";
-  stale.monitors[0]!.reviews[0]!.publicV2!.title = properName("Must not publish a stale review");
-  await assert.rejects(applyPublicV2(stale, [codex], "Reject stale review", "test-reviewer"), /Event changed/);
+  stale.monitors[0]!.reviews[0]!.expectedVersion = "stale-version";
+  await assert.rejects(applyPublicV2(stale, [codex], "Reject stale editorial", "test-reviewer"), /changed/i);
   assert.equal((await notifications()).length, 1);
 });
 
-test("automatic pending v2 enrichment saves a complete review and creates its notification without direct capture", async () => {
+test("worker translates only display fields then creates a ready notification without direct capture", async () => {
   await initializeWebhookBaselines(definitions); const { subscription } = await subscriber(); await addEvent();
-  await inMonitor(codex, () => sql.begin(db => enqueuePublicV2(db, [eventId])));
-  assert.equal((await notifications()).length, 0);
   let requests = 0;
   const model = await stub((_hit, request) => {
-    requests += 1;
+    requests++;
     const body = JSON.parse(request.body), input = JSON.parse(body.messages[1].content);
-    assert.equal(input.event.id, eventId);
-    const content = { title: properName("Synthetic automatically reviewed reset"), summary: properName("Usage has been restored."),
-      scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null }, bonusCredit: null,
-      evidence: input.posts.map((post: {id:string;text:string}) => ({ postId: post.id, excerpt: post.text })),
-      updateSummaries: input.links.map((link: {post_id:string}) => ({ postId: link.post_id, summary: properName("Usage restored.") })), timeEvidence: null };
+    assert.deepEqual(Object.keys(input).sort(), ["note", "summary", "title"]);
+    const content = { title: input.title ? properName(Object.values(input.title)[0] as string) : null,
+      summary: input.summary ? properName(Object.values(input.summary)[0] as string) : null, note: input.note ? properName(Object.values(input.note)[0] as string) : null };
     return { choices: [{ finish_reason: "stop", message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 10, completion_tokens: 10 } };
   });
-  const env = { MONITOR_MODEL: "default", LLM_BASE_URL: `${model.url}/v1`, LLM_API_KEY: "synthetic-local-key",
-    LLM_MODEL: "synthetic-webhook-v2", COLLECT_ENABLED: "true" };
+  const env = { MONITOR_MODEL: "default", LLM_BASE_URL: `${model.url}/v1`, LLM_API_KEY: "synthetic-local-key", LLM_MODEL: "synthetic-webhook-v2", COLLECT_ENABLED: "true" };
   const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
   const oldPrivate = config.allowPrivateNetworkFetch, oldModelCalls = config.modelCallsEnabled;
   try {
     Object.assign(process.env, env); config.allowPrivateNetworkFetch = true; config.modelCallsEnabled = true;
     installModules(definitions.map(createMonitorServer));
     assert.deepEqual(await inMonitor(codex, () => processPublicV2Pending()), { enriched: 1 });
-    assert.equal(requests, 1);
-    const rows = await notifications();
-    assert.equal(rows.length, 1); assert.equal(rows[0]!.action, "created");
-    assert.equal(rows[0]!.event!.title.zh, "Synthetic automatically reviewed reset");
-    assert.equal((await listWebhookDeliveries(subscription.id))!.deliveries.length, 1);
-    assert.equal((await sql`SELECT 1 FROM monitor_state WHERE monitor_id='codex' AND key=${`public_v2:pending:${eventId}`}`).length, 0);
-    assert.equal((await sql`SELECT count(*)::int AS n FROM receipts WHERE purpose='monitor.public_v2' AND status='completed'`)[0]!.n, 1);
-    assert.deepEqual(await inMonitor(codex, () => processPublicV2Pending()), { enriched: 0 });
     assert.equal(requests, 1); assert.equal((await notifications()).length, 1);
+    assert.equal((await listWebhookDeliveries(subscription.id))!.deliveries.length, 1);
+    assert.deepEqual(await inMonitor(codex, () => processPublicV2Pending()), { enriched: 0 });
+    assert.equal(requests, 1);
   } finally {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
-    }
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     config.allowPrivateNetworkFetch = oldPrivate; config.modelCallsEnabled = oldModelCalls;
     installModules([]); await model.close();
   }
 });
 
-test("initial history creates a comparison baseline without backfill; enabling subscriptions only sees subsequent changes", async () => {
-  await addEvent(); await saveReview();
-  await initializeWebhookBaselines(definitions);
+test("initial history creates a baseline without backfill and subscriptions see subsequent changes", async () => {
+  await addEvent(codex, true); await initializeWebhookBaselines(definitions);
   const { subscription } = await subscriber(["codex"], false);
   await capture(); assert.equal((await notifications()).length, 0);
-  await updateSubscription(subscription.id, { enabled: true, reason: "Start receiving new changes" }, "test-admin", definitions);
+  await updateSubscription(subscription.id, { enabled: true, reason: "Start receiving changes" }, "test-admin", definitions);
   assert.equal((await listWebhookDeliveries(subscription.id))!.deliveries.length, 0);
-  await saveReview(codex, { summary: properName("Synthetic first change after subscribing.") }); await capture();
+  await saveReview(codex, { summary: properName("Synthetic first subscribed change") }); await capture();
   assert.equal((await notifications())[0]!.action, "updated");
-  assert.equal((await listWebhookDeliveries(subscription.id))!.deliveries.length, 1);
 });
 
-test("unready historical events are not backfilled when their first review later succeeds", async () => {
+test("historical partial translations do not backfill when first completed", async () => {
   await addEvent(); await initializeWebhookBaselines(definitions); await subscriber();
-  await saveReview(); await capture();
-  assert.equal((await notifications()).length, 0);
-  await saveReview(codex, { summary: properName("Synthetic later public correction.") }); await capture();
+  await saveReview(); await capture(); assert.equal((await notifications()).length, 0);
+  await saveReview(codex, { summary: properName("Synthetic later correction") }); await capture();
   assert.deepEqual((await notifications()).map(row => row.action), ["updated"]);
 });
 
-test("withdrawing a new unready event keeps its first reviewed restoration eligible for notification", async () => {
-  await initializeWebhookBaselines(definitions); const { subscription } = await subscriber(); await addEvent();
-  await withdraw(true);
-  assert.equal((await notifications()).length, 0, "an event never notified has no withdrawal callback");
-  await withdraw(false);
-  assert.equal((await notifications()).length, 0, "restoration still waits for the first valid review");
-  await saveReview(); await capture(); await capture();
-  const rows = await notifications();
-  assert.deepEqual(rows.map(row => row.action), ["created"]);
-  assert.equal(rows[0]!.revision, 1);
-  assert.equal((await listWebhookDeliveries(subscription.id))!.deliveries.length, 1);
+test("manual withdrawal and restoration keep monotonic revisions and require no receipt override", async () => {
+  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent(codex, true); await capture();
+  await withdraw(true); await capture(); assert.equal((await notifications()).at(-1)!.event, null);
+  await withdraw(false); await capture();
+  assert.deepEqual((await notifications()).map(row => row.action), ["created", "withdrawn", "restored"]);
+  assert.deepEqual((await notifications()).map(row => row.revision), [1, 2, 3]);
 });
-
-test("restoring a previously public historical event sends a restoration without backfilling its quiet withdrawal", async () => {
-  await addEvent(); await saveReview(); await initializeWebhookBaselines(definitions); await subscriber();
-  await withdraw(true);
-  assert.equal((await notifications()).length, 0);
-  await withdraw(false); await saveReview(); await capture(); await capture();
-  const rows = await notifications();
-  assert.deepEqual(rows.map(row => row.action), ["restored"]);
-  assert.equal(rows[0]!.revision, 1);
-});
-
 test("subscription defaults, one-time secrets and audit redaction preserve administrator accountability", async () => {
   const saved = await createSubscription({ name: "Synthetic subscriber", url: "https://8.8.8.8/private-path?token=synthetic-query-secret",
     platforms: ["codex", "grok"], reason: "Add callback" }, "admin-a", definitions);
@@ -480,4 +492,61 @@ test("subscription HTTP management is inaccessible to anonymous readers", async 
     assert.equal((await listSubscriptions()).subscriptions.length, 0);
     assert.equal((await sql`SELECT count(*)::int AS n FROM audit_log`)[0]!.n, 0);
   } finally { config.devAdmin = oldAdmin; await app.close(); }
+});
+
+
+
+test("concurrent publication and pending cleanup serialize without duplicate revisions", async () => {
+  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent(codex, true);
+  await Promise.all([capture(), capture(), sql.begin(db => inMonitor(codex, () => enqueuePublicV2(db, [eventId])))]);
+  assert.deepEqual((await notifications()).map(row => row.revision), [1]);
+  await saveReview(codex, { summary: properName("Synthetic concurrent public correction") });
+  const modelCallsEnabled = config.modelCallsEnabled;
+  config.modelCallsEnabled = true;
+  try {
+    const [cleanup] = await Promise.all([
+      inMonitor(codex, () => processPublicV2Pending()),
+      sql.begin(db => inMonitor(codex, () => enqueuePublicV2(db, [eventId]))),
+    ]);
+    assert.deepEqual(cleanup, { enriched: 0 });
+  } finally { config.modelCallsEnabled = modelCallsEnabled; }
+  assert.deepEqual((await notifications()).map(row => row.revision), [1, 2]);
+});
+
+test("a new incomplete event can be withdrawn quietly and notify once after restored translation", async () => {
+  await initializeWebhookBaselines(definitions); const { subscription } = await subscriber(); await addEvent();
+  await withdraw(true); assert.equal((await notifications()).length, 0);
+  await withdraw(false); assert.equal((await notifications()).length, 0);
+  await saveReview(); await capture(); await capture();
+  assert.deepEqual((await notifications()).map(row => row.action), ["created"]);
+  assert.equal((await listWebhookDeliveries(subscription.id))!.deliveries.length, 1);
+});
+
+test("restoring a historical public event sends restoration without backfilling quiet withdrawal", async () => {
+  await addEvent(codex, true); await initializeWebhookBaselines(definitions); await subscriber();
+  await withdraw(true); assert.equal((await notifications()).length, 0);
+  await withdraw(false); await capture(); await capture();
+  assert.deepEqual((await notifications()).map(row => row.action), ["restored"]);
+  assert.equal((await notifications())[0]!.revision, 1);
+});
+
+test("official cancellation is terminal until the invalidating amendment is corrected", async () => {
+  await initializeWebhookBaselines(definitions); await subscriber(); await addEvent(codex, true); await capture();
+  await addPost(codex, "cancellation", "2026-10-01T14:00:00Z");
+  await sql.begin(db => inMonitor(codex, async () => {
+    const post = await sourcePost("cancellation", db);
+    await writePostActions(db, post!, [{ eventId, action: "amend", invalidatesEvent: true, title: properName("Official cancellation"), summary: null, time: null }]);
+    await enqueuePublicV2(db, [eventId]);
+  }));
+  assert.equal((await notifications()).at(-1)!.event!.status, "cancelled");
+  assert.equal((await notifications()).at(-1)!.event!.updates[0]!.action, "amend");
+  assert.equal((await notifications()).at(-1)!.event!.updates[0]!.invalidatesEvent, true);
+  await addPost(codex, "restoration", "2026-10-01T15:00:00Z");
+  await sql.begin(db => inMonitor(codex, async () => {
+    const post = await sourcePost("restoration", db);
+    await writePostActions(db, post!, [{ eventId, action: "announce", title: properName("Later announcement"), summary: null, time: null }]);
+    await enqueuePublicV2(db, [eventId]);
+  }));
+  assert.equal((await notifications()).at(-1)!.event!.status, "cancelled");
+  assert.equal((await notifications()).at(-1)!.event!.updates[0]!.action, "announce");
 });

@@ -1,0 +1,1 @@
+ALTER TABLE monitor_event_actions VALIDATE CONSTRAINT monitor_event_actions_action_check;

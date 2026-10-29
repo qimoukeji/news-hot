@@ -1,0 +1,35 @@
+.monitor-admin [data-button-tone] {
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  box-shadow: none;
+}
+
+.monitor-admin [data-button-tone="primary"] {
+  background: var(--ok-soft);
+  color: var(--ok-ink);
+}
+
+.monitor-admin [data-button-tone="secondary"] {
+  background: color-mix(in srgb, #0284c7 10%, var(--surface));
+  color: light-dark(#0369a1, #7dd3fc);
+}
+
+.monitor-admin [data-button-tone="danger"] {
+  background: var(--hot-soft);
+  color: var(--hot);
+}
+
+.monitor-admin [data-button-tone="ghost"] {
+  background: var(--bg-sunk);
+  color: var(--ink-3);
+}
+
+.monitor-admin [data-button-tone]:not(:disabled):hover {
+  background: color-mix(in srgb, currentColor 14%, var(--surface));
+}
+
+.monitor-admin [data-button-tone]:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

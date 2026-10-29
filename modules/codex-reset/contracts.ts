@@ -1,25 +1,2 @@
-export type {
-  ResetMonitorContextPost as CodexResetContextPost,
-  ResetMonitorPost as CodexResetPost,
-  ResetMonitorPresentationStatus as CodexPresentationStatus,
-  ResetMonitorEvent as CodexResetEvent,
-  ResetMonitorActivity as CodexResetActivity,
-  ResetMonitorMonitor as CodexResetMonitor,
-  ResetMonitorOutage as CodexResetOutage,
-  ResetMonitorSnapshot as CodexResetsSnapshot,
-  ResetMonitorCalendarMark as CodexCalendarMark,
-  ResetMonitorPageData as CodexResetPageData,
-  ResetMonitorSitePage as CodexResetSitePage,
-  ResetMonitorDay as CodexResetDay,
-  ResetMonitorVersion as CodexResetVersion,
-  AdminMonitorEventPost,
-  AdminMonitorEvent,
-  AdminMonitorPagination,
-  AdminMonitorEvents,
-  AdminMonitorPost,
-  AdminMonitorPosts,
-  AdminMonitorReviewProposition,
-  AdminMonitorReviewDraft,
-  AdminMonitorPostDetail,
-  AdminMonitorReviewPreview,
-} from "@aihot/reset-monitor/contracts";
+export type * from "@aihot/reset-monitor/contracts";
+export type { EventList, EventStatus, Overview, PlatformOverview, ResetEvent } from "@aihot/reset-monitor/public-v2";

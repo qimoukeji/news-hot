@@ -2,7 +2,7 @@ import { z } from "zod";
 import { eventListSchema, platformSchema, timestampSchema } from "./public-v2.ts";
 
 export const webhookPayloadSchema = z.strictObject({
-  schemaVersion: z.literal(1), id: z.uuid(), occurredAt: timestampSchema, platform: platformSchema,
+  schemaVersion: z.literal(2), id: z.uuid(), occurredAt: timestampSchema, platform: platformSchema,
   eventId: z.string().min(1), revision: z.number().int().positive(),
   action: z.enum(["created", "updated", "withdrawn", "restored"]),
   event: eventListSchema.shape.list.element.nullable(),

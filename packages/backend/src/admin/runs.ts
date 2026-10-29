@@ -8,6 +8,7 @@ import { audit } from "../audit.ts";
 import { failureGroupSql, requeueFailed } from "../jobs/content.ts";
 import { groupingOverview, waitingSelectedNews } from "../operations/grouping.ts";
 import { serverModules } from "../modules.ts";
+import { runStatistics } from "./run-statistics.ts";
 
 const STALE_HEARTBEAT_MS = 3 * 60_000;
 
@@ -32,7 +33,7 @@ export async function runsOverview(): Promise<Runs> {
     sql<{ key: string; value: Heartbeat; updated_at: Date }[]>`SELECT key, value, updated_at FROM settings WHERE key LIKE 'heartbeat.%' ORDER BY key`,
     sql<Runs["jobs"]>`
       WITH latest AS (
-        SELECT DISTINCT ON (job) job, started_at, finished_at, status, left(error, 400) AS error
+        SELECT DISTINCT ON (job) job, started_at, finished_at, status, left(error, 400) AS error, detail
         FROM job_runs
         -- Registered worker schedules and the modules' current external jobs; the timeline retains history.
         WHERE EXISTS (SELECT 1 FROM pgboss.schedule s WHERE s.name = 'cron.' || job_runs.job)
@@ -44,7 +45,7 @@ export async function runsOverview(): Promise<Runs> {
       )
       SELECT latest.*, coalesce(counts.failed_24h, 0) AS failed_24h, coalesce(counts.runs_24h, 0) AS runs_24h
       FROM latest LEFT JOIN counts USING (job) ORDER BY job`,
-    sql<Runs["timeline"]>`SELECT id, job, started_at, finished_at, status, left(error, 300) AS error FROM job_runs ORDER BY started_at DESC, id DESC LIMIT 80`,
+    sql<Runs["timeline"]>`SELECT id, job, started_at, finished_at, status, left(error, 300) AS error, detail FROM job_runs ORDER BY started_at DESC, id DESC LIMIT 80`,
     sql<Runs["queues"]>`
       SELECT name, state, count(*)::int AS n, min(created_on) AS oldest FROM pgboss.job
       WHERE state IN ('created', 'retry', 'active') GROUP BY 1, 2 ORDER BY 1, 2`,
@@ -85,8 +86,8 @@ export async function runsOverview(): Promise<Runs> {
       at: h.updated_at,
       alive: now - h.updated_at.getTime() < STALE_HEARTBEAT_MS,
     })),
-    jobs: latest,
-    timeline,
+    jobs: latest.map(run => ({ ...run, detail: runStatistics(run.detail) })),
+    timeline: timeline.map(run => ({ ...run, detail: runStatistics(run.detail) })),
     queues,
     failedJobs,
     grouping: groupingOverview(grouping, now),

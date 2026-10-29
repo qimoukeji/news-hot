@@ -12,6 +12,7 @@ import { applyPublicHeaders, sendTextWithEtag } from "../http/respond.ts";
 import { loadSitemap } from "@aihot/backend/publication/sitemap";
 import { llmsTxt, loadLlmsAvailability } from "@aihot/backend/publication/llms";
 import { loadContact } from "@aihot/backend/site/contact";
+import { readOnlyMethods } from "./v1.ts";
 
 const PUBLIC = path.join(REPO_ROOT, "site/public");
 /** The site's brand files (site/brand/), and how long its icons are cached. */
@@ -130,6 +131,8 @@ export function registerStatic(app: FastifyInstance) {
   app.get("/.well-known/security.txt", (req, reply) => sendFile(req, reply, path.join(PUBLIC, ".well-known/security.txt"), { cacheControl: "public, max-age=86400", fill: true }));
   app.get("/manifest.webmanifest", (req, reply) => sendFile(req, reply, path.join(PUBLIC, "manifest.webmanifest"), { cacheControl: "public, max-age=86400, stale-while-revalidate=604800", fill: true }));
   app.get("/openapi-v1.json", (req, reply) => sendFile(req, reply, path.join(PUBLIC, "openapi-v1.json"), { cacheControl: "public, max-age=300, must-revalidate", publicApi: true, fill: true }));
+  app.get("/openapi-v2.json", (req, reply) => sendFile(req, reply, path.join(PUBLIC, "openapi-v2.json"), { cacheControl: "public, max-age=300, must-revalidate", publicApi: true }));
+  readOnlyMethods(app,"/openapi-v2.json");
 
   // IndexNow proves the key by a file at the site root named after it (INDEXNOW_KEY).
   if (config.indexNowKey) {

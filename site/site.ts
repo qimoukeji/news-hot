@@ -59,7 +59,7 @@ export const SITE = {
    * 公开接口（MCP、OpenAPI、llms.txt）的版本号，只升不降。
    * 改了接口里已有的字段或含义时升主版本，并在部署说明里写清。
    */
-  interfaceVersion: "4.0.0",
+  interfaceVersion: "5.0.0",
   /** 对外联系邮箱（选填）：llms.txt 和给 Agent 的使用说明里会写。 */
   contactEmail: "qimoukeji@gmail.com" as string | null,
   /** 关于页底部的一行小字（选填）。 */
@@ -260,8 +260,10 @@ export const ACCESS = {
 
 /** 这个部署自己的几处安排（选填）。 */
 export const DEPLOYMENT = {
-  /** 启用的框架定时任务；模块定时任务独立注册。 */
-  engineSchedules: ["ops.recover", "ops.alerts", "ops.retention"] as string[],
+  /** 所有业务及 cron 队列的白名单；null 开放全部，空数组全部停用。 */
+  queues: ["cron.monitor.tick", "cron.claude-reset.tick", "cron.grok-reset.tick", "cron.codex-reset.translate", "cron.claude-reset.translate", "cron.grok-reset.translate", "cron.reset-confirmations.check", "cron.reset-subscriptions.sweep", "reset-subscriptions.deliver"] as string[] | null,
+  /** 启用的框架定时任务；框架和模块任务均须通过 queues 白名单。 */
+  engineSchedules: [] as string[],
   /** 凭据分组文件（models.env、collectors.env……）默认放在哪个目录，相对仓库根目录；环境变量 AIHOT_CREDENTIALS_DIR 优先，都没有就只读环境变量。 */
   credentialsDir: null as string | null,
   /** 凭据分组的文件名（放在凭据目录下，选填）：没写的分组用“分组名.env”，比如 models.env。 */

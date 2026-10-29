@@ -5,6 +5,7 @@ import { OAUTH_PROBE_PATHS, resolveRedirect } from "@aihot/contracts/http-policy
 import { sql } from "@aihot/backend/db";
 import { logError } from "@aihot/backend/lib/log-error";
 import { serverModules } from "@aihot/backend/modules";
+import { QueueDisabledError } from "@aihot/backend/jobs/queue";
 import { registerSite } from "./routes/site.ts";
 import { registerOg } from "./routes/og.ts";
 import { registerAdminAuth } from "./routes/admin-auth.ts";
@@ -111,6 +112,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   app.setErrorHandler((error, req, reply) => {
+    if (error instanceof QueueDisabledError) {
+      req.log.info({ code: error.code, queue: error.queue }, "task disabled by site configuration");
+      return sendProblem(req, reply, { status: 409, code: error.code, detail: error.message });
+    }
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     if (status === 400 || status === 413 || status === 415) {
       // A malformed or oversized request is the client's: one line, no stack trace in the error log.

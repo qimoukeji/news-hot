@@ -8,6 +8,7 @@ import { sql, type Db } from "../db.ts";
 import { shutdownSignal } from "../lib/shutdown.ts";
 import { logError } from "../lib/log-error.ts";
 import { serverModules, type ModuleQueue } from "../modules.ts";
+import { DEPLOYMENT } from "@aihot/site";
 export { shutdownSignal } from "../lib/shutdown.ts";
 
 let boss: PgBoss | null = null;
@@ -57,6 +58,18 @@ const QUEUE_OPTIONS: Record<QueueName, QueueOptions> = {
 };
 
 const ensured = new Set<string>();
+
+/** Site policy applies to producers and consumers, independently of external-call safety valves. */
+export const queueEnabled = (name: string) => DEPLOYMENT.queues === null || DEPLOYMENT.queues.includes(name);
+export class QueueDisabledError extends Error {
+  readonly statusCode = 409;
+  readonly code = "queue_disabled";
+  readonly queue: string;
+  constructor(queue: string) {
+    super(`Task queue "${queue}" is disabled by site configuration (DEPLOYMENT.queues).`);
+    this.queue = queue;
+  }
+}
 
 export async function getBoss(): Promise<PgBoss> {
   if (boss) return boss;
@@ -117,6 +130,7 @@ export async function stopBoss(): Promise<void> {
 }
 
 export async function ensureQueue(name: string, options: QueueOptions = QUEUE_OPTIONS[name as QueueName] ?? {}): Promise<void> {
+  if (!queueEnabled(name)) throw new QueueDisabledError(name);
   if (ensured.has(name)) return;
   const b = await getBoss();
   const existing = await b.getQueue(name);
@@ -156,13 +170,15 @@ export async function retryReleasedReceiptJobs(): Promise<number> {
         AND EXISTS (SELECT 1 FROM audit_log a WHERE a.action = 'receipt.release'
                     AND a.subject = 'receipt:' || (j.output->>'receiptId') AND a.created_at > j.started_on)
       ORDER BY j.completed_on LIMIT 200 FOR UPDATE OF j SKIP LOCKED`;
-    for (const job of jobs) await b.retry(job.name, job.id, { db: queueDb(tx) });
-    return jobs.length;
+    const enabled = jobs.filter(job => queueEnabled(job.name));
+    for (const job of enabled) await b.retry(job.name, job.id, { db: queueDb(tx) });
+    return enabled.length;
   });
 }
 
 /** The worker's handler for one queue (jobs/*.ts), called with each job's data. */
 export async function work<Q extends QueueName>(boss: PgBoss, name: Q, options: WorkOptions, handler: (data: JobData[Q]) => Promise<unknown>): Promise<void> {
+  if (!queueEnabled(name)) return;
   await ensureQueue(name);
   await boss.work<JobData[Q]>(name, options, async ([job]) => (job ? handler(job.data) : undefined));
 }
@@ -170,6 +186,7 @@ export async function work<Q extends QueueName>(boss: PgBoss, name: Q, options: 
 /** The worker's handlers for the site's modules' queues. */
 export async function workModuleQueues(boss: PgBoss): Promise<void> {
   for (const queue of serverModules().flatMap((m) => m.queues ?? [])) {
+    if (!queueEnabled(queue.name)) continue;
     await ensureQueue(queue.name, queue.options);
     await boss.work(queue.name, { ...queue.worker, perJobResults: true }, async (jobs) => {
       const output = await queue.run(jobs.map(job => job.data) as never[]);

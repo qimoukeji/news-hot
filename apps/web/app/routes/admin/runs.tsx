@@ -7,6 +7,7 @@ import type { AdminDeliveryIssue, AdminReceiptIssue, AdminRuns } from "@aihot/co
 import { adminGet } from "../../lib/admin.server";
 import { useAdminAction } from "../../features/admin/action";
 import { ago, bj, duration, num } from "../../features/admin/format";
+import { runResult } from "../../features/admin/run-result";
 import { AdminPage, Badge, Button, Card, DataTable, Dot, Empty, Field, Json, ReasonDialog, Select, Stat, Time } from "../../features/admin/ui";
 import { loadParts } from "../../site-modules";
 
@@ -20,6 +21,14 @@ export const meta: Route.MetaFunction = () => [{ title: `运行 · ${SITE.name} 
 const STATE_LABEL: Record<string, string> = { created: "排队", retry: "等待重试", active: "执行中" };
 
 const PARTS = await loadParts((m) => m.admin?.runs);
+
+function RunResult({ run }: { run: Pick<AdminRuns["timeline"][number], "job" | "status" | "error" | "detail"> }) {
+  const result = runResult(run);
+  return <div className="min-w-40">
+    <Badge tone={result.tone} title={[`执行状态：${run.status ?? "running"}`, run.error].filter(Boolean).join(" · ")}>{result.label}</Badge>
+    {result.summary && <p className="mt-1 text-[12px] text-ink-3">{result.summary}</p>}
+  </div>;
+}
 
 export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
   const refresh = useFetcher<typeof loader>();
@@ -96,7 +105,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
             rowKey={(j) => j.job}
             columns={[
               { key: "j", label: "任务", render: (j) => <span className="font-mono text-[12.5px]">{j.job}</span> },
-              { key: "s", label: "上次", render: (j) => <Badge tone={j.status === "ok" ? "ok" : j.status === "failed" ? "bad" : "muted"} title={j.error ?? undefined}>{j.status ?? "运行中"}</Badge> },
+              { key: "s", label: "上次结果", render: (j) => <RunResult run={j} /> },
               { key: "at", label: "时间", render: (j) => <Time at={j.started_at} /> },
               { key: "d", label: "耗时", align: "right", render: (j) => duration(j.started_at, j.finished_at) },
               { key: "f", label: "24h 失败", align: "right", render: (j) => (j.failed_24h ? <span className="text-hot">{j.failed_24h}/{j.runs_24h}</span> : `0/${j.runs_24h}`) },
@@ -208,7 +217,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
             columns={[
               { key: "at", label: "开始", render: (t) => <span className="num whitespace-nowrap">{bj(t.started_at)}</span> },
               { key: "j", label: "任务", render: (t) => <span className="font-mono text-[12px]">{t.job}</span> },
-              { key: "s", label: "结果", render: (t) => <Badge tone={t.status === "ok" ? "ok" : t.status === "failed" ? "bad" : "muted"} title={t.error ?? undefined}>{t.status ?? "运行中"}</Badge> },
+              { key: "s", label: "结果", render: (t) => <RunResult run={t} /> },
               { key: "d", label: "耗时", align: "right", render: (t) => duration(t.started_at, t.finished_at) },
             ]}
           />

@@ -1,4 +1,4 @@
-import "./setup.ts";
+import { siteQueueSelection } from "./setup.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { spawn } from "node:child_process";
@@ -8,6 +8,7 @@ import { config } from "@aihot/backend/config";
 import { installModules } from "@aihot/backend/modules";
 import { SERVER_MODULES } from "@aihot/site/modules/server";
 import { currentSchedules } from "../apps/worker/src/schedules.ts";
+import { DEPLOYMENT } from "@aihot/site";
 
 const boss = new PgBoss({ connectionString: config.databaseUrl, schedule: false, supervise: false });
 after(async () => { await boss.stop({ graceful: false }); await closeDb(); });
@@ -22,9 +23,25 @@ async function command(...args: string[]) {
 }
 
 test("site schedule reconciliation previews, removes retired execution work and keeps history without running tasks", async () => {
+  DEPLOYMENT.queues = siteQueueSelection;
   installModules(SERVER_MODULES);
-  const expected = ["cron.claude-reset.tick", "cron.grok-reset.tick", "cron.monitor.tick", "cron.ops.alerts", "cron.ops.recover", "cron.ops.retention", "cron.reset-subscriptions.sweep"];
+  process.env.MODEL_CALLS_ENABLED = "false";
+  config.modelCallsEnabled = false;
+  const expected = ["cron.claude-reset.tick", "cron.grok-reset.tick", "cron.monitor.tick", "cron.reset-confirmations.check", "cron.reset-subscriptions.sweep"];
   assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), expected);
+  const collectEnabled = process.env.COLLECT_ENABLED;
+  const modelCallsEnabled = config.modelCallsEnabled;
+  try {
+    process.env.COLLECT_ENABLED = "false";
+    assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), expected);
+    config.modelCallsEnabled = false;
+    assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), expected);
+    config.modelCallsEnabled = true;
+    assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), [...expected, "cron.claude-reset.translate", "cron.codex-reset.translate", "cron.grok-reset.translate"].sort());
+  } finally {
+    process.env.COLLECT_ENABLED = collectEnabled;
+    config.modelCallsEnabled = modelCallsEnabled;
+  }
   await boss.start();
   for (const name of ["cron.sources.schedule", "cron.old.unscheduled", "business.saved", "cron.monitor.tick"]) {
     await boss.createQueue(name);
@@ -77,5 +94,8 @@ test("site schedule reconciliation previews, removes retired execution work and 
     { name: "fixture.unlisted", cron: "0 0 1 1 *", run: async () => ({}) },
     { name: "fixture.disabled", cron: "0 0 1 1 *", when: () => false, run: async () => ({}) },
   ] }]);
+  assert.deepEqual(currentSchedules(), [], "unlisted module schedules are disabled by site policy");
+  DEPLOYMENT.queues = null;
+  DEPLOYMENT.engineSchedules = ["ops.alerts", "ops.recover", "ops.retention"];
   assert.deepEqual(currentSchedules().map(s => s.name).sort(), ["fixture.unlisted", "ops.alerts", "ops.recover", "ops.retention"]);
 });

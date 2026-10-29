@@ -27,7 +27,7 @@ export function useAdminAction() {
       method: "POST" | "PATCH" | "PUT" | "DELETE",
       path: string,
       body?: unknown,
-      opts: { success?: string; label?: string; revalidate?: boolean } = {},
+      opts: { success?: string; label?: string; revalidate?: boolean; onError?: (status: number) => void } = {},
     ): Promise<T | null> => {
       const label = opts.label ?? `${method} ${path}`;
       // The same command retried after a failure keeps its key, so paid work is not repeated.
@@ -47,7 +47,10 @@ export function useAdminAction() {
         }
         const text = await res.text();
         const json = text ? JSON.parse(text) : null;
-        if (!res.ok) throw new AdminError(json?.detail ?? `请求失败（${res.status}）`);
+        if (!res.ok) {
+          opts.onError?.(res.status);
+          throw new AdminError(json?.detail ?? `请求失败（${res.status}）`);
+        }
         keys.current.delete(label);
         if (opts.success) toast(opts.success, "ok");
         if (opts.revalidate !== false) revalidator.revalidate();

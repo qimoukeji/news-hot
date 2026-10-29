@@ -1,0 +1,1 @@
+ALTER TABLE monitor_source_posts DROP CONSTRAINT IF EXISTS monitor_source_posts_processing_status_check;

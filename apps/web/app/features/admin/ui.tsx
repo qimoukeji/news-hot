@@ -1,5 +1,5 @@
 // Shared admin building blocks: page frame, cards, stats, badges, tables, buttons, fields and a
-// reason dialog (manual changes always carry a reason for the audit log).
+// reason dialog, with optional presentation-only forms.
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -152,6 +152,7 @@ export function Button({
     <button
       type="button"
       {...rest}
+      data-button-tone={tone}
       disabled={rest.disabled || busy}
       className={`inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-control font-medium transition-[opacity,background-color,transform] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-45 ${
         size === "sm" ? "h-7 px-2.5 text-[12.5px]" : "h-9 px-3.5 text-[13.5px]"
@@ -167,6 +168,7 @@ export function ButtonLink({ to, children, tone = "secondary", size = "md" }: { 
   return (
     <Link
       to={to}
+      data-button-tone={tone}
       className={`inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-control font-medium transition-[opacity,background-color] ${
         size === "sm" ? "h-7 px-2.5 text-[12.5px]" : "h-9 px-3.5 text-[13.5px]"
       } ${BTN[tone]}`}
@@ -272,6 +274,7 @@ export function ReasonDialog({
   confirmLabel = "确认",
   danger,
   requireReason = true,
+  showReason = true,
   children,
   onClose,
   onSubmit,
@@ -283,6 +286,7 @@ export function ReasonDialog({
   confirmLabel?: string;
   danger?: boolean;
   requireReason?: boolean;
+  showReason?: boolean;
   children?: ReactNode;
   onClose: () => void;
   onSubmit: (reason: string) => Promise<boolean | void> | boolean | void;
@@ -321,7 +325,7 @@ export function ReasonDialog({
             className="relative w-full max-w-lg rounded-sheet bg-raised p-5 shadow-2xl ring-1 ring-line-strong"
             onSubmit={async (e) => {
               e.preventDefault();
-              if (requireReason && !reason.trim()) return;
+              if (showReason && requireReason && !reason.trim()) return;
               const closed = await onSubmit(reason.trim());
               if (closed !== false) onClose();
             }}
@@ -329,14 +333,14 @@ export function ReasonDialog({
             <h2 className="text-[16px] font-semibold text-ink">{title}</h2>
             {description && <div className="mt-1.5 text-[13px] leading-relaxed text-ink-3">{description}</div>}
             {children && <div className="mt-4 space-y-3">{children}</div>}
-            <div className="mt-4">
+            {showReason && <div className="mt-4">
               <Field label={requireReason ? "原因（写进审计记录）" : "备注（可选）"}>
                 <Textarea ref={ref} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={requireReason ? "为什么做这个改动" : ""} rows={2} />
               </Field>
-            </div>
+            </div>}
             <div className="mt-5 flex justify-end gap-2">
               <Button tone="ghost" onClick={onClose}>取消</Button>
-              <Button type="submit" tone={danger ? "danger" : "primary"} busy={busy} disabled={requireReason && !reason.trim()}>
+              <Button type="submit" tone={danger ? "danger" : "primary"} busy={busy} disabled={showReason && requireReason && !reason.trim()}>
                 {confirmLabel}
               </Button>
             </div>

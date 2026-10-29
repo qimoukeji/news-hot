@@ -254,11 +254,33 @@ export interface AdminDeliveryIssue {
   updated_at: Timestamp;
 }
 
+/** Safe counters from a scheduled monitor run; source texts and raw task details stay on the server. */
+export interface AdminRunStatistics {
+  outcome?: "partial" | "needs_review" | "completed";
+  complete?: boolean;
+  collectionComplete?: boolean;
+  skipped?: boolean;
+  reason?: "page_limit";
+  pages?: number;
+  paidPages?: number;
+  reusedPages?: number;
+  windowPages?: number;
+  stored?: number;
+  returned?: number;
+  processed?: number;
+  reviewed?: number;
+  failed?: number;
+  groups?: number;
+  modelCalls?: number;
+  schemaFailures?: number;
+  pending?: number;
+}
+
 export interface AdminRuns {
   checkedAt: Timestamp;
   processes: Array<{ role: string; pid: number; host: string; release: string; startedAt: Timestamp; at: Timestamp; alive: boolean }>;
-  jobs: Array<{ job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null; failed_24h: number; runs_24h: number }>;
-  timeline: Array<{ id: number; job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null }>;
+  jobs: Array<{ job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null; detail?: AdminRunStatistics | null; failed_24h: number; runs_24h: number }>;
+  timeline: Array<{ id: number; job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null; detail?: AdminRunStatistics | null }>;
   queues: Array<{ name: string; state: string; n: number; oldest: Timestamp }>;
   failedJobs: Array<{ name: string; failed: number; last: Timestamp | null; last_output: string | null }>;
   grouping: {

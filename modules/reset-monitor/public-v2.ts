@@ -16,16 +16,12 @@ export const sourceUrlSchema = z.string().regex(sourceUrlPattern, "Source URL re
 export const timestampSchema = z.iso.datetime({ offset: true });
 export const calendarDate = z.iso.date();
 export const localizedTextSchema = z.strictObject({
-  en: text, zh: text.optional(), "zh-Hant": text.optional(), ja: text.optional(), ko: text.optional(), ru: text.optional(), es: text.optional(),
+  en: text, zh: text, "zh-Hant": text, ja: text, ko: text, ru: text, es: text,
 });
 const identifier = text;
 export const platformSchema = z.enum(["codex", "claude-code", "grok"]);
-export const updateSourceSchema = z.strictObject({ sourceId: identifier, url: sourceUrlSchema });
-export const updateActions = ["announce", "confirm", "progress", "amend", "withdraw"] as const;
-export const eventUpdateSchema = z.strictObject({
-  id: identifier, action: z.enum(updateActions), publishedAt: timestampSchema,
-  summary: localizedTextSchema.nullable(), source: updateSourceSchema,
-});
+export const updateSourceSchema = z.strictObject({ postId: identifier, sourceId: identifier, url: sourceUrlSchema });
+export const updateActions = ["announce", "confirm", "progress", "amend"] as const;
 const timeZone = text.refine(value => {
   try { return !/^[+-]/.test(new Intl.DateTimeFormat("en", { timeZone: value }).resolvedOptions().timeZone); } catch { return false; }
 }, "Invalid source time zone");
@@ -44,6 +40,12 @@ export const publicTimeSchema = z.union([timestampSchema, calendarDate, z.string
   return parts.length === 2 && parts.every(part => timestampSchema.safeParse(part).success) && Date.parse(parts[1]!) >= Date.parse(parts[0]!);
 }, "Time requires an ISO timestamp, date or timestamp interval")]);
 export type PublicTime = z.infer<typeof publicTimeSchema>;
+const updateFields = { id: identifier, publishedAt: timestampSchema, time: publicTimeSchema.nullable().describe("Explicit action business time; null when unspecified. Never substituted with publication time."), title: localizedTextSchema, summary: localizedTextSchema.nullable() };
+export const eventUpdateSchema = z.discriminatedUnion("action", [
+  z.strictObject({ ...updateFields, action: z.literal("confirm"), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema) }),
+  z.strictObject({ ...updateFields, action: z.enum(["announce", "progress"]), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema).min(1) }),
+  z.strictObject({ ...updateFields, action: z.literal("amend"), invalidatesEvent: z.boolean(), sources: z.array(updateSourceSchema).min(1) }),
+]);
 /** Preserve date precision and fractional seconds while expressing instants in UTC. */
 export function normalizePublicTime(time: PublicTime): PublicTime {
   if (time.length === 10) return time;
@@ -54,32 +56,24 @@ export function serializeEventTime(time: EventTime): PublicTime {
   return normalizePublicTime(time.kind === "date" ? time.date : time.kind === "range" ? `${time.from}/${time.through}` : time.at);
 }
 
-export const bonusCreditSchema = z.strictObject({
-  amount: localizedTextSchema.nullable(), eligibility: localizedTextSchema.nullable(), claimMethod: localizedTextSchema.nullable(),
-  usageTerms: localizedTextSchema.nullable(), claimDeadline: eventTimeSchema.nullable(), expiresAt: eventTimeSchema.nullable(),
-});
-export const eventStatuses = ["announced", "in_progress", "completed", "cancelled", "available", "claim_closed", "expired"] as const;
+export const eventStatuses = ["announced", "in_progress", "completed", "cancelled"] as const;
 export type EventStatus = (typeof eventStatuses)[number];
 export const scopeSchema = z.strictObject({
-  type: z.enum(["all_users", "paid_users", "selected_users", "unknown"]),
-  productCodes: z.array(identifier), planCodes: z.array(identifier), quotaWindowCodes: z.array(identifier), note: localizedTextSchema.nullable(),
+  type: z.enum(["all_users", "paid_users", "selected_users", "unknown"]).describe("unknown means audience mapping is unresolved, not confirmed eligibility for everyone."),
+  productCodes: z.array(identifier).describe("Empty means no catalog product restriction can be applied; an unknown product note does not confirm coverage of all products."), planCodes: z.array(identifier), quotaWindowCodes: z.array(identifier), note: localizedTextSchema.nullable().describe("Localized audience and unknown-dimension labels; actual eligibility and product restrictions remain in summaries."),
 });
 const eventObjectSchema = z.strictObject({
   id: identifier, type: z.enum(["direct_reset", "reset_credit", "bonus_credit"]), status: z.enum(eventStatuses),
   publishedAt: timestampSchema, title: localizedTextSchema, summary: localizedTextSchema.nullable(),
   time: publicTimeSchema, updates: z.array(eventUpdateSchema).min(1), scope: scopeSchema,
-  bonusCredit: bonusCreditSchema.nullable(),
 });
 function validateEvent(event: z.infer<typeof eventObjectSchema>, context: z.RefinementCtx) {
-  const allowed = event.type === "bonus_credit"
-    ? ["announced", "available", "claim_closed", "expired", "cancelled"]
-    : ["announced", "in_progress", "completed", "cancelled"];
-  if (!allowed.includes(event.status)) context.addIssue({ code: "custom", path: ["status"], message: "Status is invalid for event type" });
   for (const key of ["productCodes", "planCodes", "quotaWindowCodes"] as const) {
     if (new Set(event.scope[key]).size !== event.scope[key].length) context.addIssue({ code: "custom", path: ["scope", key], message: "Catalog references must be unique" });
   }
   const ids = new Set<string>();
   event.updates.forEach((update, index) => {
+    if (new Set(update.sources.map(source => source.postId)).size !== update.sources.length) context.addIssue({ code: "custom", path: ["updates", index, "sources"], message: "Source posts must be unique" });
     if (ids.has(update.id)) context.addIssue({ code: "custom", path: ["updates", index, "id"], message: "Update IDs must be unique" });
     ids.add(update.id);
     const prior = event.updates[index - 1];
@@ -88,11 +82,9 @@ function validateEvent(event: z.infer<typeof eventObjectSchema>, context: z.Refi
       context.addIssue({ code: "custom", path: ["updates", index], message: "Updates must be in descending publication order with ID ascending ties" });
     }
   });
-  if (event.type !== "bonus_credit" && event.bonusCredit !== null) context.addIssue({ code: "custom", path: ["bonusCredit"], message: "Only bonus events contain bonus details" });
 }
 export const resetEventSchema = eventObjectSchema.superRefine(validateEvent);
-const listEventSchema = eventObjectSchema.omit({ bonusCredit: true })
-  .superRefine((event, context) => validateEvent({ ...event, bonusCredit: null }, context));
+const listEventSchema = resetEventSchema;
 export const sourceSchema = z.strictObject({
   id: identifier, type: z.enum(["official_social", "official_blog", "official_docs", "community", "other"]), name: localizedTextSchema,
   url: sourceUrlSchema,
@@ -113,9 +105,6 @@ type OverviewFields = {
   announcedResetTime: PublicTime | null; resetTime: PublicTime | null;
 };
 function validateOverview(value: OverviewFields, context: z.RefinementCtx) {
-  if (value.announcedResetTime !== null && value.resetTime !== null) {
-    context.addIssue({ code: "custom", path: ["resetTime"], message: "Announcement and reset times must be mutually exclusive" });
-  }
   const unique = (ids: string[], path: (string | number)[]) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: "custom", path, message: "IDs must be unique" });
   };
@@ -149,19 +138,15 @@ export const resetSnapshotSchema = z.strictObject({
   const sources = new Set(snapshot.sources.map(source => source.id));
   snapshot.events.forEach((event, index) => {
     event.updates.forEach((update, updateIndex) => {
-      if (!sources.has(update.source.sourceId)) context.addIssue({ code: "custom", path: ["events", index, "updates", updateIndex, "source", "sourceId"], message: "Unknown source account ID" });
+      update.sources.forEach((source, sourceIndex) => {
+        if (!sources.has(source.sourceId)) context.addIssue({ code: "custom", path: ["events", index, "updates", updateIndex, "sources", sourceIndex], message: "Unknown source account ID" });
+      });
     });
     for (const [field, key] of [["productCodes", "products"], ["planCodes", "plans"], ["quotaWindowCodes", "quotaWindows"]] as const) {
       const codes = new Set(snapshot.catalog[key].map(entry => entry.code));
       if (event.scope[field].some(code => !codes.has(code))) context.addIssue({ code: "custom", path: ["events", index, "scope", field], message: "Unknown catalog code" });
     }
   });
-  const latest = snapshot.events[0];
-  const announced = latest?.status === "announced" ? latest.time : null;
-  const reset = latest && latest.status !== "announced" ? latest.time : null;
-  if (snapshot.announcedResetTime !== announced || snapshot.resetTime !== reset) {
-    context.addIssue({ code: "custom", path: ["resetTime"], message: "Overview times must match the latest event" });
-  }
 });
 export const eventListSchema = z.strictObject({
   list: z.array(listEventSchema),
@@ -177,31 +162,10 @@ export const eventListSchema = z.strictObject({
 });
 export type ResetSnapshot = z.infer<typeof resetSnapshotSchema>;
 export type ResetEvent = z.infer<typeof resetEventSchema>;
-export type BonusCredit = z.infer<typeof bonusCreditSchema>;
 export type EventList = z.infer<typeof eventListSchema>;
 export type PlatformOverview = z.infer<typeof platformOverviewSchema>;
 export type Overview = z.infer<typeof overviewSchema>;
 
-/** Reviewed data is private storage, never an extra field on the public response. */
-export const reviewedEventSchema = eventObjectSchema.pick({
-  status: true, publishedAt: true, title: true, summary: true,
-  time: true, scope: true, bonusCredit: true,
-}).extend({
-  evidenceVersion: text,
-  evidence: z.array(z.strictObject({ postId: text, excerpt: text })).min(1),
-  updateSummaries: z.array(z.strictObject({ postId: text, summary: localizedTextSchema })).optional(),
-  /** Default update times follow linked business updates; source times are actual occurrence facts. */
-  timeBasis: z.enum(["source", "latest_update"]).optional(),
-  timeResolutions: z.array(z.strictObject({
-    field: z.enum(["claimDeadline", "expiresAt"]), time: eventTimeSchema,
-    postId: text, excerpt: text, activityAnchor: timestampSchema,
-    yearBasis: z.enum(["explicit", "activity"]), timeZone: text,
-    zoneBasis: z.enum(["expression", "post", "activity", "publication"]),
-  })).optional(),
-  /** Preserve v1's nullable presentation when this is the only stored addition. */
-  legacyPresentationWasNull: z.boolean().optional(),
-});
-export type ReviewedEvent = z.infer<typeof reviewedEventSchema>;
 export type PublicV2Config = {
   platform: z.infer<typeof platformSchema>;
   catalog: z.infer<typeof catalogSchema>;

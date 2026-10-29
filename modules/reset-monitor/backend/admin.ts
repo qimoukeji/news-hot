@@ -1,314 +1,306 @@
-import { monitor as currentMonitor, monitorId, purpose as requestPurpose, auditAction, auditSubject } from "./context.ts";
-// Administrative reads and corrections. Manual post decisions use the same atomic review planner.
-import type { BeforeJson } from "@aihot/contracts/admin";
-import type { AdminMonitorEvents, AdminMonitorPosts } from "../contracts.ts";
 import { z } from "zod";
-import { sql, type Db, type Tx } from "@aihot/backend/db";
+import { randomUUID } from "node:crypto";
+import { sql } from "@aihot/backend/db";
 import { audit, Conflict } from "@aihot/backend/audit";
-import { awaitingReviewCondition } from "./read.ts";
-import { estimateFor, manualSchedule, type Schedule } from "./time.ts";
-import { bumpPublication, moveReviewedLink } from "./manual-review.ts";
-import { eventDisplayLabel, eventLabel } from "../event-kind.ts";
-import { BonusCreditInput } from "./bonus-input.ts";
+import { sha256 } from "@aihot/backend/lib/ids";
+import { identityKeyForUrl, tweetIdFromUrl } from "@aihot/backend/lib/url";
+import { monitorId, monitor, auditAction, auditSubject } from "./context.ts";
+import {
+  editorialTextSchema,
+  editorialScopeSchema,
+  reduceEvent,
+  sourcedActions,
+  iso,
+  type ActionInput,
+  type SourcePostRow,
+  type EventRow,
+} from "../actions.ts";
+import { loadActionInput, rowVersion, validateScope, validateActionFacts, sourcePost, auditPost } from "./action-store.ts";
+import { monitorEventDetail as reviewEventDetail } from "./manual-review.ts";
+import { projectPublicV2 } from "./public-v2.ts";
+import { eventStatuses, sourceUrlSchema, timestampSchema } from "../public-v2.ts";
 import { enqueuePublicV2 } from "./public-v2-work.ts";
+import { adminTimeFilter } from "./admin-time.ts";
 export {
   monitorPostDetail,
   previewMonitorReview,
   submitMonitorReview,
+  previewMonitorEventReview,
+  submitMonitorEventReview,
 } from "./manual-review.ts";
-
-function invalid(message: string) {
-  return Object.assign(new Error(message), { statusCode: 400 });
-}
-const PAGE_SIZE = 10;
-function paging(total: number, requested?: number) {
-  const totalPages = Math.ceil(total / PAGE_SIZE);
-  const page = Math.min(
-    Math.max(1, Number.isFinite(requested) ? Math.trunc(requested!) : 1),
-    Math.max(1, totalPages),
-  );
-  return { page, pageSize: PAGE_SIZE, total, totalPages };
-}
-
-function receiptReviewCondition(db: Db) {
-  return db`e.type <> 'bonus_credit' AND NOT e.withdrawn AND e.status <> 'confirmed' AND NOT EXISTS
-    (SELECT 1 FROM monitor_event_posts l WHERE l.monitor_id=${monitorId()} AND l.event_id=e.id AND l.action='confirm')`;
-}
-
-export async function eventRows(db: Db, ids?: string[]) {
-  return db`SELECT e.*,
-    (${receiptReviewCondition(db)}) AS "canReceiptReview",
-    coalesce((SELECT jsonb_agg(jsonb_build_object('postId',l.post_id,'stage',l.stage,'action',l.action,
-      'author',p.author,'text',l.text,'originalText',l.original_text,'publishedAt',p.published_at,'url',p.url) ORDER BY p.published_at,p.id)
-      FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS l JOIN (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS p ON p.id=l.post_id WHERE l.event_id=e.id),'[]'::jsonb) AS posts
-    FROM (SELECT * FROM monitor_events WHERE monitor_id = ${monitorId()}) AS e WHERE ${ids ? db`e.id IN ${db(ids)}` : db`true`} ORDER BY e.created_at DESC,e.id DESC`;
-}
-
-export async function listMonitorEvents(
-  opts: {
-    withdrawn?: boolean;
-    filter?: "all" | "receipt_review";
-    page?: number;
-    q?: string;
-    options?: boolean;
-  } = {},
-): Promise<BeforeJson<AdminMonitorEvents>> {
-  const filter = z.enum(["all", "receipt_review"]).parse(opts.filter ?? "all");
-  return sql.begin("isolation level repeatable read read only", async (tx) => {
-    const where = tx`${opts.withdrawn ? tx`true` : tx`NOT e.withdrawn`} AND (${filter === "receipt_review" ? receiptReviewCondition(tx) : tx`true`}) AND ${opts.q ? tx`(e.id ILIKE ${`%${opts.q}%`} OR e.scope ILIKE ${`%${opts.q}%`} OR e.display_label ILIKE ${`%${opts.q}%`} OR e.presentation->>'audienceZh' ILIKE ${`%${opts.q}%`} OR e.presentation->>'scopeLabel' ILIKE ${`%${opts.q}%`} OR e.schedule->>'label' ILIKE ${`%${opts.q}%`})` : tx`true`}`;
-    const [count] =
-      await tx`SELECT count(*)::int AS n FROM (SELECT * FROM monitor_events WHERE monitor_id = ${monitorId()}) AS e WHERE ${where}`;
-    const meta = paging(count!.n as number, opts.page);
-    const ids =
-      await tx`SELECT e.id FROM (SELECT * FROM monitor_events WHERE monitor_id = ${monitorId()}) AS e WHERE ${where} ORDER BY e.created_at DESC,e.id DESC LIMIT ${PAGE_SIZE} OFFSET ${(meta.page - 1) * PAGE_SIZE}`;
-    const events = ids.length
-      ? await eventRows(
-          tx,
-          ids.map((e) => e.id as string),
-        )
-      : [];
-    return { ...meta, events } as BeforeJson<AdminMonitorEvents>;
-  }) as Promise<BeforeJson<AdminMonitorEvents>>;
-}
-
-export async function postRows(db: Db, id?: string) {
-  return db`SELECT p.id,p.author,p.published_at,p.text,p.url,p.translation,p.processed_at,p.receipt_id,p.origin,
-    p.recognition->'propositions' AS propositions,(${awaitingReviewCondition()}) AS needs_review,
-    p.recognition->'held' AS held,
-    (p.recognition->>'skipped')::boolean AS skipped,
-    p.raw->'collectionFailure' AS collection_failure,
-    coalesce(p.recognition->>'sourceIssue',p.raw->>'sourceIncomplete') AS source_issue,
-    (p.recognition->>'relevant')::boolean AS relevant,p.outage,p.recognition->'manualReview' AS manual_review,
-    coalesce((SELECT jsonb_agg(jsonb_build_object('eventId',l.event_id,'stage',l.stage) ORDER BY l.event_id)
-      FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS l WHERE l.post_id=p.id),'[]'::jsonb) AS links
-    FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS p WHERE ${id ? db`p.id=${id}` : db`true`} ORDER BY p.published_at DESC,p.id DESC`;
-}
-
-export async function listMonitorPosts(opts: {
-  filter?: "relevant" | "unrelated" | "review" | "pending" | "all";
-  page?: number;
-}): Promise<BeforeJson<AdminMonitorPosts>> {
-  const filter = z
-    .enum(["relevant", "unrelated", "review", "pending", "all"])
-    .parse(opts.filter ?? "relevant");
-  return sql.begin("isolation level repeatable read read only", async (tx) => {
-    const where =
-      filter === "pending"
-        ? tx`p.processed_at IS NULL`
-        : filter === "review"
-          ? awaitingReviewCondition()
-          : filter === "relevant"
-            ? tx`(p.recognition->>'relevant')::boolean IS TRUE`
-            : filter === "unrelated"
-              ? tx`p.processed_at IS NOT NULL AND (p.recognition->>'relevant')::boolean IS FALSE`
-              : tx`true`;
-    const [count] =
-      await tx`SELECT count(*)::int AS n FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS p WHERE ${where}`;
-    const meta = paging(count!.n as number, opts.page);
-    const ids =
-      await tx`SELECT p.id FROM (SELECT * FROM monitor_posts WHERE monitor_id = ${monitorId()}) AS p WHERE ${where} ORDER BY p.published_at DESC,p.id DESC LIMIT ${PAGE_SIZE} OFFSET ${(meta.page - 1) * PAGE_SIZE}`;
-    const rows = await Promise.all(
-      ids.map(async (p) => (await postRows(tx, p.id as string))[0]!),
+export function pagination(total: number, requested = 1) {
+  const totalPages = Math.ceil(total / 10),
+    page = Math.min(
+      Math.max(1, Math.trunc(Number.isFinite(requested) ? requested : 1)),
+      Math.max(1, totalPages),
     );
-    return { ...meta, filter, rows } as BeforeJson<AdminMonitorPosts>;
-  }) as Promise<BeforeJson<AdminMonitorPosts>>;
+  return { page, pageSize: 10, total, totalPages };
+}
+const searchable = (value: unknown): string => {
+  if (typeof value === "string") return value.toLowerCase();
+  if (Array.isArray(value)) return value.map(searchable).join(" ");
+  if (value && typeof value === "object") return Object.values(value).map(searchable).join(" ");
+  return "";
+};
+const eventKinds = ["direct_reset", "reset_credit", "bonus_credit"] as const;
+function postRow(post: SourcePostRow, input: ActionInput) {
+  const actions = input.actions.filter(action => action.sources.some(source => source.postId === post.id));
+  const events = input.events.filter(event => actions.some(action => action.event_id === event.id))
+    .map(event => ({ id: event.id, title: event.title ?? sourcedActions(event, input).at(-1)?.action.title ?? null, type: event.type }));
+  return { id: post.id, author: post.author, publishedAt: iso(post.published_at), title: post.title, summary: post.summary, url: post.url,
+    replyTo: post.reply_to, filteredOut: post.filtered_out,
+    processingStatus: post.processing_status, reviewReason: post.review_reason, events, actionCount: actions.length, version: rowVersion(post) };
+}
+function eventRows(input: ActionInput) {
+  const published = projectPublicV2({ ...input, events: input.events.map(row => ({ ...row, withdrawn: false })) }, monitor()).events;
+  return input.events.map(row => {
+    const event = published.find(event => event.id === row.id), reduced = reduceEvent(row, input), actions = sourcedActions(row, input);
+    const posts = [...new Map(actions.flatMap(action => action.posts).map(post => [post.id, post])).values()];
+    const timeline = actions.map(({ action, posts, publishedAt }) => ({
+      id: action.id, action: action.action, invalidatesEvent: action.invalidates_event, title: action.title, summary: action.summary, time: action.time, sequence: action.sequence,
+      publishedAt, sources: posts.map(post => postRow(post, input)),
+    })).sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || a.id.localeCompare(b.id));
+    return { ...row, title: row.title ?? event?.title ?? actions.at(-1)?.action.title ?? null, summary: row.summary,
+      version: rowVersion(row), status: reduced?.status ?? null, time: reduced?.time ?? null, scope: row.scope,
+      visibility: row.withdrawn ? "withdrawn" as const : reduced ? "public" as const : "unpublished" as const,
+      actionCount: actions.length, sourcePostCount: posts.length, timeline, latestAt: posts.map(post => iso(post.published_at)).sort().at(-1) ?? iso(row.created_at),
+      updates: event?.updates ?? [], publishedAt: event?.publishedAt ?? iso(row.created_at), createdAt: row.created_at, updatedAt: row.updated_at,
+      searchText: searchable([row.id, row.title, row.summary, row.scope, event?.title, actions.map(item => [item.action.title, item.action.summary]), posts.map(post => [post.id, post.title, post.summary, post.author, post.url, post.text, post.quoted_post?.text, post.review_reason])]),
+    };
+  });
+}
+function postRows(input: ActionInput) {
+  return input.posts.filter(post => !post.context_only).map(post => {
+    const row = postRow(post, input);
+    return { ...row, searchText: searchable([post.id, post.author, post.title, post.summary, post.url, post.text, post.quoted_post?.text, post.review_reason, row.events]) };
+  });
+}
+export async function monitorEventDetail(id: string) {
+  const input = await loadActionInput();
+  const detail = await reviewEventDetail(id, input);
+  if (!detail) return null;
+  const { searchText: _search, ...event } = eventRows(input).find(row => row.id === id)!;
+  return { ...detail, event: { ...detail.event, ...event } };
+}
+const eventFilters = (opts: { type?: string; status?: string; visibility?: string }) => ({
+  type: z.enum(["all", ...eventKinds]).parse(opts.type ?? "all"),
+  status: z.enum(["all", ...eventStatuses]).parse(opts.status ?? "all"),
+  visibility: z.enum(["all", "public", "withdrawn", "unpublished"]).parse(opts.visibility ?? "all"),
+});
+const collectionFilterSchema = z.enum(["normal", "filtered", "all"]);
+function collectionMatches(post: { filteredOut: boolean; actionCount: number }, filter: z.infer<typeof collectionFilterSchema>) {
+  const filtered = post.filteredOut && !post.actionCount;
+  return filter === "all" || (filter === "filtered" ? filtered : !filtered);
+}
+export async function listMonitorPosts(opts: { page?: number; filter?: string; q?: string; collectionFilter?: string; association?: string; from?: string; to?: string } = {}) {
+  const inRange = adminTimeFilter(opts);
+  const input = await loadActionInput();
+  const filter = z.enum(["all", "pending", "processed", "needs_attention", "failed"]).parse(opts.filter ?? "all");
+  const query = z.string().trim().parse(opts.q ?? "").toLowerCase();
+  const collectionFilter = collectionFilterSchema.parse(opts.collectionFilter ?? "normal");
+  const association = z.enum(["all", "linked", "unlinked"]).parse(opts.association ?? "all");
+  const all = postRows(input).filter(post => inRange(post.publishedAt) && collectionMatches(post, collectionFilter) && (association === "all" || (association === "linked" ? post.events.length > 0 : post.events.length === 0)) && (filter === "all" || post.processingStatus === filter) && (!query || post.searchText.includes(query)))
+    .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime() || a.id.localeCompare(b.id));
+  const meta = pagination(all.length, opts.page);
+  return { ...meta, rows: all.slice((meta.page - 1) * 10, meta.page * 10).map(({ searchText: _search, ...row }) => row) };
+}
+const postTitle = editorialTextSchema.refine(value => !!value.zh?.trim(), "标题必须填写中文")
+  .transform(value => ({ ...value, zh: value.zh!.trim() }));
+const createPost = z.strictObject({
+  author: z.string().trim().min(1), publishedAt: timestampSchema,
+  url: z.string().trim().pipe(sourceUrlSchema), title: postTitle,
+  summary: editorialTextSchema.nullable().optional().default(null), text: z.string().nullable().optional().default(null),
+});
+const editPost = z.strictObject({ version: z.string().min(1), patch: z.strictObject({ title: postTitle.optional(), summary: editorialTextSchema.nullable().optional() })
+  .refine(value => Object.keys(value).length > 0, "请选择需要修改的帖子内容") });
+
+/** Manual sources are already reviewed; only an explicit event action can publish them. */
+export async function createMonitorPost(value: unknown, actor: string) {
+  const input = createPost.parse(value);
+  const author = monitor().authors.find(author => author.handle.toLowerCase() === input.author.replace(/^@/, "").toLowerCase());
+  if (!author) throw Object.assign(new Error("请选择当前监控配置的作者"), { statusCode: 400 });
+  const identity = identityKeyForUrl(input.url)!;
+  const id = tweetIdFromUrl(input.url) ?? `manual-${sha256(identity)}`;
+  return sql.begin(async tx => {
+    const existing = await tx<{ id: string; url: string }[]>`SELECT id,url FROM monitor_source_posts WHERE monitor_id=${monitorId()}`;
+    if (existing.some(post => post.id === id || identityKeyForUrl(post.url) === identity)) throw new Conflict("该帖子已存在，请在列表中编辑");
+    const inserted = await tx`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,text,title,summary,processing_status,filtered_out)
+      VALUES(${monitorId()},${id},${author.handle},${input.publishedAt},${input.url},${input.text},${tx.json(input.title)},${input.summary ? tx.json(input.summary) : null},'processed',false)
+      ON CONFLICT(monitor_id,id) DO NOTHING`;
+    if (!inserted.count) throw new Conflict("该帖子已存在，请在列表中编辑");
+    const post = (await sourcePost(id, tx))!;
+    const { version: _version, ...saved } = post;
+    await audit(actor, auditAction("create-post"), auditSubject("post", id), "创建帖子", null, auditPost(saved), { db: tx });
+    return postRow(saved, { events: [], actions: [], posts: [saved] });
+  });
 }
 
-const Patch = z
-  .object({
-    type: z.enum(["direct_reset", "reset_credit", "bonus_credit"]),
-    status: z.enum(["announced", "confirmed"]),
-    confirmedAt: z.string().datetime({ offset: true }).nullable(),
-    occurredOn: z
-      .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .nullable(),
-    confirmationBasis: z.enum(["source_post", "receipt_review"]).nullable(),
-    schedule: z
-      .object({
-        precision: z.enum([
-          "exact",
-          "approximate",
-          "deadline",
-          "date",
-          "window",
-        ]),
-        from: z.string().datetime({ offset: true }),
-        through: z.string().datetime({ offset: true }),
-      })
-      .nullable(),
-    scope: z.string().max(200),
-    scopeLabel: z.string().max(200).nullable(),
-    audienceZh: z.string().max(300).nullable(),
-    productsZh: z.string().max(200).nullable(),
-    bonusCredit: BonusCreditInput.nullable(),
-  })
-  .partial()
-  .strict();
-async function lockEvent(tx: Tx, id: string, version: string) {
-  const [e] = await tx`SELECT * FROM (SELECT * FROM monitor_events WHERE monitor_id = ${monitorId()}) AS monitor_events WHERE id=${id} FOR UPDATE`;
-  if (!e) return null;
-  if (new Date(e.updated_at as Date).toISOString() !== version)
-    throw new Conflict("这个事件已被修改，请刷新后再改");
-  return e;
+/** Source identity and recognition progress stay unchanged when correcting display text. */
+export async function updateMonitorPost(id: string, value: unknown, actor: string) {
+  const input = editPost.parse(value);
+  return sql.begin(async tx => {
+    await tx`SELECT id FROM monitor_source_posts WHERE monitor_id=${monitorId()} AND id=${id} FOR UPDATE`;
+    const current = await sourcePost(id, tx);
+    if (!current || current.context_only) return null;
+    if (current.version !== input.version) throw new Conflict("帖子已变化，请重新读取后编辑");
+    const { version: _version, ...before } = current;
+    const title = input.patch.title ?? current.title;
+    const summary = input.patch.summary === undefined ? current.summary : input.patch.summary;
+    await tx`UPDATE monitor_source_posts SET title=${title ? tx.json(title) : null},summary=${summary ? tx.json(summary) : null},updated_at=clock_timestamp()
+      WHERE monitor_id=${monitorId()} AND id=${id}`;
+    const { version: _afterVersion, ...after } = (await sourcePost(id, tx))!;
+    await audit(actor, auditAction("update-post"), auditSubject("post", id), "编辑帖子", auditPost(before), auditPost(after), { db: tx });
+    const data = await loadActionInput(tx);
+    return postRow(after, data);
+  });
 }
-function validDay(day: string | null | undefined) {
-  if (
-    day &&
-    (!/^\d{4}-\d{2}-\d{2}$/.test(day) ||
-      !Number.isFinite(Date.parse(day)) ||
-      new Date(day).toISOString().slice(0, 10) !== day)
-  )
-    throw invalid("occurredOn must be a real YYYY-MM-DD date");
+export async function listMonitorEntries(opts: { page?: number; q?: string; type?: string; status?: string; visibility?: string; filter?: string; kind?: string; collectionFilter?: string; from?: string; to?: string } = {}) {
+  const inRange = adminTimeFilter(opts);
+  const query = z.string().trim().parse(opts.q ?? "").toLowerCase();
+  const { type, status, visibility } = eventFilters(opts);
+  const filter = z.enum(["all", "pending", "processed", "needs_attention", "failed"]).parse(opts.filter ?? "all");
+  const kind = z.enum(["all", "events", "posts"]).parse(opts.kind ?? "all");
+  const collectionFilter = collectionFilterSchema.parse(opts.collectionFilter ?? "normal");
+  const input = await loadActionInput();
+  type Entry = { kind: "event"; event: Omit<ReturnType<typeof eventRows>[number], "searchText">; latestAt: string }
+    | { kind: "post"; post: Omit<ReturnType<typeof postRows>[number], "searchText">; latestAt: string };
+  const rows: Entry[] = [];
+  if (kind !== "posts" && collectionFilter !== "filtered") for (const { searchText, ...event } of eventRows(input)) {
+    if (inRange(event.latestAt) && (type === "all" || event.type === type) && (status === "all" || event.status === status)
+      && (visibility === "all" || event.visibility === visibility) && (!query || searchText.includes(query))
+      && (filter === "all" || event.timeline.some(action => action.sources.some(post => post.processingStatus === filter)))) {
+      rows.push({ kind: "event", event, latestAt: event.latestAt });
+    }
+  }
+  if (kind !== "events" && type === "all" && status === "all" && visibility === "all") for (const { searchText, ...post } of postRows(input)) {
+    if (inRange(post.publishedAt) && !post.actionCount && collectionMatches(post, collectionFilter) && (filter === "all" || post.processingStatus === filter) && (!query || searchText.includes(query)))
+      rows.push({ kind: "post", post, latestAt: post.publishedAt });
+  }
+  rows.sort((a, b) => Date.parse(b.latestAt) - Date.parse(a.latestAt)
+    || `${a.kind}:${a.kind === "event" ? a.event.id : a.post.id}`.localeCompare(`${b.kind}:${b.kind === "event" ? b.event.id : b.post.id}`));
+  const meta = pagination(rows.length, opts.page);
+  return { ...meta, rows: rows.slice((meta.page - 1) * meta.pageSize, meta.page * meta.pageSize) };
+}
+const eventFields = {
+  type: z.enum(eventKinds),
+  title: editorialTextSchema,
+  summary: editorialTextSchema.nullable(),
+  scope: editorialScopeSchema,
+};
+const create = z.strictObject({
+  ...eventFields,
+  title: eventFields.title.refine(value => !!value.zh?.trim(), "标题必须填写中文").transform(value => ({ ...value, zh: value.zh!.trim() })),
+  summary: eventFields.summary.optional().default(null),
+  scope: eventFields.scope.nullable().optional().default(null),
+});
+const edit = z.strictObject({
+  version: z.string().min(1),
+  reason: z.string().trim().min(1).optional(),
+  previewToken: z.string().optional(),
+  patch: z.strictObject(eventFields).partial(),
+});
+function eventEditToken(before: EventRow, patch: z.infer<typeof edit>["patch"], data: Awaited<ReturnType<typeof loadActionInput>>) {
+  const actions = data.actions.filter(action => action.event_id === before.id),
+    postIds = new Set(actions.flatMap(action => action.sources.map(source => source.postId)));
+  return rowVersion({ before, patch, actions, posts: data.posts.filter(post => postIds.has(post.id)) });
+}
+function prepareEventEdit(before: EventRow, patch: z.infer<typeof edit>["patch"], data: Awaited<ReturnType<typeof loadActionInput>>) {
+  const next = { ...before, ...patch };
+  if (next.scope) validateScope(next.scope);
+  if (!monitor().eventKinds.includes(next.type))
+    throw Object.assign(new Error("当前监控不支持事件类型"), { statusCode: 400 });
+  for (const action of data.actions.filter(action => action.event_id === before.id)) {
+    validateActionFacts({ eventId: before.id, action: action.action, title: action.title, summary: action.summary,
+      time: action.time, invalidatesEvent: action.invalidates_event });
+  }
+  return { next, previous: reduceEvent(before, data), result: reduceEvent(next, data) };
+}
+
+/** A manual event stays private until an initial action supplies its business facts. */
+export async function createMonitorEvent(value: unknown, actor: string) {
+  const input = create.parse(value);
+  return sql.begin(async tx => {
+    const at = new Date().toISOString();
+    const event: EventRow = { id: randomUUID(), ...input, withdrawn: false, created_at: at, updated_at: at };
+    prepareEventEdit(event, {}, { events: [event], actions: [], posts: [] });
+    const [saved] = await tx<EventRow[]>`INSERT INTO monitor_event_records(monitor_id,id,type,title,summary,scope,withdrawn,created_at,updated_at)
+      VALUES(${monitorId()},${event.id},${event.type},${tx.json(event.title!)},${event.summary ? tx.json(event.summary) : null},${event.scope ? tx.json(event.scope) : null},false,${at},${at})
+      RETURNING id,type,title,summary,scope,withdrawn,created_at,updated_at`;
+    await audit(actor, auditAction("create"), auditSubject("event", saved!.id), "创建事件", null, saved, { db: tx });
+    await enqueuePublicV2(tx, [saved!.id]);
+    return { ...saved!, version: rowVersion(saved), createdAt: iso(saved!.created_at), updatedAt: iso(saved!.updated_at) };
+  });
+}
+
+/** Display reclassification is previewed through the same action validation and reducer used at commit. */
+export async function previewMonitorEvent(id: string, value: unknown) {
+  const input = edit.parse(value);
+  return sql.begin("isolation level repeatable read read only", async tx => {
+    const data = await loadActionInput(tx), before = data.events.find(event => event.id === id);
+    if (!before) return null;
+    if (rowVersion(before) !== input.version) throw new Conflict("事件已变化，请重新预览");
+    const { next, previous, result } = prepareEventEdit(before, input.patch, data);
+    return { eventId: id, version: input.version, previewToken: eventEditToken(before, input.patch, data),
+      before: { ...before, status: previous?.status ?? null, time: previous?.time ?? null },
+      after: { ...next, status: result?.status ?? null, time: result?.time ?? null, scope: result?.scope ?? next.scope } };
+  });
 }
 export async function updateMonitorEvent(
   id: string,
-  input: { patch: unknown; reason: string; version: string },
+  value: unknown,
   actor: string,
 ) {
-  if (typeof input.reason !== "string" || !input.reason.trim())
-    throw invalid("reason is required");
-  const supplied = Patch.parse(input.patch);
-  validDay(supplied.occurredOn);
+  const input = edit.parse(value);
   return sql.begin(async (tx) => {
-    const before = await lockEvent(tx, id, input.version);
+    const [before] = await tx<
+      EventRow[]
+    >`SELECT id,type,title,summary,scope,withdrawn,created_at,updated_at FROM monitor_event_records WHERE monitor_id=${monitorId()} AND id=${id} FOR UPDATE`;
     if (!before) return null;
-    const resultingType = supplied.type ?? before.type;
-    if (!currentMonitor().eventKinds.includes(resultingType)) throw invalid("当前监控不支持这个事件类型");
-    if (resultingType !== before.type && (resultingType === "bonus_credit" || before.type === "bonus_credit") && before.status === "confirmed") throw invalid("已确认事件在奖励与重置之间改类型，需要通过帖子复核重新核对依据");
-    if (resultingType !== "bonus_credit" && supplied.bonusCredit != null) throw invalid("只有奖励额度事件可以填写奖励详情");
-    if (resultingType === "bonus_credit" && (supplied.occurredOn != null || before.confirmation_basis === "receipt_review")) throw invalid("奖励活动不能填写到账日期或账户回执依据");
-    if (
-      (supplied.status === "confirmed" && before.status !== "confirmed") ||
-      (supplied.confirmationBasis !== undefined &&
-        supplied.confirmationBasis !== before.confirmation_basis) ||
-      (supplied.confirmedAt !== undefined &&
-        supplied.confirmedAt !==
-          (before.confirmed_at
-            ? new Date(before.confirmed_at as Date).toISOString()
-            : null))
-    )
-      throw invalid("确认状态和依据请通过帖子复核或回执核对填写");
-    const patch: Record<string, any> = {};
-    const map: Record<string, string> = {
-      type: "type",
-      status: "status",
-      scope: "scope",
-      occurredOn: "occurred_on",
-      schedule: "schedule",
-    };
-    for (const [k, v] of Object.entries(supplied)) {
-      const old = map[k]
-        ? before[map[k]!]
-        : (before.presentation as Record<string, unknown> | null)?.[k];
-      const normalized =
-        old instanceof Date
-          ? old.toISOString().slice(0, k === "occurredOn" ? 10 : undefined)
-          : old;
-      if (JSON.stringify(v) !== JSON.stringify(normalized)) patch[k] = v;
-    }
-    if (!Object.keys(patch).length) return before;
-    if (patch.status === "announced" && before.status === "confirmed") {
-      const [confirmation] =
-        await tx`SELECT 1 FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS monitor_event_posts WHERE event_id=${id} AND action='confirm' LIMIT 1`;
-      if (confirmation) throw invalid("存在官方确认，请在帖子复核中修正依据");
-      Object.assign(patch, {
-        confirmedAt: null,
-        occurredOn: null,
-        confirmationBasis: null,
-      });
-    }
-    const schedule =
-      patch.schedule === undefined
-        ? before.schedule
-        : patch.schedule
-          ? manualSchedule(
-              patch.schedule.precision,
-              new Date(patch.schedule.from),
-              new Date(patch.schedule.through),
-            )
-          : null;
-    if (schedule && Date.parse(schedule.through) < Date.parse(schedule.from))
-      throw invalid("时间范围结束早于开始");
-    const presentation = {
-      ...((before.presentation as Record<string, any>) ?? {}),
-    };
-    if (patch.status === "announced") delete presentation.receiptReview;
-    for (const k of ["scopeLabel", "audienceZh", "productsZh", "bonusCredit"])
-      if (k in patch) presentation[k] = patch[k];
-    if ("scopeLabel" in patch) presentation.scopeKnown = !!patch.scopeLabel;
-    if ("type" in patch) presentation.kindExplicit = true;
-    if ("status" in patch) presentation.inProgress = false;
-    if (resultingType !== "bonus_credit") delete presentation.bonusCredit;
-    if (resultingType === "bonus_credit") {
-      delete presentation.receiptReview;
-      presentation.timeInferred = false;
-      presentation.timePolicy = "explicit";
-    }
-    presentation.manualPatch = { ...presentation.manualPatch, ...patch };
-    if (resultingType !== "bonus_credit") delete presentation.manualPatch.bonusCredit;
-    const status = patch.status ?? before.status;
-    let estimate = before.estimate;
-    if (resultingType === "bonus_credit" || status === "confirmed" || (presentation.timePolicy ?? currentMonitor().timePolicy) === "explicit") {
-      estimate = null;
-    } else if ("schedule" in patch || "status" in patch || "type" in patch) {
-      const [source] = await tx<{ author: string }[]>`SELECT p.author FROM monitor_event_posts l
-        JOIN monitor_posts p ON p.monitor_id=l.monitor_id AND p.id=l.post_id
-        WHERE l.monitor_id=${monitorId()} AND l.event_id=${id} ORDER BY p.published_at,p.id LIMIT 1`;
-      estimate = estimateFor({
-        schedule: schedule as Schedule | null,
-        announcedAt: before.created_at as Date,
-      }, presentation.timeAuthor ?? source?.author ?? "");
-    }
-    const type = patch.type ?? before.type;
+    if (rowVersion(before) !== input.version)
+      throw new Conflict("事件已变化，请重新预览");
+    const data = await loadActionInput(tx);
+    const { next } = prepareEventEdit(before, input.patch, data);
+    if (next.type !== before.type && input.previewToken !== eventEditToken(before, input.patch, data))
+      throw new Conflict("请先预览事件类型调整；事件或动作变化后须重新预览");
     const [after] =
-      await tx`UPDATE monitor_events SET type=${type},status=${status},
-      label=${eventLabel(type)},display_label=${type === "bonus_credit" || presentation.kindExplicit ? eventDisplayLabel(type) : "重置（形式未明确）"},
-      scope=${patch.scope ?? before.scope},schedule=${schedule ? tx.json(schedule) : null},estimate=${estimate ? tx.json(estimate as never) : null},presentation=${tx.json(presentation)},
-      confirmed_at=${"confirmedAt" in patch ? patch.confirmedAt : before.confirmed_at},occurred_on=${type === "bonus_credit" ? null : "occurredOn" in patch ? patch.occurredOn : before.occurred_on},
-      confirmation_basis=${"confirmationBasis" in patch ? patch.confirmationBasis : before.confirmation_basis},updated_at=now() WHERE monitor_id = ${monitorId()} AND (id=${id}) RETURNING *`;
+      await tx`UPDATE monitor_event_records SET type=${next.type},title=${next.title ? tx.json(next.title) : null},summary=${next.summary ? tx.json(next.summary) : null},scope=${next.scope ? tx.json(next.scope) : null},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${id} RETURNING *`;
     await audit(
       actor,
       auditAction("update"),
       auditSubject("event", id),
-      input.reason,
+      input.reason ?? "编辑事件",
       before,
       after,
       { db: tx },
     );
     await enqueuePublicV2(tx, [id]);
-    await bumpPublication(tx);
     return after;
   });
 }
-export async function reviewReceipt(
-  id: string,
-  input: { occurredOn?: string | null; reason: string; version: string },
-  actor: string,
-) {
-  if (typeof input.reason !== "string" || !input.reason.trim())
-    throw invalid("reason is required");
-  validDay(input.occurredOn);
+export async function setWithdrawn(id: string, value: unknown, actor: string) {
+  const input = z
+    .strictObject({
+      version: z.string().min(1),
+      reason: z.string().trim().min(1),
+      withdrawn: z.boolean(),
+    })
+    .parse(value);
   return sql.begin(async (tx) => {
-    const before = await lockEvent(tx, id, input.version);
+    const [before] = await tx<
+      EventRow[]
+    >`SELECT id,type,title,summary,scope,withdrawn,created_at,updated_at FROM monitor_event_records WHERE monitor_id=${monitorId()} AND id=${id} FOR UPDATE`;
     if (!before) return null;
-    if (before.type === "bonus_credit") throw invalid("奖励活动不支持账户回执核对，官方可领取不表示个人已到账");
-    const [linked] =
-      await tx`SELECT 1 FROM (SELECT * FROM monitor_event_posts WHERE monitor_id = ${monitorId()}) AS monitor_event_posts WHERE event_id=${id} AND action='confirm' LIMIT 1`;
-    if (before.withdrawn || before.status === "confirmed" || linked)
-      throw new Conflict("事件已有确认或已撤回，无需回执核对");
-    const receiptReview = {
-      by: actor,
-      at: new Date().toISOString(),
-      reason: input.reason,
-      occurredOn: input.occurredOn ?? null,
-    };
+    if (rowVersion(before) !== input.version)
+      throw new Conflict("事件已变化，请刷新");
+    if (!input.withdrawn && !reduceEvent(before, await loadActionInput(tx)))
+      throw Object.assign(new Error("没有有效预告或确认动作，不能恢复公开"), {
+        statusCode: 400,
+      });
     const [after] =
-      await tx`UPDATE monitor_events SET status='confirmed',confirmation_basis='receipt_review',confirmed_at=NULL,
-      occurred_on=${input.occurredOn ?? null},estimate=NULL,presentation=coalesce(presentation,'{}'::jsonb)||${tx.json({ inProgress: false, receiptReview })},updated_at=now() WHERE monitor_id = ${monitorId()} AND (id=${id}) RETURNING *`;
+      await tx`UPDATE monitor_event_records SET withdrawn=${input.withdrawn},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${id} RETURNING *`;
     await audit(
       actor,
-      auditAction("receipt_review"),
+      auditAction(input.withdrawn ? "withdraw" : "restore"),
       auditSubject("event", id),
       input.reason,
       before,
@@ -316,36 +308,6 @@ export async function reviewReceipt(
       { db: tx },
     );
     await enqueuePublicV2(tx, [id]);
-    await bumpPublication(tx);
     return after;
   });
 }
-export async function setWithdrawn(
-  id: string,
-  input: { withdrawn: boolean; reason: string; version: string },
-  actor: string,
-) {
-  if (typeof input.reason !== "string" || !input.reason.trim())
-    throw invalid("reason is required");
-  if (typeof input.withdrawn !== "boolean")
-    throw invalid("withdrawn must be boolean");
-  return sql.begin(async (tx) => {
-    const before = await lockEvent(tx, id, input.version);
-    if (!before) return null;
-    const [after] =
-      await tx`UPDATE monitor_events SET withdrawn=${input.withdrawn},presentation=coalesce(presentation,'{}'::jsonb)||${tx.json({ manualWithdrawn: input.withdrawn })},updated_at=now() WHERE monitor_id = ${monitorId()} AND (id=${id}) RETURNING *`;
-    await audit(
-      actor,
-      input.withdrawn ? auditAction("withdraw") : auditAction("restore"),
-      auditSubject("event", id),
-      input.reason,
-      before,
-      after,
-      { db: tx },
-    );
-    await enqueuePublicV2(tx, [id]);
-    await bumpPublication(tx);
-    return after;
-  });
-}
-export const relinkPost = moveReviewedLink;

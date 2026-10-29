@@ -39,7 +39,7 @@ DEPLOY_DB_IMAGE=$(node "$tool" get "$bundle/release.json" dbId)
 [[ $(docker image inspect --format '{{.Id}}' "$DEPLOY_IMAGE") == "$(node "$tool" get "$bundle/release.json" appId)" ]] || exit 1
 docker image inspect "$DEPLOY_DB_IMAGE" > /dev/null
 dc() { docker compose -p news-hot --env-file "$NEWSHOT_ENV_FILE" -f "$release/deploy/news-hot/compose.yml" "$@"; }
-dc run --rm --no-deps --entrypoint node setup -e 'for (const [k,v] of Object.entries(process.env)) { if ((["COLLECT_ENABLED","MODEL_CALLS_ENABLED","INDEXNOW_SUBMIT_ENABLED"].includes(k) || /^FEISHU_.*_ENABLED$/.test(k)) && v === "true") process.exit(1); }'
+dc run --rm --no-deps --entrypoint node setup -e 'for (const [k,v] of Object.entries(process.env)) { if ((["COLLECT_ENABLED","MODEL_CALLS_ENABLED","WEBHOOK_PUSH_ENABLED","INDEXNOW_SUBMIT_ENABLED"].includes(k) || /^FEISHU_.*_ENABLED$/.test(k)) && v === "true") process.exit(1); }'
 started=false
 cleanup_failure() {
   result=$?
@@ -72,12 +72,12 @@ if [[ $(node "$tool" get "$bundle/import-plan.json" needsMigration) == true ]]; 
   echo 'Restored database has pending migrations; explicit migration approval is required before initialization can finish' >&2
   exit 1
 fi
-dc up -d --no-deps api worker web
+dc up -d --no-deps api web
 ready=false
 for ((i=0; i<90; i++)); do if curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:3000/api/health; then ready=true; break; fi; sleep 2; done
 [[ $ready == true ]] || exit 1
 dc run --rm --no-deps --entrypoint node setup scripts/smoke.ts --base http://web:3000
-dc restart api worker web
+dc restart api web
 ready=false
 for ((i=0; i<90; i++)); do if curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:3000/api/health; then ready=true; break; fi; sleep 2; done
 [[ $ready == true ]] || exit 1

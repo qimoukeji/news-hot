@@ -1,7 +1,7 @@
 // Exercise migration failures against PostgreSQL: bounded locks, atomic bookkeeping, and invalid indexes.
 import "./setup.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -24,6 +24,51 @@ function fixture(files: Record<string, string>) {
   return root;
 }
 
+test("fresh installations contain current monitor tables without retired tables", async () => {
+  for (const name of ["monitor_event_posts", "monitor_posts", "monitor_events"]) {
+    assert.equal((await db`SELECT to_regclass(${name}) AS name`)[0].name, null, name);
+  }
+  for (const name of ["monitor_source_posts", "monitor_event_records", "monitor_event_actions"]) {
+    assert.equal((await db`SELECT to_regclass(${name})::text AS name`)[0].name, name);
+  }
+});
+
+test("retired table cleanup preserves current records and audit and resumes idempotently", async () => {
+  await db`CREATE TABLE monitor_posts (id text PRIMARY KEY)`;
+  await db`CREATE TABLE monitor_events (id text PRIMARY KEY)`;
+  await db`CREATE TABLE monitor_event_posts (post_id text REFERENCES monitor_posts(id), event_id text REFERENCES monitor_events(id))`;
+  const id = "migration-cleanup-sentinel";
+  await db`INSERT INTO monitor_event_records (monitor_id,id,type,title,created_at)
+    VALUES ('codex',${id},'direct_reset','{"zh":"保留事件"}', '2026-10-29T00:00:00Z')`;
+  await db`INSERT INTO monitor_source_posts (monitor_id,id,author,published_at,url,title,processing_status)
+    VALUES ('codex',${id},'example','2026-10-29T00:00:00Z','https://example.test/post','{"zh":"保留帖子"}','processed')`;
+  await db`INSERT INTO monitor_event_actions (monitor_id,id,event_id,sequence,action,title,sources)
+    VALUES ('codex',${id},${id},1,'confirm','{"zh":"保留动作"}',${db.json([{ postId: id }])})`;
+  await db`INSERT INTO audit_log (actor,action,subject,reason) VALUES ('test','cleanup-check',${id},'保留审计')`;
+  const snapshot = async () => ({
+    events: [...await db`SELECT * FROM monitor_event_records WHERE id = ${id}`],
+    posts: [...await db`SELECT * FROM monitor_source_posts WHERE id = ${id}`],
+    actions: [...await db`SELECT * FROM monitor_event_actions WHERE id = ${id}`],
+    audit: [...await db`SELECT * FROM audit_log WHERE subject = ${id}`],
+  });
+  const before = await snapshot();
+  const files = [
+    "0143_monitor_drop_legacy_event_posts.sql",
+    "0144_monitor_drop_legacy_posts.sql",
+    "0145_monitor_drop_legacy_events.sql",
+  ];
+  const root = fixture(Object.fromEntries(files.map((file, index) => [
+    `modules/example/migrations/999${index}_cleanup.sql`,
+    readFileSync(new URL(`../modules/reset-monitor/migrations/${file}`, import.meta.url), "utf8"),
+  ])));
+  assert.equal(await runMigrations(db, root), 3);
+  assert.equal(await runMigrations(db, root), 0);
+  for (const name of ["monitor_event_posts", "monitor_posts", "monitor_events"]) {
+    assert.equal((await db`SELECT to_regclass(${name}) AS name`)[0].name, null);
+  }
+  assert.deepEqual(await snapshot(), before);
+});
+
 test("unsafe later files and duplicate module names fail before any change", async () => {
   await assert.rejects(runMigrations(db, fixture({
     "database/migrations/9000_first.sql": "CREATE TABLE migration_never_created (id int);",
@@ -34,6 +79,59 @@ test("unsafe later files and duplicate module names fail before any change", asy
     "database/migrations/9000_duplicate.sql": "CREATE TABLE migration_never_created (id int);",
     "modules/example/migrations/9000_duplicate.sql": "CREATE TABLE another_never_created (id int);",
   })), /two migrations/);
+});
+
+test("a populated drop target stops the entire pending batch without deleting data", async () => {
+  await db`CREATE TABLE migration_retired_data (id int)`;
+  await db`INSERT INTO migration_retired_data VALUES (1)`;
+  const root = fixture({
+    "database/migrations/9050_before_drop.sql": "CREATE TABLE migration_before_drop (id int);",
+    "database/migrations/9051_drop_data.sql": "DROP TABLE IF EXISTS public.migration_retired_data;",
+  });
+  await assert.rejects(runMigrations(db, root), /9051_drop_data.*nonempty table/s);
+  assert.deepEqual([...await db`SELECT id FROM migration_retired_data`], [{ id: 1 }]);
+  assert.equal((await db`SELECT to_regclass('migration_before_drop') AS name`)[0].name, null);
+  assert.equal((await db`SELECT 1 FROM schema_migrations WHERE name IN ('9050_before_drop.sql','9051_drop_data.sql')`).length, 0);
+  await db`DELETE FROM migration_retired_data`;
+  assert.equal(await runMigrations(db, root), 2);
+  assert.equal(await runMigrations(db, root), 0);
+});
+
+test("a row inserted after drop preflight is protected by the execution-time check", async () => {
+  await db`CREATE TABLE migration_drop_gate (id int)`;
+  await db`CREATE TABLE migration_drop_race (id int)`;
+  const root = fixture({
+    "database/migrations/9052_drop_gate.sql": "ALTER TABLE migration_drop_gate ADD COLUMN flag text;",
+    "database/migrations/9053_drop_race.sql": "DROP TABLE IF EXISTS migration_drop_race;",
+  });
+  let running!: Promise<number>;
+  await other.begin(async tx => {
+    await tx`LOCK TABLE migration_drop_gate IN ACCESS SHARE MODE`;
+    running = runMigrations(db, root);
+    // Observe the runner waiting on the earlier DDL, after its drop preflight has completed.
+    for (let attempt = 0; ; attempt++) {
+      await tx`SELECT pg_stat_clear_snapshot()`;
+      const [waiting] = await tx`SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+        AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE 'ALTER TABLE migration_drop_gate%'`;
+      if (waiting) break;
+      if (attempt > 100) throw new Error("Migration did not reach the gate");
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    await tx`INSERT INTO migration_drop_race VALUES (2)`;
+  });
+  await assert.rejects(running, /9053_drop_race.*nonempty table/s);
+  assert.deepEqual([...await db`SELECT id FROM migration_drop_race`], [{ id: 2 }]);
+  assert.equal((await db`SELECT 1 FROM schema_migrations WHERE name='9053_drop_race.sql'`).length, 0);
+});
+
+test("drop protection keeps whitespace inside quoted table names", async () => {
+  await db`CREATE TABLE "migration . retired" (id int)`;
+  await db`CREATE TABLE "migration.retired" (id int)`;
+  await db`INSERT INTO "migration . retired" VALUES (3)`;
+  const root = fixture({ "database/migrations/9054_quoted_drop.sql": 'DROP TABLE IF EXISTS public . "migration . retired";' });
+  await assert.rejects(runMigrations(db, root), /nonempty table/);
+  assert.deepEqual([...await db`SELECT id FROM "migration . retired"`], [{ id: 3 }]);
+  assert.equal((await db`SELECT to_regclass('public."migration.retired"') AS name`)[0].name, '"migration.retired"');
 });
 
 test("an interrupted historical multi-statement transaction never commits its schema or ledger entry", async () => {

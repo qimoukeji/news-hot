@@ -27,7 +27,7 @@ export function parsePublicV2Query(query: Record<string, unknown>, now = Date.no
   const limit = rawLimit === null ? null : Number(rawLimit);
   if (rawLimit !== null && (!/^[1-9]\d*$/.test(rawLimit) || !Number.isSafeInteger(limit) || limit! > 100)) throw new PublicV2QueryError("Limit must be an integer from 1 to 100");
   const cursor = query.cursor as string | undefined;
-  if (cursor !== undefined && (!cursor || cursor.length > 4096 || !/^rmv2\.[A-Za-z0-9_-]+$/.test(cursor) || limit === null)) throw new PublicV2QueryError("Cursor requires a valid limit and encoding");
+  if (cursor !== undefined && (!cursor || cursor.length > 4096 || !/^rma3\.[A-Za-z0-9_-]+$/.test(cursor) || limit === null)) throw new PublicV2QueryError("Cursor requires a valid limit and encoding");
   return { from, to, timeZone, limit, cursor: cursor ?? null };
 }
 
@@ -44,7 +44,7 @@ export function paginatePublicV2(snapshot: ResetSnapshot, query: PublicV2Query) 
   let remaining = events;
   if (cursor) {
     try {
-      const value = decodeCursor<{ binding: string; at: number; id: string }>("rmv2", cursor);
+      const value = decodeCursor<{ binding: string; at: number; id: string }>("rma3", cursor);
       if (limit === null || value.binding !== binding || !Number.isFinite(value.at) || typeof value.id !== "string" || !value.id.trim()) throw new Error("Cursor does not match the query");
       remaining = events.filter(event => {
         const at = Date.parse(timeBoundary(event.time)!);
@@ -55,8 +55,8 @@ export function paginatePublicV2(snapshot: ResetSnapshot, query: PublicV2Query) 
   const list = limit === null ? remaining : remaining.slice(0, limit);
   const hasMore = remaining.length > list.length;
   const last = list.at(-1);
-  return eventListSchema.parse({ list: list.map(({ bonusCredit: _bonusCredit, ...event }) => event), pagination: {
+  return eventListSchema.parse({ list, pagination: {
     limit, total: events.length, hasMore,
-    nextCursor: hasMore && last ? encodeCursor("rmv2", { binding, at: Date.parse(timeBoundary(last.time)!), id: last.id }) : null,
+    nextCursor: hasMore && last ? encodeCursor("rma3", { binding, at: Date.parse(timeBoundary(last.time)!), id: last.id }) : null,
   } });
 }

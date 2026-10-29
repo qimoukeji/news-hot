@@ -1,6 +1,6 @@
 import { defineServerModule } from "@aihot/backend/modules";
 import { modulePublication } from "@aihot/backend/publication/modules";
-import { publicHandler } from "@aihot/api/routes/v1";
+import { publicHandler, readOnlyMethods } from "@aihot/api/routes/v1";
 import { sendJsonWithEtag, strictQuery } from "@aihot/api/http/respond";
 import type { ResetMonitorBackendDefinition } from "./backend/context.ts";
 import { overviewSchema, type PlatformOverview, type Overview } from "./public-v2.ts";
@@ -19,12 +19,13 @@ export function createOverviewServer(definitions: readonly ResetMonitorBackendDe
       },
     },
     http: app => {
+      readOnlyMethods(app,"/api/v2/*");
       app.get("/api/v2/overview", publicHandler(async (req, reply) => {
         strictQuery(req, []);
         const result = await modulePublication<Overview>(overviewModule.name, "overview");
         const { generatedAt: _generated, ...content } = result;
         return sendJsonWithEtag(req, reply, result, {
-          etagPrefix: "reset-overview-v2", etagOf: content,
+          etagPrefix: "reset-actions-overview-v2.3", etagOf: content,
           cacheControl: "public, max-age=60, s-maxage=60, must-revalidate",
         });
       }));

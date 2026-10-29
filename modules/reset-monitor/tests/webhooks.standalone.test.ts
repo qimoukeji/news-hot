@@ -8,14 +8,14 @@ import { webhookPayloadSchema, type WebhookPayload } from "../webhooks.ts";
 import { createSubscription, subscriptionInputSchema, webhookSignature, webhookPushEnabled } from "../backend/webhooks.ts";
 
 const payload: WebhookPayload = {
-  schemaVersion: 1, id: "12345678-1234-4234-8234-123456789abc", occurredAt: "2026-10-19T04:00:00Z",
+  schemaVersion: 2, id: "12345678-1234-4234-8234-123456789abc", occurredAt: "2026-10-19T04:00:00Z",
   platform: "claude-code", eventId: "shared-event", revision: 1, action: "created",
   event: {
     id: "shared-event", type: "direct_reset", status: "completed", publishedAt: "2026-10-19T04:00:00Z",
     title: { en: "Quota reset", zh: "额度重置", "zh-Hant": "額度重置", ja: "リセット", ko: "초기화", ru: "Сброс", es: "Reinicio" },
     summary: null, time: "2026-10-19T04:00:00Z",
-    updates: [{ id: "source-post", action: "confirm", publishedAt: "2026-10-19T04:00:00Z", summary: null,
-      source: { sourceId: "x-account:claudeai", url: "https://x.com/claudeai/status/source-post" } }],
+    updates: [{ id: "action-1", action: "confirm", invalidatesEvent: false, title: { en:"Confirmed", zh:"已确认", "zh-Hant":"已確認", ja:"確認済み", ko:"확인됨", ru:"Подтверждено", es:"Confirmado" }, publishedAt: "2026-10-19T04:00:00Z", time: "2026-10-18", summary: null,
+      sources: [{ postId:"source-post", sourceId: "x-account:claudeai", url: "https://x.com/claudeai/status/source-post" }] }],
     scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null },
   },
 };
@@ -29,9 +29,19 @@ test("webhook contract preserves all v2 languages and limits withdrawal to a nul
   for (const action of ["updated", "restored"]) assert.equal(webhookPayloadSchema.safeParse({ ...payload, action }).success, true);
 });
 
+test("webhook and API share the optional-source confirmation contract without result metadata", () => {
+  const event = structuredClone(payload.event)!;
+  event.updates[0]!.sources = [];
+  assert.equal(webhookPayloadSchema.safeParse({ ...payload, event }).success, true);
+  for (const action of ["announce", "progress", "amend", "restore"]) {
+    assert.equal(webhookPayloadSchema.safeParse({ ...payload, event: { ...event, updates: [{ ...event.updates[0], action }] } }).success, false);
+  }
+  assert.equal(webhookPayloadSchema.safeParse({ ...payload, event: { ...event, confirmation: null } }).success, false);
+});
+
 test("webhook contract rejects internal fields, unknown platforms and nonpositive revisions", () => {
   for (const change of [
-    { platform: "claude" }, { revision: 0 }, { revision: 1.5 }, { schemaVersion: 2 },
+    { platform: "claude" }, { revision: 0 }, { revision: 1.5 }, { schemaVersion: 1 },
     { occurredAt: "not-a-date" }, { secret: "must-not-leak" },
     { event: { ...payload.event, recognition: { raw: "internal model output" } } },
   ]) assert.equal(webhookPayloadSchema.safeParse({ ...payload, ...change }).success, false);

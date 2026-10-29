@@ -2,7 +2,7 @@
 // deployment names in LLM_BASE_URL / LLM_API_KEY / LLM_MODEL, and every capability uses it unless the
 // site, an environment variable or the admin's model page picks one of the site's named presets
 // (site/models.ts).
-import type { z } from "zod";
+import { z } from "zod";
 import { PRESETS } from "@aihot/site/models";
 import { config, credential } from "../config.ts";
 import { sha256 } from "../lib/ids.ts";
@@ -91,6 +91,8 @@ export interface ChatJsonOptions<S extends z.ZodType> {
   /** false: the model answers in its own text format (no JSON mode); `parse` turns it into the schema's input. */
   json?: boolean;
   parse?: (content: string) => unknown;
+  /** Character counts of input sections; never source text or credentials. */
+  inputMetrics?: Record<string, number>;
 }
 
 export interface ChatJsonResult<T> {
@@ -103,9 +105,11 @@ export interface ChatJsonResult<T> {
 
 export class ModelOutputError extends Error {
   readonly receiptId: number | null;
-  constructor(message: string, receiptId: number | null = null) {
+  readonly validationIssues: Array<{ path: string; code: string }>;
+  constructor(message: string, receiptId: number | null = null, validationIssues: Array<{ path: string; code: string }> = []) {
     super(message);
     this.receiptId = receiptId;
+    this.validationIssues = validationIssues;
   }
 }
 
@@ -184,7 +188,8 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
       purpose: opts.purpose,
       subject: opts.subject,
       identity: { model: spec.model, promptVersion: opts.promptVersion, system: sha256(opts.system), user: sha256(userText), temperature, maxTokens, extra: Object.keys(extra).length ? extra : null },
-      requestSummary: { promptVersion: opts.promptVersion, systemHash: sha256(opts.system), userHash: sha256(userText), userChars: userText.length, temperature, maxTokens, timeoutMs },
+      requestSummary: { promptVersion: opts.promptVersion, systemHash: sha256(opts.system), userHash: sha256(userText), systemChars: opts.system.length,
+        userChars: userText.length, ...(opts.inputMetrics ? { inputMetrics: opts.inputMetrics } : {}), temperature, maxTokens, timeoutMs },
       attemptTag: opts.attemptTag,
       retryFailed: opts.retryFailed,
     },
@@ -234,7 +239,11 @@ export async function chatJson<S extends z.ZodType>(opts: ChatJsonOptions<S>): P
       ? `output token limit reached (finish_reason=length): a reasoning model may have spent it reasoning; give it room with ${spec.key === "default" ? "LLM_REASONING_TOKENS" : `reasoningTokens on preset ${spec.key}`}. ${String(error)}`
       : String(error);
     if (!opts.deferOutputRejection) await rejectReceivedResponse(receipt.receiptId, `unusable output: ${detail.slice(0, 500)}`);
-    throw new ModelOutputError(`Model ${opts.model} returned unusable output for ${opts.subject}: ${detail.slice(0, 300)}`, receipt.receiptId);
+    const issues = error instanceof z.ZodError ? error.issues.slice(0, 8).flatMap(issue => {
+      const paths = issue.code === "unrecognized_keys" ? issue.keys.map(key => [...issue.path, key]) : [issue.path];
+      return paths.map(path => ({ path: path.map(part => String(part).replace(/[^\w.-]/g, "?").slice(0, 48)).join(".") || "$", code: issue.code }));
+    }) : [];
+    throw new ModelOutputError(`Model ${opts.model} returned unusable output for ${opts.subject}: ${detail.slice(0, 300)}`, receipt.receiptId, issues);
   }
   return { data: parsed, receiptId: receipt.receiptId, reused: receipt.reused, model: spec.key, usage: response.usage ?? null };
 }

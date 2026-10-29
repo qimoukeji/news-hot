@@ -53,6 +53,8 @@ export interface ModelStep {
  * same answer (routes/mcp.ts), named in the guide (publication/agent.ts) and in llms.txt.
  */
 export interface AgentAbility {
+  /** Explicit public address for a module with its own versioned contract. */
+  apiPath?: string;
   /** Address under /api/v1/agent: "/status". */
   path: string;
   /** Named in the guide's first sentence, after the engine's abilities: "服务状态". */

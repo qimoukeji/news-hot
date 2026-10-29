@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 import type { AdminMe } from "@aihot/contracts/admin";
 import { DEPLOYMENT, SITE } from "@aihot/site";
 import { config } from "@aihot/backend/config";
+import { QueueDisabledError } from "@aihot/backend/jobs/queue";
 import {
   completeLogin,
   cookie,
@@ -59,6 +60,7 @@ export function adminHandler(fn: AdminHandler) {
     try {
       return await fn(req, reply, admin);
     } catch (error) {
+      if (error instanceof QueueDisabledError) throw error;
       if (error instanceof ZodError) {
         return sendProblem(req, reply, { status: 400, code: "invalid_request", detail: error.issues.map((issue) => `${issue.path.join(".") || "请求"}: ${issue.message}`).join("; ").slice(0, 300) });
       }

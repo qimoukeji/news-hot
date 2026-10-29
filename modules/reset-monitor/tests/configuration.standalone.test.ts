@@ -16,8 +16,7 @@ import { backendDefinition as grokBackend } from "../../grok-reset/backend-defin
 import { inMonitor } from "../backend/context.ts";
 
 const proposition = (excerpt: string, kind: Proposition["kind"] = "direct_reset"): Proposition => ({
-  kind, kindExplicit: true, action: "confirm", real: true, count: 1, relatesTo: null, excerpt, excerptZh: excerpt,
-  statedTime: null, timeInferred: false, expectedLanding: null,
+  kind, kindExplicit: true, action: "confirm", real: true, eventId: null, excerpt, timeExcerpt: null,
   scope: { audienceSource: null, audienceZh: null, productsZh: null, plans: null },
 });
 const scope = (productsZh: string, plans: string[] | null = null) => ({ audienceSource: null, audienceZh: null, productsZh, plans });
@@ -26,6 +25,7 @@ test("the three monitors share event kinds and configure authors, plans and defa
   for (const definition of [codex, claude, grok]) {
     assert.equal(definition.eventKinds, RESET_EVENT_KINDS);
     assert.deepEqual(definition.authors, RESET_MONITORS[definition.monitorId as keyof typeof RESET_MONITORS].authors);
+    assert.equal("collection" in definition, false, "browser definition must not carry collection policy");
   }
   assert.equal(productForAuthor(grok.authors, "@BOT"), "Grok Bot");
   assert.equal(productForAuthor([{ handle: "Another", name: "Other", defaultProduct: "New Product" }], "another"), "New Product");
@@ -33,12 +33,36 @@ test("the three monitors share event kinds and configure authors, plans and defa
     assert.equal(grokBackend.defaultProductForAuthor!("another"), "New Product");
     assert.equal(grokBackend.defaultProductForAuthor!("bot"), null);
   });
-  assert.throws(() => validateResetMonitorConfig({ authors: [{ handle: "one", name: "One" }, { handle: "ONE", name: "Two" }], plans: [] }), /Invalid X/);
-  assert.throws(() => validateResetMonitorConfig({ authors: [], plans: [] }), /Invalid X/);
-  assert.throws(() => validateResetMonitorConfig({ authors: [{ handle: "one", name: "One" }], plans: ["Plan", "plan"] }), /Invalid reset monitor plans/);
+  const collection = RESET_MONITORS.codex.collection;
+  assert.throws(() => validateResetMonitorConfig({ collection, authors: [{ handle: "one", name: "One" }, { handle: "ONE", name: "Two" }], plans: [] }), /Invalid X/);
+  assert.throws(() => validateResetMonitorConfig({ collection, authors: [], plans: [] }), /Invalid X/);
+  assert.throws(() => validateResetMonitorConfig({ collection, authors: [{ handle: "one", name: "One" }], plans: ["Plan", "plan"] }), /Invalid reset monitor plans/);
 });
 
-test("prompt generation uses the bound author list, default products, plans and author time strategy", () => {
+test("platform collection defaults are independent and keyword validation rejects empty enabled filters", () => {
+  for (const config of Object.values(RESET_MONITORS)) {
+    assert.equal(config.collection.includeReplies, false);
+    assert.equal(config.collection.includeSelfReplies, true);
+    assert.equal(config.collection.resetOnly, false);
+    assert.deepEqual(config.collection.keywords, ["reset", "resets", "resetting", "banked", "credit", "credits", "重置", "额度", "額度"]);
+  }
+  assert.notEqual(RESET_MONITORS.codex.collection, RESET_MONITORS.claude.collection);
+  assert.notEqual(RESET_MONITORS.codex.collection.keywords, RESET_MONITORS.grok.collection.keywords);
+  const base = { ...RESET_MONITORS.codex, collection: { includeReplies: true, includeSelfReplies: true, resetOnly: true, keywords: ["reset"] } };
+  assert.equal(validateResetMonitorConfig(base).collection.includeReplies, true);
+  for (const keywords of [[], ["reset", "RESET"], ["reset", ""], ["from:other"], ['reset" OR "all']]) {
+    assert.throws(() => validateResetMonitorConfig({ ...base, collection: { ...base.collection, keywords } }), /Invalid reset monitor collection/);
+  }
+  assert.doesNotThrow(() => validateResetMonitorConfig({ ...base, collection: { ...base.collection, resetOnly: false, keywords: [] } }));
+  assert.equal(RESET_MONITORS.grok.collection.maxPagesPerRun, 5);
+  assert.equal("maxPagesPerRun" in RESET_MONITORS.codex.collection, false);
+  assert.equal("maxPagesPerRun" in RESET_MONITORS.claude.collection, false);
+  for (const maxPagesPerRun of [0, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => validateResetMonitorConfig({ ...base, collection: { ...base.collection, maxPagesPerRun } }), /maxPagesPerRun/);
+  }
+});
+
+test("prompt generation uses configured authors, products and plans with one action contract", () => {
   const configured = { ...codex, authors: [{ handle: "NewOfficial", name: "New Name", defaultProduct: "New Product" }], plans: ["Custom"] };
   const prompt = buildCodexPrompt(configured);
   assert.match(prompt, /@NewOfficial/);
@@ -48,7 +72,10 @@ test("prompt generation uses the bound author list, default products, plans and 
   assert.doesNotMatch(prompt, /@thsottiaux|16:30–21:30/);
   assert.match(prompt, /bonus_credit/);
   assert.match(prompt, /OK fine/);
-  assert.match(buildCodexPrompt(codex), /16:30–21:30/);
+  assert.doesNotMatch(buildCodexPrompt(codex), /expectedLanding|translationZh|contextZh|duplicateOf|statedTime|16:30–21:30/);
+  assert.match(prompt, /existingActionId/);
+  assert.match(prompt, /localEventKey/);
+  assert.match(prompt, /invalidatesEvent/);
   assert.doesNotMatch(buildResetMonitorPrompt(claude, "Claude rule"), /@thsottiaux|16:30–21:30/);
 });
 

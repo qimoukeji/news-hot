@@ -1,32 +1,33 @@
 # Grok 额度动态
 
-采集配置账号的额度重置、重置卡和一次性奖励额度。初始名单保留 [@bot](https://x.com/bot) 与 [@grok](https://x.com/grok)，账号、默认产品、套餐集中在 `site/reset-monitors.ts`。配置账号均可独立提供事件依据，其他作者仅作上下文。使用 [共享重置监控引擎](../reset-monitor/README.md)，不新建数据表。
+跟踪配置账号的额度重置、重置卡和一次性奖励额度，以动作时间线展示事件结果、范围及原帖链接。初始账号为 [@bot](https://x.com/bot) 和 [@grok](https://x.com/grok)，账号、默认产品和套餐在 `site/reset-monitors.ts`。配置账号均可提供官方依据，其他作者只作上下文。实现使用[共享重置监控引擎](../reset-monitor/README.md)，不另建产品表。
 
-## 产品与时间
+## 产品与运行
 
-沿用适用产品和套餐字段。原帖未说明产品时，`@bot` 默认 Grok Bot，`@grok` 默认 Grok 普通额度；原文明确产品时以原文为准，套餐和额度周期不推测。不同产品及冲突套餐不自动合并，跨账号同一事件需要明确依据，歧义留人工复核。默认产品不覆盖已有事件或人工字段。
+未明确产品时，`@bot` 默认 Grok Bot，`@grok` 默认 Grok 普通额度；来源明确值优先，默认值不覆盖已有事件或人工编辑，套餐和周期不推测。产品与套餐冲突不自动合并，跨账号关联必须有同一事件依据，歧义转人工复核。
 
-只记录真实的一次性动作，普通限额调整、日常自动重置规则、API 赠金、政策解释和玩笑不生成事件。奖励活动可领取不代表个人领取或到账；领取截止与奖励到期独立记录，不计入重置次数。
+只记录真实的一次性动作，普通限额调整、日常自动重置、API 赠金、政策解释和玩笑不生成事件。动作分为预告、确认、进展、修订；取消通过修订的 invalidatesEvent=true 表达，同一事实多帖只补来源，同帖可支持多个动作。状态和时间唯一由有效动作推导；奖励可领取不代表个人到账，截止和到期独立记录，不计入重置次数。
 
-只有明确时区的时间或明确相对时长才换算北京时间，缺时间显示“时间未说明”，不采用到账预测。
+三类事件有效确认均为 completed；关闭领取、到期、重开使用 progress，取消使用带 invalidatesEvent=true 的 amend，取消为业务终态，只能更正或删除错误取消动作后重算。普通 amend 不覆盖有效官方确认。动作保存文案、时间、事件内 sequence 和仅含 postId 的 sources，不保留结果或范围副本；当前范围只在事件保存。补来源不改变 sequence，重排须单独预览。明确重复事实复用已有动作 ID，不用文案哈希自动合并。
 
-## 配置与运行
+时间按来源明确事实解析，不采用到账预测；缺年份和时区按共享 v2 规则，显式冲突转复核。有来源确认无实际时间时取确认来源发布时间，不沿用计划时间。只有 confirm 允许 sources=[]，且须明确生效时间，标题摘要说明人工核实或推定；后续官方确认更新同一动作来源、标题摘要及实际时间，保持 ID。人工确认使用原有动作流程，无独立核实结果或未生效暂停能力。分钟任务保存到期预告的推定确认，读页面和 API 不写库；模型只读取有来源官方动作。新预告、计划修订、延期、取消可使旧无来源确认不再决定当前结果，动作和审计保留。公开 updates 完整包含无来源确认，不返回独立确认元数据；历史先生成确认再建立通知基线，不补通知。管理员只编辑类型、标题、摘要和范围，撤回控制可见性，动作更正需预览、理由与版本核验。
 
-账号在 `site/reset-monitors.ts`，初始账号为 `@bot`、`@grok`。使用 `GROK_RESET_PROVIDER`、`GROK_RESET_SCAN_MINUTES` 与共享 `MONITOR_MODEL`；默认 SocialData、每 15 分钟扫描，支持 TwitterAPI.io。配置修改后重启 API 与 worker。
+业务只有事件、动作、帖子三张表，不维护帖子事件绑定。帖子保存原文 text、单层随帖引用 quoted_post、七语言标题摘要及原帖链接，不存全文翻译或原始 JSON；运行识别直接读取帖子。原文仅后台管理员可读，不进事件、动作、公开响应或业务审计；供应商响应仅留内部付费回执，没有账户回执确认入口。事件页管理动作，帖子复核通过选择器创建事件、添加动作或补来源，不手写 ID；事件、动作、来源、重排分别表达，版本核验只涉及相关记录。
 
-三个平台统一只采非回复主帖，排除回复、自回复和纯转推，保留非回复引用帖；不加内容关键词。模型识别后关联事件并补齐 v2，没有父帖补采或历史初始化。新安装从首次运行时刻向前采集，已有截止继续完整增量窗口。历史事件及相关证据保留，无关旧采集记录按清单备份后清理。具体流程、失败语义及清理命令见 [共享引擎](../reset-monitor/README.md)。
+使用 `GROK_RESET_PROVIDER`、`GROK_RESET_SCAN_MINUTES` 与共享 `MONITOR_MODEL`；默认 SocialData、每 15 分钟扫描，也支持 TwitterAPI.io。`site/reset-monitors.ts` 中的 collection 分别以 includeReplies 控制回复他人、includeSelfReplies 控制自回复、resetOnly 控制关键词加模型过滤；本站 includeSelfReplies=true，includeReplies 与 resetOnly 为 false；主帖始终开启，纯转推排除。两个回复开关均关闭时只采主帖，分别开启时加采对应类别，都开启时加采全部回复。第三方查询负责回复类别筛选，本地不重复按回复目标账号过滤，缺失账号不丢弃帖子。引用对象及其父帖关系保存为可复用材料，上下文先读取本轮响应和当前监控已存帖子，仍缺失时按明确 ID 付费补采；外部作者和窗口外材料只作上下文，不自动生成官方事实。配置修改后重启 API 与 worker，完整规则见[共享引擎](../reset-monitor/README.md#采集与运行)。
 
-采集、模型与推送的安全阀默认关闭；真实调用及公开部署按运营授权执行。
+帖子只保留 pending、processed、needs_attention、failed 四种识别进度及 review_reason，不维护 manual，也不以状态区分有无动作。worker 只识别 pending，写入核验原始版本；动作和来源管理、翻译不改变识别进度，明确完成帖子处理时设 processed 并清空原因。
 
 ## 入口
 
 | 用途 | 地址 |
 | --- | --- |
-| 当前状态／按日历史 | `/grok-reset`、`/grok-reset/history/:date` |
-| 后台／帖子复核 | `/admin/grok-reset`、`/admin/grok-reset/posts/:id/review` |
-| 页面／后台 API | `/api/site/grok-reset`、`/api/admin/grok-reset` |
-| 完整／近期历史 | `/api/v1/grok-resets`、`/api/v1/grok-resets/recent` |
-| Agent Markdown | `/api/v1/agent/grok-resets` |
+| 当前结果和按日历史 | `/grok-reset`、`/grok-reset/history/:date` |
+| 事件、帖子列表与事件详情 | `/admin/grok-reset` 分为事件列表与帖子列表两个 tab，只保留日期范围筛选，各自分页；事件展开动作及来源，帖子包含已关联与未关联记录；`/admin/grok-reset/events/:id` 管理事件 |
+| 帖子处理 | `/admin/grok-reset/posts/:id/review`，完成后返回帖子列表 |
+| 总览与事件列表 | `/api/v2/overview`、`/api/v2/grok-resets` |
 | MCP | 带站点前缀的 `get_grok_resets` |
 
-所有读写限定 `monitor_id='grok'`，公开出口只读，后台仅管理员可用。2026-10-10 检查时两个 X 页面均返回 403，原帖样本尚未核验；测试样本为模拟，尚未完成真实公告准确率验证。
+站点只经 HTTP 获取 v2，日历显式传 `timeZone=Asia/Shanghai`，时间线展示动作及全部来源。Agent、MCP、飞书和 Webhook 使用同一投影。监控 v1、旧站点快照及轮询接口删除，无兼容模式，详见[公共额度接口 v2](../../docs/reset-monitor-v2.md)。
+
+所有读写限定 `monitor_id='grok'`，公开只读，后台仅管理员。转换先停旧写入、验证备份并核验指纹，完成前不启动新 worker，见[部署说明](../../docs/deploy.md#动作模型与-v2-切换)。测试样本为模拟，尚未完成真实公告准确率验证。开发测试只连本地假服务及独立测试库，不自动执行生产转换、真实采集、推送或部署。

@@ -104,7 +104,7 @@ export function registerAgent(app: FastifyInstance) {
   }
   // The modules' abilities, each answered at its own address.
   for (const ability of serverModules().flatMap((m) => m.agent?.abilities ?? [])) {
-    app.get(`/api/v1/agent${ability.path}`, publicHandler(async (req, reply) => {
+    app.get(ability.apiPath ?? `/api/v1/agent${ability.path}`, publicHandler(async (req, reply) => {
       strictQuery(req, []);
       return markdown(req, reply, await ability.answer(), ability.etagPrefix, ability.cacheControl);
     }));

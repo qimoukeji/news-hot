@@ -1,0 +1,1 @@
+ALTER TABLE monitor_event_actions ADD CONSTRAINT monitor_event_actions_action_check CHECK (action IN ('announce','confirm','amend','progress','restore') AND (NOT invalidates_event OR action = 'amend')) NOT VALID;

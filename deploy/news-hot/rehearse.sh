@@ -24,7 +24,7 @@ for volume in "${project}_db" "${project}_data"; do
   if docker volume inspect "$volume" >/dev/null 2>&1; then echo 'A previous rehearsal is retained; review it before starting another' >&2; exit 1; fi
 done
 trap 'dc stop db >/dev/null 2>&1 || true' EXIT
-dc run --rm --no-deps --entrypoint node setup -e 'for (const [k,v] of Object.entries(process.env)) { if ((["COLLECT_ENABLED","MODEL_CALLS_ENABLED","INDEXNOW_SUBMIT_ENABLED"].includes(k) || /^FEISHU_.*_ENABLED$/.test(k)) && v === "true") process.exit(1); }'
+dc run --rm --no-deps --entrypoint node setup -e 'for (const [k,v] of Object.entries(process.env)) { if ((["COLLECT_ENABLED","MODEL_CALLS_ENABLED","WEBHOOK_PUSH_ENABLED","INDEXNOW_SUBMIT_ENABLED"].includes(k) || /^FEISHU_.*_ENABLED$/.test(k)) && v === "true") process.exit(1); }'
 dc up -d db
 ready=false
 for ((i=0; i<90; i++)); do if dc exec -T db pg_isready -h 127.0.0.1 -U newshot -d newshot >/dev/null 2>&1; then ready=true; break; fi; sleep 1; done

@@ -1,6 +1,6 @@
 // A deliberately small online-migration vocabulary. Unknown SQL needs an explicit safety design, not an opt-out.
 export const FIRST_ONLINE_MIGRATION = 55;
-export type MigrationPlan = { kind: "transaction" | "validation" | "statistics" } | { kind: "index" | "primary-key"; index: string; table: string };
+export type MigrationPlan = { kind: "transaction" | "validation" | "statistics" } | { kind: "index" | "primary-key"; index: string; table: string } | { kind: "drop-table"; table: string };
 
 // Keep quoted values opaque, including their semicolons and comment markers. SQL bodies are not in
 // the accepted vocabulary; rejecting them also prevents hiding writes in DO or function definitions.
@@ -85,10 +85,10 @@ export function migrationPlan(text: string): MigrationPlan {
   if (new RegExp(`^create table (?:if not exists )?${RELATION} \\(.*\\)$`, "i").test(sql)
     && !/\b(as|like|inherits|partition)\b/i.test(words)) return { kind: "transaction" };
   // Dropping a table, column or constraint that no code uses changes the catalog only: no scan or rewrite,
-  // and the runner bounds the wait for its lock. One object and no CASCADE, so an object that still depends
-  // on it fails the migration instead of disappearing with it. Whether its data may go is settled before
-  // the change, and the release running while it applies no longer reads or writes it.
-  if (new RegExp(`^drop table if exists ${RELATION}$`, "i").test(sql)) return { kind: "transaction" };
+  // and the runner bounds the wait for its lock and refuses nonempty tables. One object and no CASCADE,
+  // so an object that still depends on it fails instead of disappearing with it.
+  const drop = new RegExp(`^drop table if exists (${RELATION})$`, "i").exec(sql);
+  if (drop) return { kind: "drop-table", table: tokens.slice(4).join("") };
   if (!singleAction(tokens)) throw new Error("use one ALTER TABLE action per statement");
   const key = primaryKey.exec(sql);
   if (key) return { kind: "primary-key", index: key[2], table: key[1].replace(/ \. /g, ".") };

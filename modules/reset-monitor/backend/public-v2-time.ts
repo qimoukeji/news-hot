@@ -1,8 +1,9 @@
 import { Temporal } from "@js-temporal/polyfill";
-import type { BonusCredit, EventTime } from "../public-v2.ts";
-import type { PublicV2EventRow, PublicV2Input, PublicV2PostRow } from "./public-v2.ts";
+import type { EventTime } from "../public-v2.ts";
+type PublicV2PostRow = { text: string; published_at: Date | string };
 
 const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const namedClock = (text: string) => text.replace(/\bmidnight\b/gi, "12am").replace(/\bnoon\b/gi, "12pm");
 const monthPattern = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
 const datePattern = `(?:${monthPattern}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{4}-\\d{2}-\\d{2})`;
 const zoneToken = "(?:(?:UTC|GMT)\\s*[+-]\\s*\\d{1,2}(?::?\\d{2})?(?![\\d:])|(?:UTC|GMT)(?!\\s*[+-])|[A-Za-z_]+/[A-Za-z_]+(?:/[A-Za-z_]+)?|(?:Pacific|Eastern)(?:\\s+(?:Standard|Daylight))?\\s+Time|PST|PDT|PT|EST|EDT|ET|CST|CDT|CT|MST|MDT|MT|BST|IST|JST|KST|CET|CEST)";
@@ -115,6 +116,7 @@ const rangePattern = new RegExp(`^\\s*(?:at\\s+|from\\s+|between\\s+)?(?<start>$
 const isoTimestampPattern = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d{1,9})?)?(?:Z|[+-]\\d{2}:\\d{2})";
 
 export function resolveSourceTime(expression: string, context: SourceTimeContext): ResolvedTime | null {
+  expression = namedClock(expression);
   const date = new RegExp(datePattern, "i").exec(expression);
   if (!date) return null;
   const timestamp = expression.slice(date.index);
@@ -168,19 +170,29 @@ export function resolveSourceTime(expression: string, context: SourceTimeContext
 }
 
 /** Event expressions are kept apart from redemption and expiry wording. */
-export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, announcement: boolean, activityText: string, activityAnchor?: string): EventTime {
-  if (/\b(?:claim|redeem|expire|expiry|valid until)\b/i.test(excerpt)) return { kind: "unknown" };
+export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, announcement: boolean, activityText: string, activityAnchor?: string, occurredLifecycle = false): EventTime {
+  if (!occurredLifecycle && /\b(?:claims?|redeem|expire|expiry|valid until)\b/i.test(excerpt)) return { kind: "unknown" };
+  const literal = excerpt.trim();
+  excerpt = namedClock(excerpt);
   const anchor = new Date(post.published_at).toISOString();
-  const relative = /\b(?:in|within|over)(?:\s+the)?(?:\s+next)?\s+(?:(\d+(?:\.\d+)?)|(an?|one))\s+(minutes?|hours?|days?)\b/i.exec(excerpt);
+  const relative = /\b(?:(in|within|over)\s+(?:the\s+)?(?:(next)\s+)?|(next)\s+)(?:(\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?(minutes?|hours?|days?)\b/i.exec(excerpt);
   if (relative && !/\b(?:about|around|roughly|approximately|or so)\b|~/i.test(excerpt)) {
-    const amount = relative[1] ? Number(relative[1]) : 1;
-    if (amount > 0 && amount <= 240) {
-      const unit = relative[3]!.toLowerCase(), multiplier = unit.startsWith("minute") ? 60_000 : unit.startsWith("hour") ? 3_600_000 : 86_400_000;
-      return { kind: /\b(?:within|next|over)\b/i.test(relative[0]) ? "deadline" : "instant", at: new Date(Date.parse(anchor) + amount * multiplier).toISOString() };
+    const unit = relative[5]!.toLowerCase();
+    const words: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+    const amountText = relative[4]?.toLowerCase();
+    const amount = amountText ? words[amountText] ?? Number(amountText) : (relative[2] || relative[3]) && !unit.endsWith("s") ? 1 : NaN;
+    if (announcement && amount > 0 && amount <= 240) {
+      const multiplier = unit.startsWith("minute") ? 60_000 : unit.startsWith("hour") ? 3_600_000 : 86_400_000;
+      const at = new Date(Date.parse(anchor) + amount * multiplier).toISOString();
+      return /\b(?:within|next|over)\b/i.test(relative[0]) ? { kind: "range", from: anchor, through: at } : { kind: "instant", at };
     }
+    return { kind: "unknown" };
   }
   if (/\b(?:about|around|roughly|approximately)\b|~/i.test(excerpt)) return { kind: "unknown" };
-  const deadline = /\b(?:by|before|until)\b/i.test(excerpt);
+  const occurrences = literal ? [...post.text.matchAll(new RegExp(literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"))] : [];
+  // A model may quote only the clock. Recover a deadline marker only from its unique literal occurrence.
+  const deadline = /\b(?:by|before|until)\b/i.test(excerpt) || occurrences.length === 1
+    && /\b(?:by|before|until)\s*$/i.test(post.text.slice(0, occurrences[0]!.index));
   const context = { activityAnchor: anchor, postText: post.text, activityText, deadline, past: !announcement };
   if (new RegExp(datePattern, "i").test(excerpt)) {
     // A calendar date belongs to the original announcement even when a later post confirms it.
@@ -202,6 +214,14 @@ export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, a
       : qualifier === "this" ? offset : announcement ? (offset + 7) % 7 : (offset - 7) % 7;
     day = day.add({ days });
   }
+  if (/\b(?:EOD|end\s+of\s+(?:the\s+)?day)\b/i.test(excerpt)) {
+    try {
+      const at = day.add({ days: 1 }).toZonedDateTime(timeZone).toInstant().toString();
+      if (announcement) return Date.parse(at) >= Date.parse(anchor) ? { kind: "range", from: anchor, through: at } : { kind: "unknown" };
+      // A future day boundary is a forecast, never the time of an occurred result.
+      return Date.parse(at) <= Date.parse(anchor) ? { kind: deadline ? "deadline" : "instant", at } : { kind: "unknown" };
+    } catch { return { kind: "unknown" }; }
+  }
   const clock = /\b(?:at|by|before|until|from|between)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.exec(excerpt);
   if (!clock) {
     const sourceDateZone = dateZone(timeZone);
@@ -217,43 +237,4 @@ export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, a
     result = resolveSourceTime(expression(), context)?.time;
   }
   return result ?? { kind: "unknown" };
-}
-
-function milestoneExpression(post: PublicV2PostRow, field: TimeResolution["field"], legacy: unknown) {
-  const text = post.text;
-  const quote = typeof legacy === "object" && legacy !== null && "source" in legacy && typeof legacy.source === "string" ? legacy.source : null;
-  // Legacy strings only help when they are literal quotes of this linked post.
-  const start = field === "claimDeadline" ? "(?:claim|redeem)[^.!?\\n]{0,160}?\\b(?:by|before|until)\\s+" : "(?:expires?(?:\\s+on)?|expiry(?:\\s+date)?(?:\\s+is)?|valid\\s+until)\\s+";
-  const found = new RegExp(`${start}(${datePattern}[^.!?\\n]{0,50})`, "i").exec(text)?.[0];
-  return found ?? (quote && text.includes(quote) ? quote : null);
-}
-
-/** Read only linked original posts; translated prose and unrelated saved posts cannot supply dates. */
-export function resolveBonusTimes(row: PublicV2EventRow, input: PublicV2Input, reviewed: BonusCredit | null) {
-  const resolutions: TimeResolution[] = [];
-  if (row.type !== "bonus_credit") return { bonusCredit: null, resolutions };
-  const ids = new Set(input.links.filter(link => link.event_id === row.id).map(link => link.post_id));
-  const posts = input.posts.filter(post => ids.has(post.id)).sort((a, b) => new Date(a.published_at).getTime() - new Date(b.published_at).getTime() || a.id.localeCompare(b.id));
-  const activityAnchor = posts[0] ? new Date(posts[0].published_at).toISOString() : null;
-  if (!activityAnchor) return { bonusCredit: reviewed, resolutions };
-  const bonusCredit = reviewed ? structuredClone(reviewed) : { amount: null, eligibility: null, claimMethod: null, usageTerms: null, claimDeadline: null, expiresAt: null };
-  for (const field of ["claimDeadline", "expiresAt"] as const) {
-    if (bonusCredit[field] && bonusCredit[field].kind !== "unknown") continue;
-    const candidates = posts.flatMap(post => {
-      const excerpt = milestoneExpression(post, field, row.presentation?.bonusCredit?.[field]);
-      const result = excerpt && resolveSourceTime(excerpt, { activityAnchor, postText: post.text, activityText: posts.map(post => post.text).join("\n"), deadline: field === "claimDeadline" });
-      return result ? [{ ...result, field, postId: post.id, excerpt }] : [];
-    });
-    // A reminder can shorten the wording without retracting an already known clock time.
-    const result = candidates.reduce<(typeof candidates)[number] | undefined>((current, candidate) => {
-      if (!current || candidate.time.kind !== "date" || current.time.kind === "date" || current.time.kind === "unknown") return candidate;
-      const post = posts.find(post => post.id === candidate.postId)!;
-      const explicitlyDateOnly = /\b(?:deadline|expiry|expiration|date)\b.{0,40}\b(?:now|changed to|updated to)\s+date[ -]only\b/i.test(post.text);
-      const start = current.time.kind === "range" ? current.time.from : current.time.at;
-      const sameDay = Temporal.Instant.from(start).toZonedDateTimeISO(candidate.time.timeZone).toPlainDate().toString() === candidate.time.date;
-      return sameDay && !explicitlyDateOnly ? current : candidate;
-    }, undefined);
-    if (result) { bonusCredit[field] = result.time; resolutions.push(result); }
-  }
-  return { bonusCredit: reviewed || resolutions.length ? bonusCredit : null, resolutions };
 }

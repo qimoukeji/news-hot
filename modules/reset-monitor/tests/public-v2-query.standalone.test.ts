@@ -8,14 +8,14 @@ import { eventListSchema, overviewSchema, type ResetSnapshot, type ResetEvent } 
 
 const now = Date.parse("2026-10-15T09:00:00Z");
 function snapshot(): ResetSnapshot {
-  const input: PublicV2Input = { events: [], posts: [], links: [] };
+  const input: PublicV2Input = { events: [], posts: [], actions: [] };
   return projectPublicV2(input, codex, now);
 }
 function event(id: string, time: string): ResetEvent {
   return { id, type: "direct_reset", status: "completed", time, publishedAt: "2026-10-01T00:00:00Z",
-    title: properName(id), summary: null, scope: { type: "all_users", note: properName("All users"), productCodes: [], planCodes: [], quotaWindowCodes: [] }, bonusCredit: null,
-    updates: [{ id: `${id}-update`, action: "confirm", publishedAt: "2026-10-01T00:00:00Z", summary: properName("Reset completed"),
-      source: { sourceId: "x-account:thsottiaux", url: `https://example.test/${id}` } }] };
+    title: properName(id), summary: null, scope: { type: "all_users", note: properName("All users"), productCodes: [], planCodes: [], quotaWindowCodes: [] },
+    updates: [{ id: `${id}-update`, action: "confirm", invalidatesEvent: false, publishedAt: "2026-10-01T00:00:00Z", time, title: properName("Reset completed"), summary: properName("Reset completed"),
+      sources: [{ postId: "post-"+id, sourceId: "x-account:thsottiaux", url: `https://example.test/${id}` }] }] };
 }
 function query(params: Record<string, unknown> = {}, at = now) { return parsePublicV2Query(params, at); }
 
@@ -108,7 +108,7 @@ test("changing query zones changes date membership without moving literal dates 
 test("cursor pages preserve every event and full updates, with deterministic time ties", () => {
   const data = snapshot();
   data.events = [event("a", "2026-10-15T00:00:00Z"), event("b", "2026-10-15T08:00:00+08:00"), event("c", "2026-10-14"), event("d", "2026-10-01")];
-  data.events[0]!.updates.push({ ...data.events[0]!.updates[0]!, id: "second-update", action: "progress", publishedAt: "2026-09-30T00:00:00Z" });
+  data.events[0]!.updates.push({ ...data.events[0]!.updates[0]!, id: "second-update", action: "progress", invalidatesEvent: false, publishedAt: "2026-09-30T00:00:00Z" });
   const params = { from: "2026-10-01", to: "2026-10-31", limit: "1" };
   const ids: string[] = []; let cursor: string | null = null;
   do {
@@ -132,11 +132,9 @@ test("cursor pages preserve every event and full updates, with deterministic tim
   assert.doesNotThrow(() => paginatePublicV2(data, query({ ...params, timeZone: "America/Los_Angeles", cursor: pacific.pagination.nextCursor! })));
 });
 
-test("lists omit bonus details for every event kind while internal events keep their data", () => {
+test("all projections use the same event shape without retired bonus details", () => {
   const data = snapshot();
-  const bonus = { ...event("bonus", "2026-10-15"), type: "bonus_credit" as const, status: "available" as const,
-    bonusCredit: { amount: properName("Synthetic credit"), eligibility: null, claimMethod: null, usageTerms: null,
-      claimDeadline: null, expiresAt: null } };
+  const bonus = {...event("bonus","2026-10-15"),type:"bonus_credit" as const};
   data.events = [bonus, { ...event("card", "2026-10-14"), type: "reset_credit" }, event("reset", "2026-10-13")];
   const before = structuredClone(data);
   for (const limit of [undefined, "1"]) {
@@ -147,8 +145,7 @@ test("lists omit bonus details for every event kind while internal events keep t
       for (const item of result.list) {
         assert.equal("bonusCredit" in item, false);
         const original = data.events.find(event => event.id === item.id)!;
-        const { bonusCredit: _bonus, ...expected } = original;
-        assert.deepEqual(item, expected);
+        assert.deepEqual(item, original);
       }
       assert.equal(eventListSchema.safeParse({ ...result, list: result.list.map(item => ({ ...item, bonusCredit: null })) }).success, false);
       ids.push(...result.list.map(item => item.id));
@@ -158,7 +155,7 @@ test("lists omit bonus details for every event kind while internal events keep t
   }
   assert.deepEqual(data, before);
   const result = paginatePublicV2(data, query());
-  assert.equal(eventListSchema.safeParse({ ...result, list: [{ ...result.list[0]!, status: "completed" }] }).success, false);
+  assert.equal(eventListSchema.safeParse({ ...result, list: [{ ...result.list[0]!, status: "available" }] }).success, false);
 });
 
 test("response contracts reject old top-level metadata and invalid pagination", () => {
