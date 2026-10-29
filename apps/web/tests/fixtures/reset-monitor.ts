@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { beijingDate } from "@aihot/contracts/time";
 import { eventListSchema, overviewSchema, type EventList, type EventStatus, type Overview, type PlatformOverview } from "../../../../modules/reset-monitor/public-v2.ts";
 import type { AdminEvent, AdminPost, AdminEntries, AdminTimelineEvent, ReviewAction, AdminReviewDetail, ReviewCommands, ProcessingStatus } from "../../../../modules/reset-monitor/web/admin-types.ts";
 
@@ -35,8 +36,8 @@ export function createMonitorFixture() {
     id: "event-1", type: state.type, status: state.status, publishedAt: at, title: localized(`${product.product} 官方活动`),
     summary: localized("仅限 Pro 套餐，每周额度。"), time: at, scope: state.eventScope ?? { ...scope, productCodes: [...scope.productCodes], planCodes: [...scope.planCodes], quotaWindowCodes: [...scope.quotaWindowCodes], note: localized("仅限 Pro 用户") },
     updates: [
-      { id: "announce-action", action: "announce", invalidatesEvent: false, title: localized("额度活动预告"), summary: null, time: state.actionTimes?.[0] ?? null, publishedAt: at, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }] },
-      { id: "confirm-action", title: localized(state.emptyConfirmation ? state.emptyConfirmationTitle : "额度活动状态确认"), summary: localized("以官方公告明确的活动结果为准。"), time: state.actionTimes?.[1] ?? null, publishedAt: at,
+      { id: "announce-action", action: "announce", invalidatesEvent: false, title: localized("额度活动预告"), summary: null, time: state.actionTimes?.[0] ?? beijingDate(at), publishedAt: at, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }] },
+      { id: "confirm-action", title: localized(state.emptyConfirmation ? state.emptyConfirmationTitle : "额度活动状态确认"), summary: localized("以官方公告明确的活动结果为准。"), time: state.actionTimes?.[1] ?? at, publishedAt: at,
         ...(state.status === "cancelled" ? { action: "amend" as const, invalidatesEvent: true, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }, { postId: "post-2", sourceId: "other", url: "https://example.org/official-2" }] }
           : { action: "confirm" as const, invalidatesEvent: false as const, sources: state.emptyConfirmation ? [] : [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }, { postId: "post-2", sourceId: "other", url: "https://example.org/official-2" }] }) },
     ],
@@ -81,6 +82,7 @@ export function createMonitorFixture() {
   };
   const refreshCreated = (record: typeof createdEvents[number]) => {
     const actions = record.actions, event = record.event;
+    for (const action of actions) action.time ??= action.action === "announce" ? beijingDate(action.publishedAt) : action.publishedAt;
     const last = actions.at(-1);
     event.status = last ? last.action === "confirm" ? "completed" : last.action === "announce" ? "announced" : last.invalidatesEvent ? "cancelled" : "in_progress" : null;
     event.time = last?.time ?? (last ? last.publishedAt : null);

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { beijingDate } from "@aihot/contracts/time";
 import {
   localizedTextSchema,
   publicTimeSchema,
@@ -113,6 +114,10 @@ export function translated(
   );
 }
 export const iso = (value: Date | string) => new Date(value).toISOString();
+/** A default announcement stays pending until the end of its Beijing publication day. */
+export function defaultActionTime(action: ActionKind, publishedAt: Date | string): string {
+  return action === "announce" ? beijingDate(publishedAt) : iso(publishedAt);
+}
 export function sourcedActions(event: EventRow, input: ActionInput) {
   return input.actions
     .filter((action) => action.event_id === event.id)
@@ -182,7 +187,7 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
       announcedTime = null;
     } else if (action.action === "announce" && status !== "cancelled" && !officialConfirmed) {
       status = "announced";
-      time = action.time ?? update.publishedAt;
+      time = action.time ?? defaultActionTime(action.action, update.publishedAt);
       announcedTime = time;
       confirmedTime = confirmationId = null;
     } else if (

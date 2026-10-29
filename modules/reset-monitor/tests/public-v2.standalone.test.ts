@@ -13,13 +13,14 @@ import { fixture, addAction, at } from "./action-fixture.ts";
 const now = Date.parse("2026-10-15T00:00:00Z"),
   read = (input = fixture()) => projectPublicV2(input, codex, now);
 
-test("action business time preserves precision and never falls back to source publication time", () => {
+test("action time preserves precision and defaults to source publication time", () => {
   for (const time of [null, "2026-10-09T01:25:00Z", "2026-10-09", "2026-10-09T01:00:00Z/2026-10-09T03:00:00Z"]) {
     const input = fixture(); input.actions[0]!.time = time;
     const update = read(input).events[0]!.updates[0]!;
-    assert.equal(update.time, time);
+    assert.equal(update.time, time ?? at);
     assert.equal(update.publishedAt, at);
     assert.equal(eventUpdateSchema.safeParse({ ...update, time: "not-a-business-time" }).success, false);
+    assert.equal(eventUpdateSchema.safeParse({ ...update, time: null }).success, false);
   }
 });
 
@@ -31,7 +32,7 @@ test("scope keeps explicit eligibility notes and never expands unknown users", (
   assert.deepEqual(read(input).events, []);
   input.events[0]!.scope = { ...input.events[0]!.scope, type: "unknown", note: null };
   assert.equal(read(input).events[0]!.scope.type, "unknown");
-  assert.match(read(input).events[0]!.scope.note!.en, /unspecified/);
+  assert.equal(read(input).events[0]!.scope.note!.en, "All users");
 });
 test("initial confirmation completes without an announcement", () => {
   const snapshot = read();

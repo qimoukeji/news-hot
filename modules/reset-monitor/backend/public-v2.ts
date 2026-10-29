@@ -12,6 +12,7 @@ import {
 } from "../public-v2.ts";
 import {
   reduceEvent,
+  defaultActionTime,
   translated,
   type ActionInput,
   type EventRow,
@@ -289,7 +290,7 @@ export function projectPublicV2(
           action: action.action,
           invalidatesEvent: action.invalidates_event,
           publishedAt,
-          time: action.time,
+          time: action.time ?? defaultActionTime(action.action, publishedAt),
           title: action.sources.length === 0 ? { ...publicV2ActionTitle(definition.product, row.type, action.action), ...action.title } : translated(action.title)
             ? action.title
             : publicV2ActionTitle(definition.product, row.type, action.action),

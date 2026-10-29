@@ -1,5 +1,8 @@
 import { Temporal } from "@js-temporal/polyfill";
 import type { EventTime } from "../public-v2.ts";
+import { serializeEventTime } from "../public-v2.ts";
+import { defaultActionTime, type ActionDraft } from "../actions.ts";
+import { quotedInPost } from "./evidence.ts";
 type PublicV2PostRow = { text: string; published_at: Date | string };
 
 const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
@@ -237,4 +240,22 @@ export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, a
     result = resolveSourceTime(expression(), context)?.time;
   }
   return result ?? { kind: "unknown" };
+}
+
+/** Unusable time metadata cannot reject an independently verified action. */
+export function resolveActionTime(action: Pick<ActionDraft, "action" | "invalidatesEvent"> & { timeExcerpt: string | null }, post: PublicV2PostRow, activityAnchor?: string): { time: string; issue: string | null } {
+  const publishedAt = new Date(post.published_at).toISOString();
+  const fallback = { time: defaultActionTime(action.action, publishedAt), issue: null };
+  if (!action.timeExcerpt || !quotedInPost(action.timeExcerpt, post.text)) return fallback;
+  const occurred = action.invalidatesEvent || action.action === "progress" || action.action === "confirm";
+  const resolved = resolveEventExpression(action.timeExcerpt, post,
+    action.action === "announce" || action.action === "amend" && !action.invalidatesEvent, post.text, occurred ? activityAnchor : undefined, occurred);
+  if (resolved.kind === "unknown") return fallback;
+  if (occurred) {
+    const future = resolved.kind === "date"
+      ? Temporal.PlainDate.compare(Temporal.PlainDate.from(resolved.date), Temporal.Instant.from(publishedAt).toZonedDateTimeISO(resolved.timeZone).toPlainDate()) > 0
+      : Date.parse(resolved.kind === "range" ? resolved.through : resolved.at) > Date.parse(publishedAt);
+    if (future) return resolved.kind === "deadline" ? fallback : { ...fallback, issue: "活动结果时间尚未发生" };
+  }
+  return { time: serializeEventTime(resolved), issue: null };
 }

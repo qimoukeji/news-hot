@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { chromium, expect, type Browser } from "@playwright/test";
 import { startWebServer, type WebServer } from "./web-server.ts";
-import { createMonitorFixture, day, platforms } from "./fixtures/reset-monitor.ts";
+import { createMonitorFixture, at, day, platforms } from "./fixtures/reset-monitor.ts";
 import { beijingDate } from "@aihot/contracts/time";
 
 const fixture = createMonitorFixture();
@@ -11,7 +11,7 @@ let browser: Browser;
 before(async () => { web = await startWebServer(fixture.api); browser = await chromium.launch({ channel: "chromium" }); });
 after(async () => { await browser?.close(); await web?.stop(); });
 
-for (const product of platforms) test(`${product.product} public and admin action timelines display business time with its original precision`, async () => {
+for (const product of platforms) test(`${product.product} timelines preserve explicit time and default announcements to dates while confirmations keep instants`, async () => {
   const page = await browser.newPage();
   await page.route(`${web.origin}/**`, route => route.continue()); // Each fixture edit must fetch fresh page data.
   try {
@@ -19,15 +19,17 @@ for (const product of platforms) test(`${product.product} public and admin actio
       ["2026-10-25T02:15:00Z", "2026-10-25 10:15"],
       ["2026-10-25", "2026-10-25"],
       ["2026-10-25T02:15:00Z/2026-10-25T04:45:00Z", "2026-10-25 10:15 – 2026-10-25 12:45"],
-      [null, "—"],
+      [null, "2026-10-23"],
     ] as const) {
       fixture.state.actionTimes = [time, null];
       for (const path of [`${product.path}/history/${day}`, `${product.admin}?kind=events`]) {
         await page.goto(`${web.origin}${path}`);
         const row = page.locator("li").filter({ has: page.getByRole("heading", { name: /额度活动预告$/ }) });
         await expect(row.locator(":scope > time")).toHaveText(display);
-        if (time) await expect(row.locator(":scope > time")).toHaveAttribute("datetime", time);
-        else await expect(row.locator(":scope > time")).not.toHaveAttribute("datetime");
+        await expect(row.locator(":scope > time")).toHaveAttribute("datetime", time ?? day);
+        const confirmation = page.locator("li").filter({ has: page.getByRole("heading", { name: /额度活动状态确认$/ }) });
+        await expect(confirmation.locator(":scope > time")).toHaveAttribute("datetime", at);
+        await expect(confirmation.locator(":scope > time")).toHaveText("2026-10-23 00:30");
       }
     }
   } finally { fixture.state.actionTimes = undefined; await page.close(); }

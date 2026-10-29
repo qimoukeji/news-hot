@@ -34,8 +34,6 @@ export function actionEvidence(proposition: Proposition, context: ContextInput[]
   const p = proposition, quote = p.excerpt;
   if (!p.real || ["explanation", "policy", "uncertain"].includes(p.role ?? "") || /\b(?:maybe|perhaps|surprise)\b/i.test(quote)) return "related";
   if (p.action === "announce" && /^(?:@\w+\s+)*(?:if|unless)\b|\beither\b[^.]*\bor\b/i.test(quote.trim())) return "related";
-  if (p.action === "confirm" && !p.eventId && !p.timeExcerpt
-    && /\b(?:last (?:week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|previously|earlier|yesterday)\b/i.test(quote)) return "review";
   if (p.kind === "bonus_credit") {
     const reward = /\b(?:bonus|reward|promotional|one[ -]time)\s+(?:usage\s+)?credits?\b|奖励额度|獎勵額度/i;
     const action = /\b(?:claim(?:ing|s)?|reopen(?:ed|s)?|restor(?:ed|e)|reinstated|back on|grant(?:ed|ing)?|giv(?:e|en|ing)|get|gets|receive[ds]?|available|opens?|offer(?:ing)?|will|added|redeem|closed|ended|expired|cancelled|canceled)\b|领取|領取|发放|發放|开放|关闭|到期|取消|恢复安排|恢復安排/i;
@@ -45,7 +43,7 @@ export function actionEvidence(proposition: Proposition, context: ContextInput[]
     return "review";
   }
   if (p.action === "announce" && !reset.test(quote)) {
-    if (p.eventId && p.timeExcerpt && /\b(?:land(?:s|ing)?|arriv(?:e|es|ing)|will|coming|by)\b|将于|將於|生效/i.test(quote)) return "action";
+    if (p.eventId && /\b(?:land(?:s|ing)?|arriv(?:e|es|ing)|will|coming|by)\b|将于|將於|生效/i.test(quote)) return "action";
     if (/\banother one\b/i.test(quote) && /\b(?:will|coming|lands?)\b/i.test(quote)
       && earlier.some(prior => prior.real && prior.kind === p.kind && reset.test(prior.excerpt))) return "action";
     const quotedReset = context.some(source => reset.test(source.text));

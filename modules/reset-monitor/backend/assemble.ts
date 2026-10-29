@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { Temporal } from "@js-temporal/polyfill";
 import { sql, type Db } from "@aihot/backend/db";
 import { stableJson } from "@aihot/backend/lib/ids";
 import { completeReceipt } from "@aihot/backend/providers/receipts";
@@ -10,8 +9,7 @@ export { quotedInPost } from "./evidence.ts";
 import { recognizedScope, scopeSummary } from "./recognition-scope.ts";
 import { relatedContextEvents, uniqueContextEvent } from "./context-association.ts";
 import { reduceEvent, type ActionKind, type ActionInput, type SourcePostRow } from "../actions.ts";
-import { serializeEventTime } from "../public-v2.ts";
-import { resolveEventExpression } from "./public-v2-time.ts";
+import { resolveActionTime } from "./public-v2-time.ts";
 import { actionRecognitionSchema, type ActionRecognition, type ActionRecognitionBody, type Proposition, type ThreadRecognition } from "./recognize.ts";
 import { postContext, needsReplyContext } from "./post-context.ts";
 
@@ -191,23 +189,9 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
       const prior = input.actions.find(action => action.id === claim.existingActionId);
       if (!prior || prior.event_id !== eventId || prior.action !== claim.action || prior.invalidates_event !== claim.invalidatesEvent) { reasons.push("重复事实没有匹配的已有动作"); continue; }
     }
-    let time: string | null = null;
-    if (claim.timeExcerpt) {
-      if (!quotedInPost(claim.timeExcerpt, text)) { reasons.push("时间引文不在本帖中"); continue; }
-      const occurred = claim.invalidatesEvent || claim.action === "progress" || claim.action === "confirm";
-      const resolved = resolveEventExpression(claim.timeExcerpt,
-        { id: post.id, author: post.author, text, published_at: post.published_at } as Parameters<typeof resolveEventExpression>[1],
-        claim.action === "announce" || claim.action === "amend" && !claim.invalidatesEvent, text, target && occurred ? new Date(target.created_at).toISOString() : undefined, occurred);
-      const vague = /^(?:(?:in|within|over)\s+(?:(?:a|the)\s+)?few\s+(?:minutes?|hours?)|soon|shortly|稍后|稍後|几分钟(?:内|后)?|幾分鐘(?:內|後)?)\s*[.!。！]?$/i.test(claim.timeExcerpt.trim());
-      if (resolved.kind === "unknown" && !vague) { reasons.push("明确时间无法安全解析"); continue; }
-      if (occurred && resolved.kind !== "unknown") {
-        const future = resolved.kind === "date"
-          ? Temporal.PlainDate.compare(Temporal.PlainDate.from(resolved.date), Temporal.Instant.from(new Date(post.published_at).toISOString()).toZonedDateTimeISO(resolved.timeZone).toPlainDate()) > 0
-          : Date.parse(resolved.kind === "range" ? resolved.through : resolved.at) > new Date(post.published_at).getTime();
-        if (future) { reasons.push("活动结果时间尚未发生"); continue; }
-      }
-      if (resolved.kind !== "unknown") time = serializeEventTime(resolved);
-    }
+    const resolvedTime = resolveActionTime(claim, { text, published_at: post.published_at }, target ? new Date(target.created_at).toISOString() : undefined);
+    if (resolvedTime.issue) { reasons.push(resolvedTime.issue); continue; }
+    const time = resolvedTime.time;
     const prior = claim.existingActionId ? input.actions.find(action => action.id === claim.existingActionId)! : null;
     // A repeated fact only adds a source; a new scope requires an explicit new fact or review.
     if (prior && claim.scopeExcerpt && stableJson(claim.scope) !== stableJson(target!.scope)) {

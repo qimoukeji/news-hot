@@ -25,7 +25,7 @@
     "/api/v2/codex-resets": {
       "get": {
         "summary": "codex events with accepted actions and all source links",
-        "description": "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed explicit plans; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
+        "description": "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed saved plans, including announcement defaults to the Beijing publication date; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
         "parameters": [
           {
             "name": "from",
@@ -99,7 +99,7 @@
     "/api/v2/claude-resets": {
       "get": {
         "summary": "claude events with accepted actions and all source links",
-        "description": "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed explicit plans; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
+        "description": "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed saved plans, including announcement defaults to the Beijing publication date; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
         "parameters": [
           {
             "name": "from",
@@ -173,7 +173,7 @@
     "/api/v2/grok-resets": {
       "get": {
         "summary": "grok events with accepted actions and all source links",
-        "description": "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed explicit plans; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
+        "description": "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed saved plans, including announcement defaults to the Beijing publication date; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
         "parameters": [
           {
             "name": "from",
@@ -478,27 +478,20 @@
                           "time": {
                             "anyOf": [
                               {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "format": "date-time",
-                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                                  },
-                                  {
-                                    "type": "string",
-                                    "format": "date",
-                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
-                                  },
-                                  {
-                                    "type": "string"
-                                  }
-                                ]
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                               },
                               {
-                                "type": "null"
+                                "type": "string",
+                                "format": "date",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                              },
+                              {
+                                "type": "string"
                               }
                             ],
-                            "description": "Explicit action business time; null when unspecified. Never substituted with publication time."
+                            "description": "Saved action time. When unresolved, announce defaults to the earliest source's Beijing calendar date and completes only after that day ends; other actions default to source publication time."
                           },
                           "title": {
                             "type": "object",
@@ -673,27 +666,20 @@
                           "time": {
                             "anyOf": [
                               {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "format": "date-time",
-                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                                  },
-                                  {
-                                    "type": "string",
-                                    "format": "date",
-                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
-                                  },
-                                  {
-                                    "type": "string"
-                                  }
-                                ]
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                               },
                               {
-                                "type": "null"
+                                "type": "string",
+                                "format": "date",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                              },
+                              {
+                                "type": "string"
                               }
                             ],
-                            "description": "Explicit action business time; null when unspecified. Never substituted with publication time."
+                            "description": "Saved action time. When unresolved, announce defaults to the earliest source's Beijing calendar date and completes only after that day ends; other actions default to source publication time."
                           },
                           "title": {
                             "type": "object",
@@ -872,27 +858,20 @@
                           "time": {
                             "anyOf": [
                               {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "format": "date-time",
-                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                                  },
-                                  {
-                                    "type": "string",
-                                    "format": "date",
-                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
-                                  },
-                                  {
-                                    "type": "string"
-                                  }
-                                ]
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
                               },
                               {
-                                "type": "null"
+                                "type": "string",
+                                "format": "date",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                              },
+                              {
+                                "type": "string"
                               }
                             ],
-                            "description": "Explicit action business time; null when unspecified. Never substituted with publication time."
+                            "description": "Saved action time. When unresolved, announce defaults to the earliest source's Beijing calendar date and completes only after that day ends; other actions default to source publication time."
                           },
                           "title": {
                             "type": "object",
@@ -1074,7 +1053,7 @@
                         "minLength": 1,
                         "pattern": "\\S"
                       },
-                      "description": "Empty means no catalog product restriction can be applied; an unknown product note does not confirm coverage of all products."
+                      "description": "Empty means no catalog product restriction can be applied; it does not confirm coverage of all products."
                     },
                     "planCodes": {
                       "type": "array",
@@ -1148,7 +1127,7 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Localized audience and unknown-dimension labels; actual eligibility and product restrictions remain in summaries."
+                      "description": "Concise localized audience label, such as All users or Paid users; actual eligibility and product restrictions remain in summaries."
                     }
                   },
                   "required": [

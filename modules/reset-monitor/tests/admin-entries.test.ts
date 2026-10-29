@@ -44,6 +44,7 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId} co
     assert.equal(first.event.timeline.length, 2);
     const confirmation = first.event.timeline.find(a => a.action === "confirm")!;
     assert.equal(confirmation.publishedAt, "2026-10-01T12:00:00.000Z", "action time remains its earliest source");
+    assert.equal(confirmation.time, "2026-10-01T12:00:00.000Z", "adding a later source without a time does not replace the saved default");
     assert.deepEqual(confirmation.sources.map(s => s.id), ["first", "late-source"]);
     assert.equal(confirmation.sources[1]!.processingStatus, "failed");
     assert.equal(confirmation.sources[1]!.reviewReason, "需要核验来源");

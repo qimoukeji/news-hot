@@ -26,8 +26,8 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: a
   assert.deepEqual(input, before, "read projection must not persist synthesized translations");
 });
 
-test("fixed audience and unknown-dimension labels fill only missing languages", () => {
-  for (const zh of ["所有用户", "付费用户", "unknown 所有用户", "unknown 所有产品", "unknown 所有用户 · unknown 所有产品", "付费用户 · unknown 所有产品", "所有用户 · unknown 所有产品"]) {
+test("fixed audience labels fill only missing languages", () => {
+  for (const zh of ["所有用户", "付费用户"]) {
     const source = { zh }, note = completeStandardScopeLabel(source)!;
     assert.ok(note, zh);
     assert.equal(note.zh, zh);

@@ -7,6 +7,7 @@ import { identityKeyForUrl, tweetIdFromUrl } from "@aihot/backend/lib/url";
 import { monitorId, monitor, auditAction, auditSubject } from "./context.ts";
 import {
   editorialTextSchema,
+  defaultActionTime,
   editorialScopeSchema,
   reduceEvent,
   sourcedActions,
@@ -57,7 +58,7 @@ function eventRows(input: ActionInput) {
     const event = published.find(event => event.id === row.id), reduced = reduceEvent(row, input), actions = sourcedActions(row, input);
     const posts = [...new Map(actions.flatMap(action => action.posts).map(post => [post.id, post])).values()];
     const timeline = actions.map(({ action, posts, publishedAt }) => ({
-      id: action.id, action: action.action, invalidatesEvent: action.invalidates_event, title: action.title, summary: action.summary, time: action.time, sequence: action.sequence,
+      id: action.id, action: action.action, invalidatesEvent: action.invalidates_event, title: action.title, summary: action.summary, time: action.time ?? defaultActionTime(action.action, publishedAt), sequence: action.sequence,
       publishedAt, sources: posts.map(post => postRow(post, input)),
     })).sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || a.id.localeCompare(b.id));
     return { ...row, title: row.title ?? event?.title ?? actions.at(-1)?.action.title ?? null, summary: row.summary,

@@ -40,7 +40,7 @@ export const publicTimeSchema = z.union([timestampSchema, calendarDate, z.string
   return parts.length === 2 && parts.every(part => timestampSchema.safeParse(part).success) && Date.parse(parts[1]!) >= Date.parse(parts[0]!);
 }, "Time requires an ISO timestamp, date or timestamp interval")]);
 export type PublicTime = z.infer<typeof publicTimeSchema>;
-const updateFields = { id: identifier, publishedAt: timestampSchema, time: publicTimeSchema.nullable().describe("Explicit action business time; null when unspecified. Never substituted with publication time."), title: localizedTextSchema, summary: localizedTextSchema.nullable() };
+const updateFields = { id: identifier, publishedAt: timestampSchema, time: publicTimeSchema.describe("Saved action time. When unresolved, announce defaults to the earliest source's Beijing calendar date and completes only after that day ends; other actions default to source publication time."), title: localizedTextSchema, summary: localizedTextSchema.nullable() };
 export const eventUpdateSchema = z.discriminatedUnion("action", [
   z.strictObject({ ...updateFields, action: z.literal("confirm"), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema) }),
   z.strictObject({ ...updateFields, action: z.enum(["announce", "progress"]), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema).min(1) }),
@@ -60,7 +60,7 @@ export const eventStatuses = ["announced", "in_progress", "completed", "cancelle
 export type EventStatus = (typeof eventStatuses)[number];
 export const scopeSchema = z.strictObject({
   type: z.enum(["all_users", "paid_users", "selected_users", "unknown"]).describe("unknown means audience mapping is unresolved, not confirmed eligibility for everyone."),
-  productCodes: z.array(identifier).describe("Empty means no catalog product restriction can be applied; an unknown product note does not confirm coverage of all products."), planCodes: z.array(identifier), quotaWindowCodes: z.array(identifier), note: localizedTextSchema.nullable().describe("Localized audience and unknown-dimension labels; actual eligibility and product restrictions remain in summaries."),
+  productCodes: z.array(identifier).describe("Empty means no catalog product restriction can be applied; it does not confirm coverage of all products."), planCodes: z.array(identifier), quotaWindowCodes: z.array(identifier), note: localizedTextSchema.nullable().describe("Concise localized audience label, such as All users or Paid users; actual eligibility and product restrictions remain in summaries."),
 });
 const eventObjectSchema = z.strictObject({
   id: identifier, type: z.enum(["direct_reset", "reset_credit", "bonus_credit"]), status: z.enum(eventStatuses),

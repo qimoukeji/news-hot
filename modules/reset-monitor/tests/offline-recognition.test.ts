@@ -100,7 +100,7 @@ test("a paid-user label for multiple paid plans retains every exact plan code", 
   assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
   const scope = (await publicV2Snapshot()).events[0]!.scope;
   assert.deepEqual({ ...scope, note: claim.scope.note }, claim.scope);
-  assert.match(scope.note!.zh, /付费用户.*unknown 所有产品/);
+  assert.equal(scope.note!.zh, "付费用户");
 }));
 
 test("a short paid-user label requires selected eligibility to remain in the action summary", async () => inMonitor(codex, async () => {
@@ -116,7 +116,7 @@ test("a short paid-user label requires selected eligibility to remain in the act
     assert.equal((await sourcePost(saved.id))!.processing_status, keepCondition ? "processed" : "needs_attention");
   }
   const [event] = (await publicV2Snapshot()).events;
-  assert.match(event!.scope.note!.zh, /付费用户.*unknown 所有产品/);
+  assert.equal(event!.scope.note!.zh, "付费用户");
   assert.match(event!.summary!.zh, /PT 晚上 8 点前注册的付费用户/);
   assert.equal((await loadActionInput()).events.length, 1);
 }));

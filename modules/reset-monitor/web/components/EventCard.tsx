@@ -10,7 +10,7 @@ function scopeText(scope: Scope | null, catalog?: PlatformOverview["catalog"]) {
   if (!scope) return "适用范围未说明";
   const names = (codes: string[], entries = catalog?.plans ?? []) => codes.map(code => text(entries.find(entry => entry.code === code)?.name) || code);
   return [
-    { all_users: "所有用户", paid_users: "付费用户", selected_users: "部分用户", unknown: "unknown 所有用户" }[scope.type],
+    { all_users: "所有用户", paid_users: "付费用户", selected_users: "部分用户", unknown: "所有用户" }[scope.type],
     ...names(scope.planCodes, catalog?.plans), ...names(scope.quotaWindowCodes, catalog?.quotaWindows),
   ].filter(Boolean).join(" · ");
 }
@@ -35,10 +35,11 @@ export function EventCardFrame({ event, catalog, title, footer, children, eventI
 }
 
 export function EventActionRow({ action, children, actionId }: {
-  action: Pick<AdminTimelineAction, "action" | "invalidatesEvent" | "time" | "title" | "summary">; children: ReactNode; actionId?: string;
+  action: Pick<AdminTimelineAction, "action" | "invalidatesEvent" | "time" | "publishedAt" | "title" | "summary">; children: ReactNode; actionId?: string;
 }) {
+  const time = action.time ?? action.publishedAt;
   return <li className="grid min-w-0 grid-cols-[7.25rem_minmax(0,1fr)] gap-3 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:gap-4" data-timeline-action={actionId}>
-    <time dateTime={action.time ?? undefined} className="num text-[12px] leading-5 text-ink-4">{stamp(action.time)}</time>
+    <time dateTime={time} className="num text-[12px] leading-5 text-ink-4">{stamp(time)}</time>
     <div className="min-w-0 border-l-2 border-line-strong pl-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">

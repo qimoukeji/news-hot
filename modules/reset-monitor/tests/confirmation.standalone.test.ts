@@ -46,8 +46,9 @@ test("instant, Beijing-date and interval plans generate exactly at their boundar
   assert.equal(inferenceBoundary("2026-10-26"), Date.parse("2026-10-26T16:00:00Z"));
 });
 
-test("missing plan, postponed progress, review conflicts and withdrawal cannot generate confirmations", () => {
-  const input = announced(null); assert.equal(inferredConfirmation(input.events[0]!, input, now), null);
+test("publication-time defaults trigger completion while progress, review conflicts and withdrawal block it", () => {
+  const input = announced(null);
+  assert.equal(inferredConfirmation(input.events[0]!, input, now)!.time, "2026-10-10");
   input.actions[0]!.time = plan; input.posts[0]!.processing_status = "needs_attention";
   assert.equal(inferredConfirmation(input.events[0]!, input, now), null);
   input.posts[0]!.processing_status = "processed"; addAction(input, "delayed", "progress", plan);

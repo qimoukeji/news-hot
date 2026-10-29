@@ -2,10 +2,9 @@ import { monitor } from "./context.ts";
 import { quotedInPost } from "./evidence.ts";
 import type { ActionRecognitionBody, Proposition } from "./recognize.ts";
 import { languages, translated, type EditorialScope } from "../actions.ts";
+import { defaultScopeLabel } from "./scope-labels.ts";
 
 type Claim = ActionRecognitionBody["actions"][number];
-const unknownAudience = { en: "unknown All users", zh: "unknown 所有用户", "zh-Hant": "unknown 所有用戶", ja: "unknown すべてのユーザー", ko: "unknown 모든 사용자", ru: "unknown Все пользователи", es: "unknown Todos los usuarios" };
-const unknownProducts = { en: "unknown All products", zh: "unknown 所有产品", "zh-Hant": "unknown 所有產品", ja: "unknown すべての製品", ko: "unknown 모든 제품", ru: "unknown Все продукты", es: "unknown Todos los productos" };
 
 function catalogMatch(value: string, entries: Array<{ code: string; name: Record<string, string | undefined> }>) {
   let remaining = value.normalize("NFKC").toLowerCase();
@@ -44,11 +43,11 @@ export function recognizedScope(claim: Claim, source: string, author: string, in
   if (plans.length && plans.some(({ entry }) => !entry)) scope.type = "unknown";
   const products = raw.productsZh ?? (inherited ? null : monitor().defaultProductForAuthor?.(author)) ?? "";
   const matched = catalogMatch(products, catalog.products);
-  let unknownProduct = products ? !matched.complete || !matched.codes.length : !inherited?.productCodes.length;
+  const unknownProduct = products ? !matched.complete || !matched.codes.length : !inherited?.productCodes.length;
   // A partial product list cannot express its unmapped remainder; do not imply it is exhaustive.
   scope.productCodes = products ? unknownProduct ? [] : matched.codes : inherited?.productCodes ?? [];
   if (inherited && claim.action !== "amend") {
-    if (unknownProduct && inherited.productCodes.length) { scope.productCodes = [...inherited.productCodes]; unknownProduct = false; }
+    if (unknownProduct && inherited.productCodes.length) scope.productCodes = [...inherited.productCodes];
     if (scope.productCodes.length && inherited.productCodes.length && JSON.stringify([...scope.productCodes].sort()) !== JSON.stringify([...inherited.productCodes].sort())) return issue("产品范围变化须有明确修订动作");
     if (scope.planCodes.length && inherited.planCodes.length && JSON.stringify([...scope.planCodes].sort()) !== JSON.stringify([...inherited.planCodes].sort())) return issue("套餐范围变化须有明确修订动作");
   }
@@ -64,8 +63,8 @@ export function recognizedScope(claim: Claim, source: string, author: string, in
   if (scope.quotaWindowCodes.some(code => supported.has(code) && !codes.includes(code)) && !unknownCycle && !(inherited && !claim.scopeExcerpt)) return issue("公开范围与原帖明确限制不一致");
   scope.quotaWindowCodes = claim.scopeExcerpt || !inherited ? [...new Set(codes)].filter(code => supported.has(code)) : [...inherited.quotaWindowCodes];
   let note = !audience && translated(inherited?.note) ? inherited.note : scope.note;
-  if (scope.type === "unknown") note = unknownAudience;
-  if (unknownProduct) note = Object.fromEntries(languages.map(language => [language, note?.[language]?.includes(unknownProducts[language]) ? note[language] : note?.[language] ? `${note[language]} · ${unknownProducts[language]}` : unknownProducts[language]])) as NonNullable<Claim["scope"]["note"]>;
+  if (scope.type === "unknown") note = defaultScopeLabel(scope.type);
+  else if (!note && scope.type !== "selected_users") note = defaultScopeLabel(scope.type);
   scope.note = note;
   return { scope, issue: null };
 }

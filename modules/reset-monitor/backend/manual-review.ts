@@ -2,7 +2,7 @@ import { z } from "zod";
 import { sql, type Db } from "@aihot/backend/db";
 import { audit, Conflict } from "@aihot/backend/audit";
 import { monitorId, monitor, auditAction, auditSubject } from "./context.ts";
-import { actionDraftSchema, editorialTextSchema, editorialScopeSchema, reduceEvent, sourcedActions, currentUnsourcedConfirmation, type ActionInput, type ActionRow } from "../actions.ts";
+import { actionDraftSchema, defaultActionTime, editorialTextSchema, editorialScopeSchema, reduceEvent, sourcedActions, currentUnsourcedConfirmation, type ActionInput, type ActionRow } from "../actions.ts";
 import { loadActionInput, rowVersion, validateActionFacts, validateScope, lockActionRecords, validateActionSources, auditPost } from "./action-store.ts";
 import { enqueuePublicV2 } from "./public-v2-work.ts";
 import { normalizePublicTime } from "../public-v2.ts";
@@ -153,6 +153,11 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
   const lastSourceRemovals = after.actions.filter(action => !action.sources.length && state.actions.some(prior => prior.id === action.id && prior.sources.length > 0)).map(action => ({ actionId: action.id, eventId: action.event_id, message: "最后一条来源移除后删除动作，请核对事件当前影响范围" }));
   const deleted = new Set(lastSourceRemovals.map(action => action.actionId));
   after.actions = after.actions.filter(action => !deleted.has(action.id));
+  for (const action of after.actions) if (affected.has(action.event_id) && action.time === null && action.sources.length) {
+    const dates = action.sources.map(source => after.posts.find(post => post.id === source.postId))
+      .filter(post => post && !post.context_only).map(post => new Date(post!.published_at).toISOString()).sort();
+    if (dates.length) action.time = defaultActionTime(action.action, dates[0]!);
+  }
   if (after.actions.some(action => !action.sources.length && (action.action !== "confirm" || !action.time))) throw invalid("只有填写明确生效时间的确认动作可以没有来源");
   for (const action of after.actions.filter(action => !action.sources.length)) {
     const time = action.time!, today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);

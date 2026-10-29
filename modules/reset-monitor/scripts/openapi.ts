@@ -24,7 +24,7 @@ export function monitorOpenApi() {
       get: {
         summary: `${id} events with accepted actions and all source links`,
         description:
-              "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed explicit plans; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
+              "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed saved plans, including announcement defaults to the Beijing publication date; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
         parameters: [
           {
             name: "from",

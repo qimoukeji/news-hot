@@ -5,6 +5,7 @@ import { Conflict } from "@aihot/backend/audit";
 import { monitorId, monitor } from "./context.ts";
 import {
   actionDraftSchema,
+  defaultActionTime,
   replyToSchema,
   withoutPostOriginal,
   type ActionInput,
@@ -223,7 +224,6 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
     if (!event) throw invalid("所属事件不存在");
     if (event.withdrawn && !previous.some(action => action.event_id === event.id)) throw invalid("已撤回事件不能新增来源");
     validateActionFacts(draft);
-    const time = draft.time ? normalizePublicTime(draft.time) : null;
     let [existing] = draft.id ? await db<ActionRow[]>`SELECT id,event_id,sequence,action,invalidates_event,title,summary,time,sources,created_at,updated_at FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND id=${draft.id}` : [];
     if (!draft.id && draft.action === "confirm") {
       const input = await loadActionInput(db);
@@ -232,6 +232,8 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
     }
     const upgrading = existing?.action === "confirm" && existing.sources.length === 0 && draft.action === "confirm";
     if (draft.id && (!existing || existing.event_id !== event.id)) throw invalid("动作不属于目标事件");
+    const sourceOnly = existing && !upgrading && !options.editExisting;
+    const time = normalizePublicTime(draft.time ?? (sourceOnly ? existing.time : null) ?? defaultActionTime(draft.action, actual.published_at));
     if (existing && !upgrading && !options.editExisting && (existing.action !== draft.action || existing.invalidates_event !== (draft.invalidatesEvent ?? false) || stableJson(existing.time) !== stableJson(time))) throw invalid("补充来源不能修改已接受动作事实");
     const sources = existing ? [...existing.sources] : [];
     if (!sources.some(source => source.postId === post.id)) sources.push({ postId: post.id });

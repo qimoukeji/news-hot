@@ -1,6 +1,6 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
-import { reduceEvent, type ActionInput, type ActionRow, type EventRow } from "../actions.ts";
+import { defaultActionTime, reduceEvent, type ActionInput, type ActionRow, type EventRow } from "../actions.ts";
 import { normalizePublicTime } from "../public-v2.ts";
 
 export const inferredConfirmationTitle = {
@@ -18,17 +18,17 @@ export const inferredConfirmationSummary = {
   es: "Ha llegado la hora anunciada. Consulta tu cuenta para comprobar el estado real del restablecimiento.",
 };
 
-/** The current plan comes only from official actions with explicit business time. */
+/** Saved announcement times include publication-time defaults. */
 export function announcementBasis(event: EventRow, input: ActionInput) {
   const official = reduceEvent(event, { ...input, actions: input.actions.filter(action => action.sources.length) });
   if (!official) return null;
   let plan: string | null = null;
   const revisions: Array<{ id: string; action: string; time: string | null }> = [];
-  for (const { action } of official.actions) {
+  for (const { action, publishedAt } of official.actions) {
     if (action.action === "announce" || action.invalidates_event || action.action === "amend" && action.time !== null) {
       revisions.push({ id: action.id, action: action.invalidates_event ? "cancel" : action.action, time: action.time });
       if (action.invalidates_event) plan = null;
-      else if (action.action === "announce") plan = action.time;
+      else if (action.action === "announce") plan = action.time ?? defaultActionTime(action.action, publishedAt);
       else if (["announced", "in_progress"].includes(official.status)) plan = action.time;
     }
   }

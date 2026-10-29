@@ -11,6 +11,7 @@ import { applyOfflineRecognition, applyRecognition } from "../backend/assemble.t
 import { storeCollectedPost, sourcePost, loadActionInput } from "../backend/action-store.ts";
 import type { ActionRecognitionBody } from "../backend/recognize.ts";
 import { publicV2Snapshot } from "../backend/public-v2.ts";
+import { inferredConfirmation, inferenceBoundary } from "../backend/confirmation.ts";
 
 const localized = (value: string) => ({ en: value, zh: value, "zh-Hant": value, ja: value, ko: value, ru: value, es: value });
 const at = "2026-10-23T12:00:00.000Z";
@@ -38,12 +39,36 @@ beforeEach(async () => {
 after(closeDb);
 
 for (const definition of definitions) {
+  test(`${definition.monitorId}: unusable time metadata does not block a clear retrospective completion`, async () => inMonitor(definition, async () => {
+    for (const timeExcerpt of [null, "", "2026-10-24T10:00:00Z", "earlier"]) {
+      const text = "We reset usage earlier.", saved = await post(definition, text), answer = response(text);
+      answer.actions[0]!.timeExcerpt = timeExcerpt;
+      await applyOfflineRecognition(saved.id, answer, saved.version);
+      const input = await loadActionInput(), action = input.actions.find(action => action.sources.some(source => source.postId === saved.id));
+      assert.equal(action?.time, at);
+      assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
+    }
+  }));
+
+  test(`${definition.monitorId}: a future deadline does not reject an already completed reset`, async () => inMonitor(definition, async () => {
+    const timeExcerpt = "before Oct 24, 2026 at 3pm UTC", text = `We reset usage ${timeExcerpt}.`;
+    const saved = await post(definition, text), answer = response(text);
+    answer.actions[0]!.timeExcerpt = timeExcerpt;
+    await applyOfflineRecognition(saved.id, answer, saved.version);
+    assert.equal((await loadActionInput()).actions[0]!.time, at);
+    assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
+  }));
+
   test(`${definition.monitorId}: an adjacent question does not block an explicit completed reset`, async () => inMonitor(definition, async () => {
     const text = "What would you like with your side of reset? It's done.";
     const saved = await post(definition, text);
     await applyOfflineRecognition(saved.id, response(text), saved.version);
     assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
     assert.equal((await publicV2Snapshot()).events[0]!.status, "completed");
+    const input = await loadActionInput();
+    assert.equal(input.actions[0]!.time, at);
+    assert.equal(input.events[0]!.scope!.note!.en, "All users");
+    assert.equal(input.events[0]!.scope!.note!.zh, "所有用户");
   }));
 
   test(`${definition.monitorId}: a valid action survives another fact requiring review and is not retried`, async () => inMonitor(definition, async () => {
@@ -92,21 +117,21 @@ for (const definition of definitions) {
     claim.rawScope = { audienceSource: "all paid users", audienceZh: "付费用户", productsZh: "Unlisted Studio", plans: null };
     claim.scope.type = "paid_users";
     claim.scope.productCodes = ["unlisted-studio"];
-    claim.scope.note = localized("Paid users");
+    claim.scope.note = { ...localized("Paid users"), zh: "付费用户" };
     claim.scopeExcerpt = text;
     await applyOfflineRecognition(saved.id, answer, saved.version);
     const event = (await publicV2Snapshot()).events[0]!;
     assert.equal(event.status, "completed");
     assert.equal(event.scope.type, "paid_users");
     assert.deepEqual(event.scope.productCodes, []);
-    assert.match(event.scope.note!.zh, /unknown 所有产品/);
+    assert.equal(event.scope.note!.zh, "付费用户");
     assert.match(event.summary!.zh, /Unlisted Studio/);
     assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
   }));
 }
 
 test("relative forecasts keep interval precision; vague forecasts keep the action without inventing a clock", async () => inMonitor(codex, async () => {
-  for (const [expression, expected] of [["in the next hour", `${at}/2026-10-23T13:00:00.000Z`], ["in a few minutes", null]] as const) {
+  for (const [expression, expected] of [["in the next hour", `${at}/2026-10-23T13:00:00.000Z`], ["in a few minutes", "2026-10-23"], ["soon", "2026-10-23"], ["at an unspecified time", "2026-10-23"]] as const) {
     const text = `We will reset usage ${expression}.`, saved = await post(codex, text), answer = response(text);
     answer.actions[0]!.action = "announce";
     answer.actions[0]!.timeExcerpt = expression;
@@ -114,6 +139,10 @@ test("relative forecasts keep interval precision; vague forecasts keep the actio
     const input = await loadActionInput(), action = input.actions.find(action => action.sources.some(source => source.postId === saved.id))!;
     assert.equal(action.time, expected);
     assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
+    const event = input.events.find(event => event.id === action.event_id)!;
+    const boundary = inferenceBoundary(expected);
+    assert.equal(inferredConfirmation(event, input, boundary - 1), null);
+    assert.equal(inferredConfirmation(event, input, boundary)!.time, expected);
   }
 }));
 
@@ -124,7 +153,7 @@ test("unknown audience and hourly coverage do not become all-users evidence or a
   await applyOfflineRecognition(saved.id, answer, saved.version);
   const event = (await publicV2Snapshot()).events[0]!;
   assert.equal(event.scope.type, "unknown");
-  assert.match(event.scope.note!.zh, /unknown 所有用户/);
+  assert.equal(event.scope.note!.zh, "所有用户");
   assert.deepEqual(event.scope.quotaWindowCodes, ["weekly"]);
   assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
 }));
