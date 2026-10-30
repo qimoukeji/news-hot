@@ -260,7 +260,9 @@ export interface AdminRunStatistics {
   complete?: boolean;
   collectionComplete?: boolean;
   skipped?: boolean;
-  reason?: "page_limit";
+  reason?: "page_limit" | "search_failed";
+  searchFailures?: Array<{ author: string; receiptId?: number; billingUnknown: boolean; recovery: "next_scan" | "manual";
+    reason: "network_unknown" | "http_rejected" | "invalid_response" | "request_busy"; httpStatus?: number }>;
   pages?: number;
   paidPages?: number;
   reusedPages?: number;

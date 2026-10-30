@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { sql, type Db } from "@aihot/backend/db";
 import { shutdownSignal } from "@aihot/backend/lib/shutdown";
-import { completeReceipt } from "@aihot/backend/providers/receipts";
+import { completeReceipt, ProviderRejectedError, ReceiptBusyError, ReceiptFailedError, ReceiptUnknownError } from "@aihot/backend/providers/receipts";
+import { JobRunError } from "@aihot/backend/jobs/queue";
 import { monitor, monitorId, isAuthor, purpose } from "./context.ts";
 import { collectorName, cursorKey, watermarksKey } from "../config.ts";
 import { searchTweets, lookupTweets, tweetText, type Tweet } from "./providers/collectors.ts";
@@ -11,12 +12,25 @@ import { collectionQuery, embeddedQuote, replyTarget } from "./post-policy.ts";
 import { buildThreadGroups } from "./thread-groups.ts";
 
 interface Cursor { checkpointVersion: 2; scannedThrough?: string }
+export interface SearchFailure {
+  author: string; receiptId?: number; billingUnknown: boolean; recovery: "next_scan" | "manual";
+  httpStatus?: number;
+  reason: "network_unknown" | "http_rejected" | "invalid_response" | "request_busy";
+}
 export interface CollectionResult {
   stored: number; pages: number; returned: number; embedded: number; contextFetched: number; contextOnly: number; issues: number; contextLimitReached: boolean;
   paidPages: number; reusedPages: number; windowPages: number; collectionComplete: boolean; pageLimitReached: boolean;
+  searchFailures: SearchFailure[];
+}
+export class CollectionIncompleteError extends JobRunError<CollectionResult & { outcome: "partial"; complete: false; reason: "search_failed"; pending?: number }> {
+  constructor(result: CollectionResult) {
+    super(`Search incomplete: ${result.searchFailures.map(f => `${f.author}${f.receiptId ? ` receipt #${f.receiptId}` : ""} (${f.httpStatus ? `HTTP ${f.httpStatus}; ` : ""}${f.reason}; ${f.recovery})`).join(", ")}`,
+      { ...result, outcome: "partial", complete: false, reason: "search_failed" });
+  }
 }
 interface AuthorProgress {
   handle: string; lower: number; query: string; cursor: string | null; visited: string[]; complete: boolean;
+  replacesReceiptId?: number; failure?: SearchFailure;
 }
 interface CollectionProgress { startedAt: string; authors: AuthorProgress[]; pages: number }
 export const collectionProgressKey = (roundId: string) => `collection:progress:${collectorName()}:${roundId}`;
@@ -41,7 +55,7 @@ function validatePost(post: Tweet) {
 /** Parse and persist all returned candidates before following ancestry or invoking any model. */
 export async function collectPosts(opts: { startedAt?: Date; roundId?: string; resume?: boolean } = {}): Promise<CollectionResult> {
   const result: CollectionResult = { stored: 0, pages: 0, returned: 0, embedded: 0, contextFetched: 0, contextOnly: 0, issues: 0, contextLimitReached: false,
-    paidPages: 0, reusedPages: 0, windowPages: 0, collectionComplete: false, pageLimitReached: false };
+    paidPages: 0, reusedPages: 0, windowPages: 0, collectionComplete: false, pageLimitReached: false, searchFailures: [] };
   if (process.env.COLLECT_ENABLED !== "true") return result;
   const started = opts.startedAt ?? new Date(), cursor = await state<Cursor>(cursorKey());
   if (cursor && (cursor.checkpointVersion !== 2 || !cursor.scannedThrough)) throw new Error("Monitor success checkpoint is incomplete");
@@ -99,16 +113,31 @@ export async function collectPosts(opts: { startedAt?: Date; roundId?: string; r
     }
   }
   for (const author of progress.authors) {
+    if (author.failure?.recovery === "manual") { result.searchFailures.push(author.failure); continue; }
     while (!author.complete) {
       shutdownSignal.signal.throwIfAborted();
       if (maxPagesPerRun !== undefined && result.paidPages >= maxPagesPerRun) {
         result.pageLimitReached = true;
+        if (result.searchFailures.length) throw new CollectionIncompleteError(result);
         return result;
       }
-      const response = await searchTweets(author.query, { purpose: purpose("scan"), subject: `x:${author.handle.toLowerCase()}`, window: roundId, cursor: author.cursor, resume: opts.resume });
+      let response;
+      try {
+        response = await searchTweets(author.query, { purpose: purpose("scan"), subject: `x:${author.handle.toLowerCase()}`,
+          window: roundId, cursor: author.cursor, resume: opts.resume, replacesReceiptId: author.replacesReceiptId,
+          onAttempt: () => { result.paidPages++; } });
+      } catch (error) {
+        shutdownSignal.signal.throwIfAborted();
+        const failure = await searchFailure(error, author.handle);
+        if (!failure) throw error;
+        author.failure = failure;
+        if (failure.reason === "network_unknown") author.replacesReceiptId = failure.receiptId;
+        result.searchFailures.push(failure);
+        await saveProgress();
+        break;
+      }
       result.pages++; result.returned += response.tweets.length;
       if (response.reused) result.reusedPages++;
-      else result.paidPages++;
       for (const post of response.tweets) {
         validatePost(post);
         if (authorKey(post.user.screen_name) !== authorKey(author.handle)
@@ -119,12 +148,15 @@ export async function collectPosts(opts: { startedAt?: Date; roundId?: string; r
       if (response.nextCursor && author.visited.includes(response.nextCursor)) throw new Error("Collection returned a repeated page cursor; coverage remains incomplete");
       author.cursor = response.nextCursor;
       author.complete = !response.nextCursor;
+      delete author.failure;
+      delete author.replacesReceiptId;
       if (response.nextCursor) author.visited.push(response.nextCursor);
       progress.pages++;
       await sql.begin(async tx => { await completeReceipt(tx, response.receiptId); await saveProgress(tx); });
       result.windowPages = progress.pages;
     }
   }
+  if (result.searchFailures.length) throw new CollectionIncompleteError(result);
   result.collectionComplete = true;
   await fillContext();
   const final = await loadActionInput();
@@ -177,4 +209,20 @@ export async function collectPosts(opts: { startedAt?: Date; roundId?: string; r
       }
     }
   }
+}
+
+/** Only search transport losses get a fresh request on the next task; raw received answers are retained. */
+async function searchFailure(error: unknown, author: string): Promise<SearchFailure | null> {
+  if (error instanceof ProviderRejectedError) return { author, receiptId: error.receiptId, httpStatus: error.status ?? undefined, billingUnknown: false,
+    reason: "http_rejected", recovery: error.retryable ? "next_scan" : "manual" };
+  if (error instanceof ReceiptBusyError) return { author, billingUnknown: false, reason: "request_busy", recovery: "next_scan" };
+  if (!(error instanceof ReceiptUnknownError || error instanceof ReceiptFailedError)) return null;
+  const [row] = await sql<{ billing_unknown: boolean; has_response: boolean }[]>`
+    SELECT response IS NOT NULL AS has_response,
+      EXISTS (SELECT 1 FROM receipt_attempts a WHERE a.receipt_id=r.id AND a.status='unknown') AS billing_unknown
+    FROM receipts r WHERE id=${error.receiptId} AND purpose=${purpose("scan")} AND service=${collectorName()}`;
+  if (!row) return null;
+  const recover = row.billing_unknown && !row.has_response;
+  return { author, receiptId: error.receiptId, billingUnknown: row.billing_unknown,
+    reason: recover ? "network_unknown" : "invalid_response", recovery: recover ? "next_scan" : "manual" };
 }

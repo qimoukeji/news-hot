@@ -11,6 +11,17 @@ test("run statistics expose only bounded counters and known control values", () 
   for (const value of [null, [], "source", { text: "private source", outcome: "private source", reason: "private source" }]) assert.equal(runStatistics(value), null);
 });
 
+test("failed searches expose recovery information without raw responses or arbitrary error text", () => {
+  const failure = { author: "grok", receiptId: 169, billingUnknown: true, recovery: "next_scan" as const, reason: "network_unknown" as const };
+  const detail = runStatistics({ reason: "search_failed", searchFailures: [{ ...failure, text: "private source", error: "private error" },
+    { ...failure, author: "private source text" }, { ...failure, recovery: "private error" }] });
+  assert.deepEqual(detail, { reason: "search_failed", searchFailures: [failure] });
+  const result = runResult({ job: "grok-reset.tick", status: "failed", detail });
+  assert.equal(result.tone, "bad"); assert.match(result.summary!, /@grok.*回执 #169.*计费未知.*下次定时续采/);
+  const invalid = runResult({ job: "grok-reset.tick", status: "failed", detail: { searchFailures: [{ ...failure, reason: "invalid_response", billingUnknown: false, recovery: "manual" }] } });
+  assert.match(invalid.summary!, /响应无效.*需人工处理/);
+});
+
 test("a historical ok monitor run with reviewed records shows review rather than complete", () => {
   const result = runResult({ job: "monitor.tick", status: "ok", detail: { processed: 5, reviewed: 3, failed: 0, pages: 2, stored: 3 } });
   assert.equal(result.label, "已结束，需复核"); assert.equal(result.tone, "warn");

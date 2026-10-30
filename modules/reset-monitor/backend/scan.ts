@@ -5,7 +5,7 @@ import { deliverContent } from "@aihot/backend/notify/deliver";
 import { monitor, monitorId, authorHandles } from "./context.ts";
 import { publicV2Snapshot } from "./public-v2.ts";
 import { cursorKey, watermarksKey, collectorName } from "../config.ts";
-import { collectPosts, collectionProgressKey } from "./collection.ts";
+import { collectPosts, collectionProgressKey, CollectionIncompleteError } from "./collection.ts";
 import { processPending } from "./thread-processing.ts";
 
 const PUSH_MAX_AGE_MS = 36 * 3600_000;
@@ -90,8 +90,11 @@ async function tick() {
     await setState(windowKey, window);
   }
   const started = new Date(window.startedAt);
-  await touchWatermarks({ lastAttemptAt: started.toISOString() });
-  const collected = await collectPosts({ startedAt: started, roundId: window.roundId, resume });
+  await touchWatermarks({ lastAttemptAt: new Date().toISOString(), windowStartedAt: started.toISOString() });
+  const collected = await collectPosts({ startedAt: started, roundId: window.roundId, resume }).catch(async error => {
+    if (error instanceof CollectionIncompleteError) error.detail.pending = await pendingPosts();
+    throw error;
+  });
   if (!collected.collectionComplete) return { ...collected, outcome: "partial", complete: false, reason: "page_limit", processed: 0, failed: 0, groups: 0, modelCalls: 0, reviewed: 0, schemaFailures: 0, pushed: 0, pending: await pendingPosts() };
   const result = await processPending();
   const pending = await pendingPosts();

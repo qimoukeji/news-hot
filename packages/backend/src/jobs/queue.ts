@@ -197,6 +197,11 @@ export async function workModuleQueues(boss: PgBoss): Promise<void> {
 
 // Scheduled task bookkeeping: every run leaves a row, so operators see the latest result.
 
+export class JobRunError<T extends object = Record<string, unknown>> extends Error {
+  readonly detail: T;
+  constructor(message: string, detail: T) { super(message); this.detail = detail; }
+}
+
 export async function recordRun<T>(job: string, fn: () => Promise<T>): Promise<T> {
   const [row] = await sql<{ id: number }[]>`INSERT INTO job_runs (job) VALUES (${job}) RETURNING id`;
   try {
@@ -205,7 +210,9 @@ export async function recordRun<T>(job: string, fn: () => Promise<T>): Promise<T
     await sql`UPDATE job_runs SET status = 'ok', finished_at = now(), detail = ${sql.json(detail as never)} WHERE id = ${row!.id}`;
     return result;
   } catch (error) {
-    await sql`UPDATE job_runs SET status = 'failed', finished_at = now(), error = ${String(error).slice(0, 4000)} WHERE id = ${row!.id}`;
+    const detail = error instanceof JobRunError ? error.detail : null;
+    await sql`UPDATE job_runs SET status = 'failed', finished_at = now(), error = ${String(error).slice(0, 4000)},
+      detail = ${detail ? sql.json(detail as never) : null} WHERE id = ${row!.id}`;
     throw error;
   }
 }

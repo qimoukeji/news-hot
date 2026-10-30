@@ -204,7 +204,7 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
 
   if (claimed.kind === "reuse") return { receiptId: claimed.row.id, response: claimed.row.response, reused: true };
   if (claimed.kind === "busy") throw new ReceiptBusyError(`Receipt ${claimed.row.id} is in flight`);
-  if (claimed.kind === "failed") throw new ReceiptFailedError(claimed.row.id, `Receipt ${claimed.row.id} failed; the next scan uses a new request`);
+  if (claimed.kind === "failed") throw new ReceiptFailedError(claimed.row.id, `Receipt ${claimed.row.id} failed; automatic resend of this request is disabled`);
   if (claimed.kind === "unknown") {
     throw new ReceiptUnknownError(claimed.row.id, `Receipt ${claimed.row.id} has an unknown outcome`);
   }

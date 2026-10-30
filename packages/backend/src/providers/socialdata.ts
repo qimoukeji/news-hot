@@ -1,7 +1,7 @@
 // SocialData (X search). Paid per request: every call goes through receipts and the budget.
 import { credential } from "../config.ts";
 import { guardedFetch } from "../lib/http-fetch.ts";
-import { assertAccepted, assertRequestCanSend, canResumeDefiniteFailure, isMonitorRequest, paidRequest, ProviderNotSentError, rejectReceivedResponse, type CallOutcome, type ReceiptRequest, type ReceiptResult } from "./receipts.ts";
+import { assertAccepted, assertRequestCanSend, canResumeDefiniteFailure, isMonitorRequest, paidRequest, ProviderNotSentError, ReceiptFailedError, rejectReceivedResponse, type CallOutcome, type ReceiptRequest, type ReceiptResult } from "./receipts.ts";
 
 export interface SdUser {
   name: string;
@@ -75,10 +75,11 @@ function apiBase(): string {
  * nothing. Any other status outside 2xx means SocialData did not take the request (assertAccepted).
  */
 async function get<T>(path: string, request: Omit<ReceiptRequest, "service">,
-  read: { timeoutMs: number; maxBytes: number; missing?: Record<string, unknown>; settle: (json: T) => CallOutcome }): Promise<ReceiptResult> {
+  read: { timeoutMs: number; maxBytes: number; missing?: Record<string, unknown>; onAttempt?: () => void; settle: (json: T) => CallOutcome }): Promise<ReceiptResult> {
   const key = credential("collectors", "SOCIALDATA_API_KEY");
   if (!key) throw new Error("SOCIALDATA_API_KEY is not configured");
   return paidRequest({ service: "socialdata", ...request }, async () => {
+    read.onAttempt?.();
     await assertRequestCanSend("socialdata");
     if (isMonitorRequest(request.purpose) && process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
     const res = await guardedFetch(`${apiBase()}${path}`, {
@@ -90,7 +91,13 @@ async function get<T>(path: string, request: Omit<ReceiptRequest, "service">,
     if (res.status === 404 && read.missing) return { response: null, usage: read.missing, cost: null };
     const text = res.text();
     assertAccepted("socialdata", res.status, text);
-    return read.settle(JSON.parse(text) as T);
+    let json: T;
+    try { json = JSON.parse(text) as T; }
+    catch (error) {
+      if (!isMonitorRequest(request.purpose)) throw error;
+      return { response: text, cost: null };
+    }
+    return read.settle(json);
   });
 }
 
@@ -108,11 +115,13 @@ function validateMonitorTweet(tweet: SdTweet, depth = 0) {
  * Searches recent tweets. `window` makes the receipt identity time-bucketed so a retry in the same
  * bucket reuses the stored response instead of paying again.
  */
-export async function searchTweets(query: string, opts: { purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null; resume?: boolean }): Promise<SearchResult> {
+export async function searchTweets(query: string, opts: { purpose: string; subject: string; window: string; type?: "Latest" | "Top"; cursor?: string | null; resume?: boolean; replacesReceiptId?: number; onAttempt?: () => void }): Promise<SearchResult> {
   const type = opts.type ?? "Latest";
   const sp = new URLSearchParams({ query, type });
   if (opts.cursor) sp.set("cursor", opts.cursor);
-  const request = { purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window }, requestSummary: { query, type, cursor: opts.cursor ?? null } };
+  const request = { purpose: opts.purpose, subject: opts.subject, identity: { query, type, cursor: opts.cursor ?? null, window: opts.window },
+    ...(opts.replacesReceiptId ? { attemptTag: `after:${opts.replacesReceiptId}` } : {}),
+    requestSummary: { query, type, cursor: opts.cursor ?? null, ...(opts.replacesReceiptId ? { replacesReceiptId: opts.replacesReceiptId } : {}) } };
   const retryFailed = opts.resume === true && await canResumeDefiniteFailure({ service: "socialdata", ...request });
   const receipt = await get<{ tweets?: SdTweet[] }>(`/twitter/search?${sp}`,
     { ...request, retryFailed },
@@ -120,6 +129,7 @@ export async function searchTweets(query: string, opts: { purpose: string; subje
       // Deeper pages of a search over two dozen accounts can take well over 20 seconds.
       timeoutMs: 60_000,
       maxBytes: 12 * 1024 * 1024,
+      onAttempt: opts.onAttempt,
       settle: (json) => {
         const tweets = json?.tweets?.length ?? 0;
         return { response: json, usage: { tweets }, cost: objectsCost(tweets) };
@@ -130,7 +140,10 @@ export async function searchTweets(query: string, opts: { purpose: string; subje
     try {
       if (!json || !Array.isArray(json.tweets) || json.next_cursor != null && typeof json.next_cursor !== "string") throw new Error("SocialData returned an invalid monitor page");
       json.tweets.forEach(t => validateMonitorTweet(t));
-    } catch (error) { await rejectReceivedResponse(receipt.receiptId, String(error)); throw error; }
+    } catch (error) {
+      await rejectReceivedResponse(receipt.receiptId, String(error));
+      throw new ReceiptFailedError(receipt.receiptId, "SocialData search response is invalid; administrator review required", { cause: error });
+    }
   }
   return { tweets: json.tweets ?? [], nextCursor: json.next_cursor ?? null, receiptId: receipt.receiptId, reused: receipt.reused };
 }

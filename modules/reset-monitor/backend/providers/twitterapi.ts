@@ -2,7 +2,7 @@ import { z } from "zod";
 import { credential } from "@aihot/backend/config";
 import { sql } from "@aihot/backend/db";
 import { guardedFetch } from "@aihot/backend/lib/http-fetch";
-import { assertAccepted, assertRequestCanSend, canResumeDefiniteFailure, paidRequest, ProviderNotSentError, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
+import { assertAccepted, assertRequestCanSend, canResumeDefiniteFailure, paidRequest, ProviderNotSentError, ReceiptFailedError, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
 import type { Tweet, SearchOptions, LookupOptions, LookupResult } from "./collectors.ts";
 import { pacedTwitterApiRequest } from "./twitterapi-pacing.ts";
 
@@ -56,25 +56,33 @@ export async function ensureTwitterApiBudget() {
   if (!budget) throw new Error("Configure a twitterapi_io budget before collection");
 }
 
-async function request(path: string, opts: { purpose: string; subject: string; identity: unknown; summary: Record<string, unknown>; resume?: boolean }) {
+async function request(path: string, opts: { purpose: string; subject: string; identity: unknown; summary: Record<string, unknown>; resume?: boolean; replacesReceiptId?: number; onAttempt?: () => void }) {
   if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
   const key = credential("collectors", "TWITTERAPI_IO_API_KEY");
   if (!key) throw new Error("TWITTERAPI_IO_API_KEY is not configured");
   const base = (credential("collectors", "TWITTERAPI_IO_BASE_URL") ?? "https://api.twitterapi.io").replace(/\/$/, "");
   await ensureTwitterApiBudget();
   const req = { service: "twitterapi_io", purpose: opts.purpose, subject: opts.subject,
-    identity: { base, input: opts.identity }, requestSummary: opts.summary };
+    identity: { base, input: opts.identity },
+    ...(opts.replacesReceiptId ? { attemptTag: `after:${opts.replacesReceiptId}` } : {}),
+    requestSummary: { ...opts.summary, ...(opts.replacesReceiptId ? { replacesReceiptId: opts.replacesReceiptId } : {}) } };
   const retryFailed = opts.resume === true && await canResumeDefiniteFailure(req);
-  const receipt = await paidRequest({ ...req, retryFailed }, () => pacedTwitterApiRequest(async () => {
-    await assertRequestCanSend("twitterapi_io");
-    if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
-    const res = await guardedFetch(`${base}${path}`, { route: "egress", headers: { "X-API-Key": key, accept: "application/json" }, timeoutMs: 60_000, maxBytes: 12 * 1024 * 1024 });
-    const text = res.text();
-    assertAccepted("twitterapi_io", res.status, text.replaceAll(key, "[redacted]"));
-    // Keep the received raw answer first; validation failures must never repurchase it.
-    const response = JSON.parse(text);
-    return { response, usage: { tweets: Array.isArray(response?.tweets) ? response.tweets.length : 0 }, cost: null };
-  }));
+  const receipt = await paidRequest({ ...req, retryFailed }, () => {
+    opts.onAttempt?.();
+    return pacedTwitterApiRequest(async () => {
+      await assertRequestCanSend("twitterapi_io");
+      if (process.env.COLLECT_ENABLED !== "true") throw new ProviderNotSentError("COLLECT_ENABLED is disabled");
+      const res = await guardedFetch(`${base}${path}`, { route: "egress", headers: { "X-API-Key": key, accept: "application/json" }, timeoutMs: 60_000, maxBytes: 12 * 1024 * 1024 });
+      const text = res.text();
+      assertAccepted("twitterapi_io", res.status, text.replaceAll(key, "[redacted]"));
+      // Keep the received raw answer first; validation failures must never repurchase it.
+      let response: unknown;
+      try { response = JSON.parse(text); }
+      catch { response = text; }
+      const tweets = response && typeof response === "object" && "tweets" in response ? response.tweets : null;
+      return { response, usage: { tweets: Array.isArray(tweets) ? tweets.length : 0 }, cost: null };
+    });
+  });
   return receipt;
 }
 
@@ -99,7 +107,7 @@ export async function searchTweets(query: string, opts: SearchOptions) {
     return { tweets: page.tweets.map(t => normalizeTweet(t)), nextCursor: page.has_next_page === false ? null : page.next_cursor || null, receiptId: receipt.receiptId, reused: receipt.reused };
   } catch (error) {
     await rejectReceivedResponse(receipt.receiptId, String(error));
-    throw error;
+    throw new ReceiptFailedError(receipt.receiptId, "TwitterAPI.io search response is invalid; administrator review required", { cause: error });
   }
 }
 

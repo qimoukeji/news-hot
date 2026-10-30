@@ -5,7 +5,12 @@ interface Result { label: string; tone: "ok" | "warn" | "bad" | "muted"; summary
 
 /** The task can end normally while some business judgments still need an administrator. */
 export function runResult(run: Run): Result {
-  if (run.status === "failed") return { label: "执行失败", tone: "bad", summary: null };
+  if (run.status === "failed") {
+    const failures = run.detail?.searchFailures;
+    const reason = { network_unknown: "网络结果未知", http_rejected: "请求被拒绝", invalid_response: "响应无效", request_busy: "请求尚未完成" };
+    return { label: "执行失败", tone: "bad", summary: failures?.length ? failures.map(f =>
+      `@${f.author}${f.receiptId ? ` · 回执 #${f.receiptId}` : ""} · ${reason[f.reason]}${f.httpStatus ? ` HTTP ${f.httpStatus}` : ""}${f.billingUnknown ? " · 计费未知" : ""} · ${f.recovery === "next_scan" ? "下次定时续采" : "需人工处理"}`).join("；") : null };
+  }
   if (run.status !== "ok") return { label: run.status === "running" || !run.status ? "运行中" : run.status, tone: "muted", summary: null };
   const detail = run.detail;
   if (!detail || !/^(?:monitor\.tick|[a-z][a-z0-9-]*-reset\.tick)$/.test(run.job)) return { label: "已完成", tone: "ok", summary: null };
