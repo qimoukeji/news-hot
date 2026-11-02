@@ -8,6 +8,7 @@ import {
   rawEventUpdateSchema,
   businessTimeBoundary,
   compareBusinessTime,
+  eventOrderTime,
   normalizePublicTime,
   type ResetSnapshot,
   type ResetEvent,
@@ -203,14 +204,14 @@ export function publicV2ActionTitle(
   ) as ResetEvent["title"];
 }
 
-export function timeBoundary(time: EventTime): string | null {
-  return time.kind === "unknown" ? null : businessTimeBoundary(time);
+export function timeBoundary(time: EventTime | null): string | null {
+  return time === null || time.kind === "unknown" ? null : businessTimeBoundary(time);
 }
 function exactTime(event: { time: PublicTime }): number | null {
-  return event.time.kind === "instant" ? Date.parse(event.time.at) : null;
+  return event.time?.kind === "instant" ? Date.parse(event.time.at) : null;
 }
-function eventDate(event: { time: PublicTime }): string {
-  return event.time.kind === "date" ? event.time.date : beijingDate(businessTimeBoundary(event.time));
+function eventDate(event: { time: PublicTime }): string | null {
+  return event.time === null ? null : event.time.kind === "date" ? event.time.date : beijingDate(businessTimeBoundary(event.time));
 }
 function medianInterval(events: Array<{ time: PublicTime }>) {
   const times = events
@@ -234,14 +235,10 @@ function medianInterval(events: Array<{ time: PublicTime }>) {
   };
 }
 
-function predictedTime(time: PublicTime | null, interval: number | null, today: string): PublicTime | null {
+function predictedTime(time: string | null, interval: number | null): string | null {
   if (time === null || interval === null) return null;
   const milliseconds = Math.round(interval * 86_400_000);
-  const shift = (at: string) => Temporal.Instant.from(at).add({ milliseconds }).toString();
-  const prediction: PublicTime = time.kind === "date"
-    ? { ...time, date: Temporal.PlainDate.from(time.date).toPlainDateTime().add({ milliseconds }).toPlainDate().toString() }
-    : time.kind === "range" ? { ...time, from: shift(time.from), through: shift(time.through) } : { ...time, at: shift(time.at) };
-  return eventDate({ time: prediction }) < today ? { kind: "date", date: today, timeZone: "Asia/Shanghai" } : prediction;
+  return Temporal.Instant.from(time).add({ milliseconds }).toString();
 }
 
 export function publicV2Sources(
@@ -321,15 +318,22 @@ export function projectRawV2(
     })
     .sort(
       (a, b) =>
-        compareBusinessTime(b.time, a.time) ||
+        compareBusinessTime(eventOrderTime(b), eventOrderTime(a)) ||
         byId(a, b),
     );
   const completed = events.flatMap(event => {
     const time = facts.get(event.id)!.confirmedTime;
     return event.status === "completed" && time !== null ? [{ id: event.id, type: event.type, time }] : [];
   }).sort((a, b) => compareBusinessTime(b.time, a.time) || byId(a, b));
-  const resetTime = completed[0]?.time ?? null;
-  const latest = events.find(event => event.status !== "cancelled");
+  const latestConfirmation = completed[0]?.time;
+  const resetTime = latestConfirmation?.kind === "instant" ? latestConfirmation.at : null;
+  const latest = events.filter(event => event.status !== "cancelled")
+    .sort((a, b) => {
+      const latestSource = (event: ResetEvent) => facts.get(event.id)!.actions.at(-1)?.publishedAt ?? event.publishedAt;
+      return Date.parse(latestSource(b)) - Date.parse(latestSource(a))
+        || Number(b.status === "announced") - Number(a.status === "announced")
+        || Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || byId(a, b);
+    })[0];
   const today = beijingDate(now),
     since = addDays(today, -29);
   const count = (type: ResetEvent["type"]) => {
@@ -352,7 +356,8 @@ export function projectRawV2(
     sources: [...sourceMap.values()],
     catalog: config.catalog,
     events,
-    predictedResetTime: predictedTime(resetTime, typical?.value ?? null, today),
+    predictedResetTime: predictedTime(resetTime, typical?.value ?? null),
+    hasAnnouncement: latest?.status === "announced",
     announcedResetTime: latest?.status === "announced" ? facts.get(latest.id)!.announcedTime : null,
     resetTime,
     statistics: {

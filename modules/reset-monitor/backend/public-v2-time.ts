@@ -243,9 +243,9 @@ export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, a
 }
 
 /** Unusable time metadata cannot reject an independently verified action. */
-export function resolveActionTime(action: Pick<ActionDraft, "action" | "invalidatesEvent"> & { timeExcerpt: string | null }, post: PublicV2PostRow, activityAnchor?: string): { time: BusinessTime; issue: string | null } {
+export function resolveActionTime(action: Pick<ActionDraft, "action" | "invalidatesEvent"> & { timeExcerpt: string | null }, post: PublicV2PostRow, activityAnchor?: string): { time: BusinessTime | null; issue: string | null } {
   const publishedAt = new Date(post.published_at).toISOString();
-  const fallback = { time: defaultActionTime(action.action, publishedAt), issue: null };
+  const fallback = { time: defaultActionTime(action.action, post.published_at), issue: null };
   if (!action.timeExcerpt || !quotedInPost(action.timeExcerpt, post.text)) return fallback;
   const occurred = action.invalidatesEvent || action.action === "progress" || action.action === "confirm";
   const resolved = resolveEventExpression(action.timeExcerpt, post,

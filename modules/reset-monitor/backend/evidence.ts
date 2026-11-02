@@ -7,8 +7,16 @@ export function quotedInPost(excerpt: string, post: string): boolean {
   return parts.length > 0 && parts.every(part => loose(post).includes(part));
 }
 
+/** Read literal counters only; the recognizer must still establish their event and meaning. */
+export function bankedRoundCounts(excerpt: string): { completed: number; total: number } | null {
+  const match = /\bbanked\s+(\d+)\s*\/\s*(\d+)\b/i.exec(excerpt);
+  if (!match) return null;
+  const completed = Number(match[1]), total = Number(match[2]);
+  return Number.isSafeInteger(completed) && Number.isSafeInteger(total) ? { completed, total } : null;
+}
+
 /** Inspect the completed assertion rather than an adjacent question or usage instruction. */
-export function confirmsCompletedAction(excerpt: string): boolean {
+export function confirmsCompletedAction(excerpt: string, verifiedBankedEvent = false): boolean {
   const clauses = excerpt.match(/[^.!?。！？;；\n]+[.!?。！？;；]?/g) ?? [];
   return clauses.some(clause => {
     if (/[?？]/.test(clause) || /\b(?:will|would|should|soon|coming|tomorrow|scheduled|planned|expected|if|unless|maybe|perhaps|might|could|not|never|haven['’]t|hasn['’]t|isn['’]t|wasn['’]t|weren['’]t|didn['’]t|can['’]t|won['’]t)\b|尚未|还未|還未|没有|沒有|并未|並未|将会|將會|如果/i.test(clause)) return false;
@@ -22,6 +30,9 @@ export function confirmsCompletedAction(excerpt: string): boolean {
     if (!quotaObject && !generic) return false;
     if (generic && clauses.some(other => !/[?？]/.test(other) && /\b(?:reset|usage|limits?|quotas?|credits?)\b|重置|额度|額度/i.test(other)
       && /\b(?:will|would|should|not|never|scheduled|tomorrow)\b|尚未|如果/i.test(other))) return false;
+    // Only validate a model-selected confirmation of a verified event; never select or create a round here.
+    const banked = verifiedBankedEvent && bankedRoundCounts(clause);
+    if (banked && banked.completed > 0 && banked.completed <= banked.total) return true;
     return /\b(?:restored|completed|done|landed|propagated|available|claimable|opened|granted|issued|credited|added|distributed|delivered)\b|\b(?:we(?:['’]ve|\s+have)?\s+reset|(?:has|have|was|were|is|are)\s+(?:been\s+)?(?:now\s+)?reset|(?:usage|limits?|quotas?|all)\s+reset|reset\s+(?:usage|limits?|quotas?|all|everyone|for\s+(?:all|everyone|paid)))\b|已(?:完成|重置|恢复|恢復|发放|發放|开放|開放|生效)|可(?:领取|領取)/i.test(clause);
   });
 }

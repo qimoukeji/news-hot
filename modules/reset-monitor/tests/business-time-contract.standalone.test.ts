@@ -3,12 +3,33 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { encodeCursor } from "@aihot/backend/lib/cursor";
 import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
-import { businessTimeSchema, normalizePublicTime, compareBusinessTime, businessTimeBoundary, isFutureBusinessTime, eventUpdateSchema, platformOverviewSchema, eventListSchema, resetSnapshotSchema, type BusinessTime } from "../public-v2.ts";
+import { businessTimeSchema, normalizePublicTime, compareBusinessTime, businessTimeBoundary, isFutureBusinessTime, eventUpdateSchema, platformOverviewSchema, eventListSchema, resetSnapshotSchema, utcInstantSchema, type BusinessTime } from "../public-v2.ts";
 import { projectPublicV2 } from "../backend/public-v2.ts";
 import { paginatePublicV2, parsePublicV2Query, PublicV2QueryError } from "../backend/public-v2-list.ts";
-import { inferredConfirmation, inferenceBoundary } from "../backend/confirmation.ts";
+import { inferredConfirmation, inferredConfirmationTime, inferenceBoundary } from "../backend/confirmation.ts";
 import { resolveActionTime } from "../backend/public-v2-time.ts";
 import { fixture } from "./action-fixture.ts";
+
+test("overview instants require UTC timestamp strings and reject all object and imprecise forms", () => {
+  const instant = "2026-11-02T05:42:26.123456789Z";
+  const snapshot = projectPublicV2(fixture(), codex);
+  assert.equal(utcInstantSchema.safeParse(instant).success, true);
+  for (const key of ["resetTime", "predictedResetTime"] as const) {
+    assert.equal(resetSnapshotSchema.safeParse({ ...snapshot, [key]: instant }).success, true);
+    for (const value of [{ kind: "instant", at: instant }, { kind: "date", date: "2026-11-02", timeZone: "UTC" },
+      { kind: "range", from: instant, through: instant }, { kind: "deadline", at: instant },
+      "2026-11-02", "2026-11-02T13:42:26+08:00", "2026-02-30T00:00:00Z", "2026-11-02T05:42:26.1234567890Z"])
+      assert.equal(resetSnapshotSchema.safeParse({ ...snapshot, [key]: value }).success, false);
+  }
+});
+
+test("inferred confirmation uses the exact plan boundary without truncating nanoseconds", () => {
+  const at = "2026-11-02T05:42:26.123456789Z";
+  for (const time of [{ kind: "instant", at }, { kind: "deadline", at },
+    { kind: "range", from: "2026-10-31T05:42:26Z", through: at }] as BusinessTime[])
+    assert.deepEqual(inferredConfirmationTime(time), { kind: "instant", at });
+  assert.deepEqual(inferredConfirmationTime({ kind: "deadline", at: "2026-11-02T13:42:26.123456789+08:00" }), { kind: "instant", at });
+});
 
 test("business time is a strict four-kind contract and rejects all old scalar forms", () => {
   const valid: BusinessTime[] = [
@@ -111,11 +132,16 @@ test("date confirmation stays at Beijing 18:00 while the original date and zone 
   assert.equal(inferenceBoundary(plan), boundary);
   assert.equal(inferredConfirmation(input.events[0]!, input, boundary - 1), null);
   const confirmation = inferredConfirmation(input.events[0]!, input, boundary)!;
-  assert.deepEqual(confirmation.time, plan);
+  assert.deepEqual(confirmation.time, { kind: "instant", at: "2026-11-02T10:00:00Z" });
   const snapshot = projectPublicV2(input, codex, boundary);
   assert.deepEqual(snapshot.announcedResetTime, plan);
   assert.deepEqual(snapshot.events[0]!.time, plan);
   assert.deepEqual(snapshot.events[0]!.updates[0]!.time, plan);
+  input.actions.push(confirmation);
+  const completed = projectPublicV2(input, codex, boundary);
+  assert.deepEqual(completed.events[0]!.time, confirmation.time);
+  assert.equal(completed.resetTime, "2026-11-02T10:00:00Z");
+  assert.deepEqual(completed.events[0]!.updates.find(update => update.action === "announce")!.time, plan);
   assert.equal(eventUpdateSchema.safeParse({ ...snapshot.events[0]!.updates[0], time: "2026-11-02" }).success, false);
   assert.equal(platformOverviewSchema.safeParse({ ...snapshot, announcedResetTime: "11月02日 18:00:00" }).success, false);
 });

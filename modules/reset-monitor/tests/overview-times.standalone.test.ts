@@ -7,6 +7,7 @@ import { projectPublicV2 } from "../backend/public-v2.ts";
 import { actionDraftSchema, type ActionInput, type ActionRow } from "../actions.ts";
 import { eventUpdateSchema, platformOverviewSchema } from "../public-v2.ts";
 import { fixture, addAction } from "./action-fixture.ts";
+import { inferredConfirmation } from "../backend/confirmation.ts";
 
 const now = Date.parse("2026-10-26T10:00:00Z");
 const empty = (): ActionInput => ({ events: [], posts: [], actions: [] });
@@ -26,9 +27,27 @@ test("empty and single-confirmation histories have no interval or prediction", (
   assert.deepEqual(read(input).announcedResetTime, null);
   event(input, "only", "2026-10-20T00:00:00Z", "bonus_credit");
   const result = read(input);
-  assert.deepEqual(result.resetTime, bt("2026-10-20T00:00:00Z"));
+  assert.deepEqual(result.resetTime, "2026-10-20T00:00:00Z");
   assert.equal(result.statistics.typicalInterval, null);
   assert.deepEqual(result.predictedResetTime, null);
+});
+
+test("a same-post next-round unknown plan wins over the completed round and older dated plans", () => {
+  const input = empty();
+  const older = event(input, "older", "2026-12-01T00:00:00Z", "reset_credit", "announce");
+  input.posts.find(post => post.id === "older-post")!.published_at = "2026-10-01T00:00:00Z";
+  event(input, "a-completed", "2026-11-01T00:43:20Z", "reset_credit");
+  event(input, "z-next", "2026-11-01T00:43:20Z", "reset_credit", "announce").time = null;
+  const result = read(input);
+  assert.equal(result.hasAnnouncement, true);
+  assert.equal(result.announcedResetTime, null);
+  assert.equal(result.events.find(event => event.id === "z-next")!.time, null);
+  assert.equal(result.resetTime, "2026-11-01T00:43:20Z");
+  assert.equal(older.time!.kind, "instant");
+  addAction(input, "done-next", "confirm", "2026-11-01T23:27:20Z", { event_id: "z-next" });
+  const completed = read(input);
+  assert.equal(completed.hasAnnouncement, false);
+  assert.equal(completed.announcedResetTime, null);
 });
 
 test("all kinds share confirmation intervals and prediction uses the same median", () => {
@@ -38,9 +57,33 @@ test("all kinds share confirmation intervals and prediction uses the same median
   event(input, "bonus", "2026-10-11T00:00:00Z", "bonus_credit");
   const result = read(input, Date.parse("2026-10-15T00:00:00Z"));
   assert.deepEqual(result.statistics.typicalInterval, { value: 5, unit: "day", sampleCount: 2 });
-  assert.deepEqual(result.resetTime, bt("2026-10-11T00:00:00Z"));
-  assert.deepEqual(result.predictedResetTime, bt("2026-10-16T00:00:00Z"));
+  assert.deepEqual(result.resetTime, "2026-10-11T00:00:00Z");
+  assert.deepEqual(result.predictedResetTime, "2026-10-16T00:00:00Z");
   assert.deepEqual([result.statistics.resetsLast30Days, result.statistics.cardsLast30Days, result.statistics.bonusesLast30Days], [1, 1, 1]);
+});
+
+test("official, administrator and inferred confirmations jointly contribute across all event kinds", () => {
+  const input = empty();
+  event(input, "official", "2026-10-01T00:00:00Z");
+  const manual = event(input, "manual", "2026-10-05T00:00:00Z", "reset_credit");
+  manual.sources = [];
+  event(input, "inferred", "2026-10-09T00:00:00Z/2026-10-11T00:00:00Z", "bonus_credit", "announce");
+  const inferred = inferredConfirmation(input.events.find(event => event.id === "inferred")!, input, now)!;
+  input.actions.push(inferred);
+  const result = read(input);
+  assert.deepEqual(result.statistics.typicalInterval, { value: 5, unit: "day", sampleCount: 2 });
+  assert.equal(result.resetTime, "2026-10-11T00:00:00Z");
+  assert.equal(result.predictedResetTime, "2026-10-16T00:00:00Z");
+  assert.deepEqual([result.statistics.resetsLast30Days, result.statistics.cardsLast30Days, result.statistics.bonusesLast30Days], [1, 1, 1]);
+});
+
+test("overview instant strings preserve nanoseconds in both the confirmation and prediction", () => {
+  const input = empty();
+  event(input, "first", "2026-10-01T00:00:00.123456789Z");
+  event(input, "latest", "2026-10-03T00:00:00.123456789Z", "reset_credit");
+  const result = read(input);
+  assert.equal(result.resetTime, "2026-10-03T00:00:00.123456789Z");
+  assert.equal(result.predictedResetTime, "2026-10-05T00:00:00.123456789Z");
 });
 
 test("a new future announcement preserves the latest persisted confirmation without inferring on read", () => {
@@ -50,7 +93,7 @@ test("a new future announcement preserves the latest persisted confirmation with
   event(input, "new-plan", "2026-10-28T00:00:00Z", "direct_reset", "announce");
   const result = read(input);
   assert.deepEqual(result.announcedResetTime, bt("2026-10-28T00:00:00Z"));
-  assert.deepEqual(result.resetTime, bt("2026-10-10T00:00:00Z"));
+  assert.deepEqual(result.resetTime, "2026-10-10T00:00:00Z");
   const { events: _events, generatedAt: _generated, schemaVersion: _schema, ...overview } = result;
   assert.equal(platformOverviewSchema.safeParse(overview).success, true);
 });
@@ -61,7 +104,7 @@ test("confirmation replaces its plan and does not borrow scheduled time", () => 
   input.actions[0]!.time = bt("2026-10-28T00:00:00Z");
   addAction(input, "confirmation", "confirm", "2026-10-25T08:00:00Z");
   assert.deepEqual(read(input).announcedResetTime, null);
-  assert.deepEqual(read(input).resetTime, bt("2026-10-25T08:00:00.000Z"));
+  assert.deepEqual(read(input).resetTime, "2026-10-25T08:00:00.000Z");
 });
 
 test("progress and ordinary amendments cannot move confirmation anchors or 30-day counts", () => {
@@ -69,16 +112,16 @@ test("progress and ordinary amendments cannot move confirmation anchors or 30-da
   input.actions[0]!.time = bt("2026-09-01T00:00:00Z");
   addAction(input, "amend", "amend", "2026-10-25T00:00:00Z", { time: bt("2026-10-24T00:00:00Z") });
   addAction(input, "progress", "progress", "2026-10-26T00:00:00Z");
-  assert.deepEqual(read(input).resetTime, bt("2026-09-01T00:00:00Z"));
+  assert.deepEqual(read(input).resetTime, "2026-09-01T00:00:00Z");
   assert.deepEqual(read(input).events[0]!.time, bt("2026-09-01T00:00:00Z"));
   assert.equal(read(input).statistics.resetsLast30Days, 0);
 });
 
-test("overview takes the current explicitly amended plan", () => {
+test("overview takes the current explicitly rescheduled announcement", () => {
   const input = fixture();
   input.actions[0]!.action = "announce";
   input.actions[0]!.time = bt("2026-10-28");
-  addAction(input, "amend", "amend", "2026-10-25T00:00:00Z", { time: bt("2026-10-29") });
+  addAction(input, "rescheduled", "announce", "2026-10-25T00:00:00Z", { time: bt("2026-10-29") });
   assert.deepEqual(read(input).events[0]!.time, bt("2026-10-29"));
   assert.deepEqual(read(input).announcedResetTime, bt("2026-10-29"));
 });
@@ -109,7 +152,7 @@ test("cancelled latest events do not hide valid older plans or confirmations", (
   const cancelled = event(input, "cancelled", "2026-10-29", "bonus_credit", "announce");
   input.actions.push({ ...cancelled, id: "invalidation", action: "amend", invalidates_event: true, sequence: 2, time: bt("2026-10-30") });
   assert.deepEqual(read(input).announcedResetTime, bt("2026-10-28"));
-  assert.deepEqual(read(input).resetTime, bt("2026-10-10T00:00:00Z"));
+  assert.deepEqual(read(input).resetTime, "2026-10-10T00:00:00Z");
 });
 
 test("new announcements and confirmations cannot resume a cancelled event", () => {
@@ -139,7 +182,7 @@ test("median ignores duplicates, dates, ranges, future and older-than-90-day con
   assert.deepEqual(stale.predictedResetTime, null);
 });
 
-test("prediction stays on its Beijing day then rolls to today at midnight", () => {
+test("prediction remains the same point after expiry and Beijing midnight", () => {
   const input = empty();
   event(input, "first", "2026-10-24T00:00:00Z");
   event(input, "second", "2026-10-25T00:00:00Z", "bonus_credit");
@@ -147,19 +190,23 @@ test("prediction stays on its Beijing day then rolls to today at midnight", () =
     ["2026-10-25T10:00:00Z", "2026-10-26T00:00:00Z"],
     ["2026-10-26T10:00:00Z", "2026-10-26T00:00:00Z"],
     ["2026-10-26T15:59:59Z", "2026-10-26T00:00:00Z"],
-    ["2026-10-26T16:00:00Z", "2026-10-27"],
-    ["2026-10-27T16:00:00Z", "2026-10-28"],
-  ]) assert.deepEqual(read(input, Date.parse(at!)).predictedResetTime, bt(expected!));
+    ["2026-10-26T16:00:00Z", "2026-10-26T00:00:00Z"],
+    ["2026-10-27T16:00:00Z", "2026-10-26T00:00:00Z"],
+  ]) assert.deepEqual(read(input, Date.parse(at!)).predictedResetTime, expected!);
 });
 
-test("prediction preserves date and interval precision of the latest confirmation", () => {
+test("the latest non-instant confirmation makes overview instants unavailable without falling back", () => {
   const input = empty();
   event(input, "first", "2026-10-20T00:00:00Z");
   event(input, "second", "2026-10-22T00:00:00Z", "reset_credit");
   const last = event(input, "last", "2026-10-25", "bonus_credit");
-  assert.deepEqual(read(input).predictedResetTime, bt("2026-10-27"));
+  assert.equal(read(input).resetTime, null);
+  assert.equal(read(input).predictedResetTime, null);
+  assert.deepEqual(read(input).events[0]!.time, bt("2026-10-25"));
   last.time = bt("2026-10-25T00:00:00Z/2026-10-25T01:00:00Z");
-  assert.deepEqual(read(input).predictedResetTime, bt("2026-10-27T00:00:00Z/2026-10-27T01:00:00Z"));
+  assert.equal(read(input).resetTime, null);
+  assert.equal(read(input).predictedResetTime, null);
+  assert.deepEqual(read(input).statistics.typicalInterval, { value: 2, unit: "day", sampleCount: 1 });
 });
 
 test("only amendments invalidate events and retired actions are rejected", () => {

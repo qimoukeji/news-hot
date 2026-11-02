@@ -1,6 +1,6 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
-import { defaultActionTime, reduceEvent, type ActionInput, type ActionRow, type EventRow } from "../actions.ts";
+import { reduceEvent, type ActionInput, type ActionRow, type EventRow } from "../actions.ts";
 import { normalizePublicTime, type BusinessTime } from "../public-v2.ts";
 
 export const inferredConfirmationTitle = {
@@ -18,26 +18,30 @@ export const inferredConfirmationSummary = {
   es: "Ha llegado la hora anunciada. Consulta tu cuenta para comprobar el estado real del restablecimiento.",
 };
 
-/** Saved announcement times include publication-time defaults. */
+/** Unknown planned times never become a completion deadline. */
 export function announcementBasis(event: EventRow, input: ActionInput) {
   const official = reduceEvent(event, { ...input, actions: input.actions.filter(action => action.sources.length) });
   if (!official) return null;
   let plan: BusinessTime | null = null;
   const revisions: Array<{ id: string; action: string; time: BusinessTime | null }> = [];
-  for (const { action, publishedAt } of official.actions) {
-    if (action.action === "announce" || action.invalidates_event || action.action === "amend" && action.time !== null) {
+  for (const { action } of official.actions) {
+    if (action.action === "announce" || action.invalidates_event) {
       revisions.push({ id: action.id, action: action.invalidates_event ? "cancel" : action.action, time: action.time });
       if (action.invalidates_event) plan = null;
-      else if (action.action === "announce") plan = action.time ?? defaultActionTime(action.action, publishedAt);
-      else if (["announced", "in_progress"].includes(official.status)) plan = action.time;
+      else if (action.action === "announce") plan = action.time;
     }
   }
   return { official, plan: plan ? normalizePublicTime(plan) : null, version: sha256(stableJson(revisions)) };
 }
 
+export function inferredConfirmationTime(time: BusinessTime): Extract<BusinessTime, { kind: "instant" }> {
+  if (time.kind === "date") return { kind: "instant", at: Temporal.PlainDate.from(time.date).toZonedDateTime({ timeZone: "Asia/Shanghai", plainTime: "18:00:00" }).toInstant().toString() };
+  const at = time.kind === "range" ? time.through : time.at;
+  return { kind: "instant", at: at.endsWith("Z") ? at : Temporal.Instant.from(at).toString() };
+}
+
 export function inferenceBoundary(time: BusinessTime): number {
-  if (time.kind === "date") return Temporal.PlainDate.from(time.date).toZonedDateTime({ timeZone: "Asia/Shanghai", plainTime: "18:00:00" }).epochMilliseconds;
-  const nanos = Temporal.Instant.from(time.kind === "range" ? time.through : time.at).epochNanoseconds;
+  const nanos = Temporal.Instant.from(inferredConfirmationTime(time).at).epochNanoseconds;
   return Number(nanos / 1_000_000n + (nanos % 1_000_000n > 0n ? 1n : 0n));
 }
 
@@ -51,7 +55,7 @@ export function inferredConfirmation(event: EventRow, input: ActionInput, now = 
   if (input.actions.some(action => action.id === id)) return null;
   return { id, event_id: event.id, action: "confirm", invalidates_event: false,
     title: { ...inferredConfirmationTitle },
-    summary: { ...inferredConfirmationSummary }, time: basis.plan, sources: [],
+    summary: { ...inferredConfirmationSummary }, time: inferredConfirmationTime(basis.plan), sources: [],
     sequence: Math.max(0, ...input.actions.filter(action => action.event_id === event.id).map(action => action.sequence)) + 1,
     created_at: new Date(now).toISOString(), updated_at: new Date(now).toISOString() };
 }

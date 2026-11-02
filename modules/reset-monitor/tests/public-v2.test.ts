@@ -37,7 +37,7 @@ import {
   applyPublicV2,
 } from "../backend/public-v2-review.ts";
 import { properName, publicV2Snapshot } from "../backend/public-v2.ts";
-import { compareBusinessTime, eventListSchema, overviewSchema } from "../public-v2.ts";
+import { eventListSchema, overviewSchema } from "../public-v2.ts";
 const definitions = [codex, claude, grok],
   sourceAt = "2026-10-01T12:00:00Z";
 after(async () => {
@@ -80,6 +80,12 @@ test("all platforms expose action updates through v2 only and support ETag", asy
           "?from=2026-10-01&to=2026-10-31&timeZone=Asia%2FShanghai",
       );
       assert.equal(response.statusCode, 200, response.body);
+      assert.match(String(response.headers.etag), /actions-v2\.5-/);
+      const staleVersion = await app.inject({
+        url: definition.publicApiPath + "?from=2026-10-01&to=2026-10-31&timeZone=Asia%2FShanghai",
+        headers: { "if-none-match": String(response.headers.etag).replace("actions-v2.5", "actions-v2.4") },
+      });
+      assert.equal(staleVersion.statusCode, 200);
       const body = eventListSchema.parse(response.json());
       assert.equal(body.list[0]!.updates[0]!.action, "announce");
       assert.deepEqual(body.list[0]!.updates[0]!.time, bt("2026-10-02T00:00:00Z"));
@@ -124,7 +130,7 @@ test("same post can append a confirmation with explicit source commands", async 
   const preview = (await previewMonitorReview("post", draft))!;
   await submitMonitorReview("post", { ...draft, previewToken: preview.previewToken }, "reviewer");
   const snapshot = await publicV2Snapshot();
-  assert.equal(snapshot.events[0]!.status, "completed"); assert.deepEqual(snapshot.resetTime, bt(new Date(sourceAt).toISOString()));
+  assert.equal(snapshot.events[0]!.status, "completed"); assert.deepEqual(snapshot.resetTime, new Date(sourceAt).toISOString());
   assert.deepEqual(snapshot.announcedResetTime, null); assert.equal(snapshot.events[0]!.updates.length, 2);
   const input = await loadActionInput(); assert.equal(input.posts[0]!.processing_status, "processed");
   const serialized = JSON.stringify(snapshot);
@@ -146,18 +152,23 @@ test("HTTP overview retains confirmations beside a new plan and recomputes cance
   const app = await buildApp();
   try {
     const before = await app.inject("/api/v2/overview"), platform = overviewSchema.parse(before.json()).platforms.find(row => row.platform === "codex")!;
+    assert.match(String(before.headers.etag), /reset-actions-overview-v2\.6-/);
+    const staleVersion = await app.inject({ url: "/api/v2/overview", headers: { "if-none-match": String(before.headers.etag).replace("overview-v2.6", "overview-v2.5") } });
+    assert.equal(staleVersion.statusCode, 200);
     assert.deepEqual(platform.announcedResetTime, bt(time(1)));
-    assert.deepEqual(platform.resetTime, bt(time(-3)));
+    assert.equal(platform.hasAnnouncement, true);
+    assert.deepEqual(platform.resetTime, time(-3));
     assert.deepEqual(platform.statistics.typicalInterval, { value: 3, unit: "day", sampleCount: 2 });
-    assert.equal(platform.predictedResetTime!.kind, "instant");
-    assert.equal(compareBusinessTime(platform.predictedResetTime!, bt(time(0))), 0);
+    assert.equal(typeof platform.predictedResetTime, "string");
+    assert.equal(Date.parse(platform.predictedResetTime!), Date.parse(time(0)));
     await inMonitor(codex, async () => sql.begin(async db => writePostActions(db, (await sourcePost("bonus-history", db))!, [{ eventId: "bonus-history", action: "amend", invalidatesEvent: true, time: bt(time(0)), title: properName("Campaign cancelled"), summary: null }])));
     const after = await app.inject({ url: "/api/v2/overview", headers: { "if-none-match": before.headers.etag! } });
     assert.equal(after.statusCode, 200);
     assert.notEqual(after.headers.etag, before.headers.etag);
     const changed = overviewSchema.parse(after.json()).platforms.find(row => row.platform === "codex")!;
-    assert.deepEqual(changed.resetTime, bt(time(-6)));
+    assert.deepEqual(changed.resetTime, time(-6));
     assert.deepEqual(changed.announcedResetTime, bt(time(1)));
+    assert.equal(changed.hasAnnouncement, true);
     assert.equal(changed.statistics.bonusesLast30Days, 0);
     assert.deepEqual(changed.statistics.typicalInterval, { value: 3, unit: "day", sampleCount: 1 });
     const snapshot = await inMonitor(codex, () => publicV2Snapshot());
@@ -415,7 +426,16 @@ test("OpenAPI v2 describes action sources and v1 no longer advertises monitor sn
     assert.ok(spec.paths["/api/v2/codex-resets"]);
     const event = spec.components.schemas.EventList.properties.list.items;
     const variants = event.properties.updates.items.oneOf;
-    assert.equal(variants.length, 3);
+    assert.deepEqual(variants.map((variant: any) => variant.properties.action.const).sort(), ["amend", "announce", "confirm", "progress"]);
+    for (const variant of variants) {
+      const acceptsNull = variant.properties.time.anyOf?.some((time: any) => time.type === "null") ?? false;
+      assert.equal(acceptsNull, variant.properties.action.const === "announce", "only announcement actions have an unknown business time");
+      assert.ok(variant.required.includes("time"), "unknown time is explicit null rather than an omitted field");
+    }
+    assert.ok(event.properties.time.anyOf.some((time: any) => time.type === "null"));
+    const overview = spec.components.schemas.Overview.properties.platforms.items;
+    assert.equal(overview.properties.hasAnnouncement.type, "boolean");
+    assert.ok(overview.required.includes("hasAnnouncement"));
     const confirmation = variants.find((variant: any) => variant.properties.action.const === "confirm");
     assert.equal(confirmation.properties.sources.minItems, undefined);
     assert.ok(variants.filter((variant: any) => variant !== confirmation).every((variant: any) => variant.properties.sources.minItems === 1));

@@ -21,7 +21,7 @@ function catalogMatch(value: string, entries: Array<{ code: string; name: Record
 }
 
 /** Missing catalog coverage widens matching only, never claims that every account is eligible. */
-export function recognizedScope(claim: Claim, source: string, author: string, inherited?: EditorialScope | null): { scope: Claim["scope"]; issue: string | null } {
+export function recognizedScope(claim: Claim, source: string, author: string, inherited?: EditorialScope | null, useAuthorDefault = true): { scope: Claim["scope"]; issue: string | null } {
   const scope = structuredClone(claim.scope), raw = claim.rawScope, catalog = monitor().publicV2?.catalog;
   const issue = (reason: string) => ({ scope, issue: reason });
   if (!catalog) return { scope, issue: null };
@@ -41,7 +41,7 @@ export function recognizedScope(claim: Claim, source: string, author: string, in
   if (plans.some(({ plan }) => !quotedInPost(plan, source))) return issue("套餐不在本帖中");
   scope.planCodes = plans.length ? [...new Set(plans.flatMap(({ entry }) => entry ? [entry.code] : []))] : inherited?.planCodes ?? [];
   if (plans.length && plans.some(({ entry }) => !entry)) scope.type = "unknown";
-  const products = raw.productsZh ?? (inherited ? null : monitor().defaultProductForAuthor?.(author)) ?? "";
+  const products = raw.productsZh ?? (inherited || !useAuthorDefault ? null : monitor().defaultProductForAuthor?.(author)) ?? "";
   const matched = catalogMatch(products, catalog.products);
   const unknownProduct = products ? !matched.complete || !matched.codes.length : !inherited?.productCodes.length;
   // A partial product list cannot express its unmapped remainder; do not imply it is exhaustive.

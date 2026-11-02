@@ -43,7 +43,7 @@ export function registerHttp(app: FastifyInstance) {
       const query = parsePublicV2Query(strictQuery(req, ["from", "to", "timeZone", "limit", "cursor"]));
       const list = await read("eventsV2", { ...query });
       return sendJsonWithEtag(req, reply, list as object, {
-        etagPrefix: `${monitor().monitorId}-actions-v2.4`, etagOf: { query, list },
+        etagPrefix: `${monitor().monitorId}-actions-v2.5`, etagOf: { query, list },
         cacheControl: "public, max-age=60, s-maxage=60, must-revalidate",
       });
     } catch (error) {

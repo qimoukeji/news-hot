@@ -153,7 +153,7 @@ docker compose up -d --build
 
 本站采集、上下文补齐与按串识别见[共享采集流程](docs/reset-monitor-collection.md)。第三方负责回复筛选，返回数据入库后补齐必要父帖与引用关系，一串调用一次识别模型，每个动作保留具体原帖证据。
 
-本站安装 [Codex 重置监控](modules/codex-reset/README.md)、[Claude 额度动态](modules/claude-reset/README.md)与 [Grok 额度动态](modules/grok-reset/README.md)，共用 [重置监控引擎](modules/reset-monitor/README.md)。三个模块统一支持额度重置、重置卡和奖励额度，按平台分别配置回复他人、自回复与关键词加模型过滤，本站三个平台采集主帖及自回复，回复他人与关键词过滤关闭。动作记录预告、确认、进展、修订，事件统一聚合状态时间；确认允许没有关联帖子，公开标题摘要只描述业务事实或已到预告时间，后续官方补证更新同一动作，其他动作必须有来源。取消通过修订的 invalidatesEvent=true 表达；模型只读取有来源的官方事实。帖子和动作保存七语言标题摘要及原帖链接，原文仅后台可读，原始响应仅存内部付费回执。站点和全部公开出口统一使用 [v2](docs/reset-monitor-v2.md)，静态接口说明为 `/openapi-v2.json`，`updates` 完整返回动作及其来源（无来源确认返回空数组），不保留独立人工判定字段、监控 v1 或旧站点数据接口。账号、套餐和公开目录在 `site/reset-monitors.ts` 配置，新监控不复制业务代码或另建产品表。旧结构部署按 [重新部署与数据导入](docs/deploy.md#重新部署与数据导入)从当前结构的完整备份恢复到空库。
+本站安装 [Codex 重置监控](modules/codex-reset/README.md)、[Claude 额度动态](modules/claude-reset/README.md)与 [Grok 额度动态](modules/grok-reset/README.md)，共用 [重置监控引擎](modules/reset-monitor/README.md)。三个模块统一支持额度重置、重置卡和奖励额度，按平台分别配置回复他人、自回复与关键词加模型过滤，本站三个平台采集主帖及自回复，回复他人与关键词过滤关闭。动作记录预告、确认、进展、修订，按轮建立事件并聚合状态时间；同作者独立帖子可按明确承诺和轮次关联，中间无关帖不打断。未知预告时间保留为空，不自动完成；确认允许没有关联帖子，公开标题摘要只描述业务事实或已到预告时间，后续官方补证更新同一动作，其他动作必须有来源。取消通过修订的 invalidatesEvent=true 表达；模型只读取有来源的官方事实。帖子和动作保存七语言标题摘要及原帖链接，原文仅后台可读，原始响应仅存内部付费回执。站点和全部公开出口统一使用 [v2](docs/reset-monitor-v2.md)，静态接口说明为 `/openapi-v2.json`，`updates` 完整返回动作及其来源（无来源确认返回空数组），不保留独立人工判定字段、监控 v1 或旧站点数据接口。账号、套餐和公开目录在 `site/reset-monitors.ts` 配置，新监控不复制业务代码或另建产品表。旧结构部署按 [重新部署与数据导入](docs/deploy.md#重新部署与数据导入)从当前结构的完整备份恢复到空库。
 
 ## 文档
 

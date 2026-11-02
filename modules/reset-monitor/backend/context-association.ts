@@ -1,5 +1,6 @@
 import { reduceEvent, type ActionInput, type EventRow, type SourcePostRow } from "../actions.ts";
 import { postContext } from "./post-context.ts";
+import { bankedRoundCounts } from "./evidence.ts";
 
 function sourceLink(value: string): string | null {
   try {
@@ -44,4 +45,30 @@ export function contextEventCandidates(post: SourcePostRow, input: ActionInput, 
 export function uniqueContextEvent(post: SourcePostRow, input: ActionInput, kind: EventRow["type"]): EventRow | null {
   const candidates = contextEventCandidates(post, input, kind);
   return candidates.length === 1 ? candidates[0]! : null;
+}
+
+/** A dual-action parent can finish one round and promise the unique next round. */
+export function uniqueRoundContextEvent(post: SourcePostRow, input: ActionInput, kind: EventRow["type"]): EventRow | null {
+  const current = bankedRoundCounts(post.text ?? "");
+  if (kind !== "reset_credit" || !current || current.completed < 2 || current.completed > current.total) return null;
+  const before = new Date(post.published_at).getTime(), saved = new Map(input.posts.map(source => [source.id, source]));
+  const author = (value: string) => value.replace(/^@/, "").toLowerCase();
+  const official = { ...input, actions: input.actions.map(action => ({ ...action, sources: action.sources.filter(ref => {
+    const source = saved.get(ref.postId);
+    return source && new Date(source.published_at).getTime() < before;
+  }) })).filter(action => action.sources.length > 0) };
+  const related = relatedContextEvents(post, official, kind).map(event => ({ event, state: reduceEvent(event, official) }));
+  if (related.length < 2 || related.some(({ event, state }) => event.withdrawn || !state || state.status === "cancelled")) return null;
+  const pending = related.filter(({ state }) => state!.status === "announced" || state!.status === "in_progress");
+  if (pending.length !== 1) return null;
+  const target = pending[0]!, completed = related.filter(({ state }) => state!.status === "completed");
+  const bridge = postContext(post, input.posts).some(context => {
+    const source = saved.get(context.id), previous = bankedRoundCounts(source?.text ?? "");
+    if (!source || !context.publishedAt || author(source.author) !== author(post.author)
+      || author(context.author) !== author(source.author) || new Date(source.published_at).getTime() !== Date.parse(context.publishedAt)
+      || !previous || previous.total !== current.total || previous.completed + 1 !== current.completed) return false;
+    return target.state!.actions.some(({ action }) => action.action === "announce" && action.sources.some(ref => ref.postId === source.id))
+      && completed.some(({ state }) => state!.actions.some(({ action }) => action.id === state!.confirmationId && action.sources.some(ref => ref.postId === source.id)));
+  });
+  return bridge ? target.event : null;
 }

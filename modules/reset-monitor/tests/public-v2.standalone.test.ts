@@ -38,7 +38,7 @@ test("scope keeps explicit eligibility notes and never expands unknown users", (
 test("initial confirmation completes without an announcement", () => {
   const snapshot = read();
   assert.equal(snapshot.events[0]!.status, "completed");
-  assert.deepEqual(snapshot.resetTime, bt(at));
+  assert.deepEqual(snapshot.resetTime, at);
   assert.deepEqual(snapshot.announcedResetTime, null);
   assert.equal(snapshot.statistics.resetsLast30Days, 1);
   assert.equal(snapshot.events[0]!.updates[0]!.id, "action-1");
@@ -91,7 +91,7 @@ test("confirmation replaces planned timing and later progress cannot undo comple
     time: bt("2026-10-21T00:00:00Z"),
   });
   assert.equal(read(input).events[0]!.status, "completed");
-  assert.deepEqual(read(input).resetTime, bt("2026-10-11T00:00:00.000Z"));
+  assert.deepEqual(read(input).resetTime, "2026-10-11T00:00:00.000Z");
   assert.deepEqual(read(input).announcedResetTime, null);
 });
 test("different progress and amendment facts stay separate", () => {
@@ -140,7 +140,7 @@ test("bonus lifecycle uses shared completion and progress without clock changes"
   for (const [index, fact] of ["Claiming closed", "Credits expired", "Claiming reopened"].entries()) {
     addAction(input, `progress-${index}`, "progress", `2026-10-${11 + index}T00:00:00Z`, { title: properName(fact) });
     assert.equal(read(input).events[0]!.status, "completed");
-    assert.deepEqual(read(input).resetTime, bt(at));
+    assert.deepEqual(read(input).resetTime, at);
   }
   assert.equal(
     projectPublicV2(input, codex, Date.parse("2030-01-01")).events[0]!.status,

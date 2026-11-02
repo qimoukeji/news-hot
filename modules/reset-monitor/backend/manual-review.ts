@@ -154,16 +154,13 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
   const lastSourceRemovals = after.actions.filter(action => !action.sources.length && state.actions.some(prior => prior.id === action.id && prior.sources.length > 0)).map(action => ({ actionId: action.id, eventId: action.event_id, message: "最后一条来源移除后删除动作，请核对事件当前影响范围" }));
   const deleted = new Set(lastSourceRemovals.map(action => action.actionId));
   after.actions = after.actions.filter(action => !deleted.has(action.id));
-  for (const action of after.actions) if (affected.has(action.event_id) && action.time === null && action.sources.length) {
+  for (const action of after.actions) if (affected.has(action.event_id) && action.action !== "announce" && action.time === null && action.sources.length) {
     const dates = action.sources.map(source => after.posts.find(post => post.id === source.postId))
       .filter(post => post && !post.context_only).map(post => new Date(post!.published_at).toISOString()).sort();
     if (dates.length) action.time = defaultActionTime(action.action, dates[0]!);
   }
   if (after.actions.some(action => !action.sources.length && (action.action !== "confirm" || !action.time))) throw invalid("只有填写明确生效时间的确认动作可以没有来源");
   for (const action of after.actions.filter(action => !action.sources.length)) {
-    const previous = state.actions.find(row => row.id === action.id);
-    // Persisted inferred dates follow the Beijing confirmation boundary, independent of source zone.
-    if (previous && stableJson(previous.time) === stableJson(action.time)) continue;
     if (isFutureBusinessTime(action.time!, new Date(Date.now()).toISOString())) throw invalid("实际生效时间不能在未来");
   }
   const planCorrections: string[] = [];
@@ -171,11 +168,11 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
     const prior = state.actions.find(action => action.id === item.id)!;
     const next = after.actions.find(action => action.id === item.id);
     const event = findEvent(prior.event_id);
-    if (!next || !["announce", "amend"].includes(prior.action) || stableJson(prior.time) === stableJson(next.time)
+    if (!next || prior.action !== "announce" || next.action !== "announce" || stableJson(prior.time) === stableJson(next.time)
       || !currentUnsourcedConfirmation(event, state) || !next.sources.length) continue;
     const revisionId = `plan-correction-${rowVersion({ identity, action: next.id, time: next.time })}`;
     const sequence = Math.max(0, ...after.actions.filter(action => action.event_id === event.id).map(action => action.sequence)) + 1;
-    after.actions.push({ ...next, id: revisionId, sequence, action: next.time ? "amend" : "progress", invalidates_event: false, created_at: createdAt, updated_at: createdAt });
+    after.actions.push({ ...next, id: revisionId, sequence, action: "announce", invalidates_event: false, created_at: createdAt, updated_at: createdAt });
     planCorrections.push(revisionId);
   }
   const retainedPostIds = new Set(command.sources.add.map(source => source.postId));

@@ -11,7 +11,7 @@ import { inMonitor } from "../backend/context.ts";
 import { applyOfflineRecognition, applyRecognition } from "../backend/assemble.ts";
 import { storeCollectedPost, sourcePost, loadActionInput } from "../backend/action-store.ts";
 import type { ActionRecognitionBody } from "../backend/recognize.ts";
-import { publicV2Snapshot } from "../backend/public-v2.ts";
+import { projectPublicV2, publicV2Snapshot } from "../backend/public-v2.ts";
 import { inferredConfirmation, inferenceBoundary } from "../backend/confirmation.ts";
 
 const localized = (value: string) => ({ en: value, zh: value, "zh-Hant": value, ja: value, ko: value, ru: value, es: value });
@@ -132,8 +132,12 @@ for (const definition of definitions) {
   }));
 }
 
-test("relative forecasts keep interval precision; vague forecasts keep the action without inventing a clock", async () => inMonitor(codex, async () => {
-  for (const [expression, expected] of [["in the next hour", `${at}/2026-10-23T13:00:00.000Z`], ["in a few minutes", "2026-10-23"], ["soon", "2026-10-23"], ["at an unspecified time", "2026-10-23"]] as const) {
+for (const [expression, expected, confirmedAt] of [
+    ["in the next hour", `${at}/2026-10-23T13:00:00.000Z`, "2026-10-23T13:00:00.000Z"],
+    ["in a few minutes", null, null],
+    ["soon", null, null],
+    ["at an unspecified time", null, null],
+  ] as const) test(`relative forecast '${expression}' retains its precision and only an explicit plan can auto-confirm`, async () => inMonitor(codex, async () => {
     const text = `We will reset usage ${expression}.`, saved = await post(codex, text), answer = response(text);
     answer.actions[0]!.action = "announce";
     answer.actions[0]!.timeExcerpt = expression;
@@ -142,10 +146,23 @@ test("relative forecasts keep interval precision; vague forecasts keep the actio
     assert.deepEqual(action.time, bt(expected));
     assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
     const event = input.events.find(event => event.id === action.event_id)!;
+    if (expected === null) {
+      assert.equal(inferredConfirmation(event, input, Date.parse("2027-01-01T00:00:00Z")), null);
+      const snapshot = projectPublicV2(input, codex, Date.parse(at));
+      assert.equal(snapshot.events.find(row => row.id === event.id)!.status, "announced");
+      assert.equal(snapshot.events.find(row => row.id === event.id)!.time, null);
+      assert.equal(snapshot.hasAnnouncement, true);
+      assert.equal(snapshot.announcedResetTime, null);
+      return;
+    }
     const boundary = inferenceBoundary(bt(expected));
     assert.equal(inferredConfirmation(event, input, boundary - 1), null);
-    assert.deepEqual(inferredConfirmation(event, input, boundary)!.time, bt(expected));
-  }
+    const confirmation = inferredConfirmation(event, input, boundary)!;
+    assert.deepEqual(confirmation.time, bt(confirmedAt));
+    input.actions.push(confirmation);
+    const completed = projectPublicV2(input, codex, boundary).events.find(row => row.id === event.id)!;
+    assert.deepEqual(completed.time, bt(confirmedAt));
+    assert.deepEqual(completed.updates.find(update => update.id === action.id)!.time, bt(expected));
 }));
 
 test("unknown audience and hourly coverage do not become all-users evidence or a five-hour quota", async () => inMonitor(codex, async () => {

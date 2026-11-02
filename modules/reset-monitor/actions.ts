@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { beijingDate } from "@aihot/contracts/time";
+import { Temporal } from "@js-temporal/polyfill";
 import {
   localizedTextSchema,
   publicTimeSchema,
@@ -116,9 +116,15 @@ export function translated(
   );
 }
 export const iso = (value: Date | string) => new Date(value).toISOString();
-/** A default announcement keeps its Beijing calendar-date precision. */
-export function defaultActionTime(action: ActionKind, publishedAt: Date | string): BusinessTime {
-  return action === "announce" ? { kind: "date", date: beijingDate(publishedAt), timeZone: "Asia/Shanghai" } : { kind: "instant", at: iso(publishedAt) };
+/** Unknown plans stay empty; amendments use the next 10:00 UTC at or after publication. */
+export function defaultActionTime(action: ActionKind, publishedAt: Date | string): BusinessTime | null {
+  if (action === "announce") return null;
+  const sourceAt = iso(publishedAt);
+  if (action !== "amend") return { kind: "instant", at: sourceAt };
+  const publication = Temporal.Instant.from(publishedAt instanceof Date ? sourceAt : publishedAt);
+  const sameDay = Temporal.Instant.from(`${sourceAt.slice(0, 10)}T10:00:00Z`);
+  const at = Temporal.Instant.compare(publication, sameDay) > 0 ? sameDay.add({ hours: 24 }) : sameDay;
+  return { kind: "instant", at: at.toString({ fractionalSecondDigits: 3 }) };
 }
 export function sourcedActions(event: EventRow, input: ActionInput) {
   return input.actions
@@ -166,7 +172,7 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
   );
   if (!initial) return null;
   let status: ResetEvent["status"] = "announced";
-  let time: BusinessTime = { kind: "instant", at: initial.publishedAt };
+  let time: BusinessTime | null = null;
   let announcedTime: BusinessTime | null = null;
   let confirmedTime: BusinessTime | null = null;
   let confirmationId: string | null = null;
@@ -175,7 +181,7 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
     const action = update.action;
     if (action.action === "amend" && action.invalidates_event) {
       status = "cancelled";
-      time = action.time ?? { kind: "instant", at: update.publishedAt };
+      time = action.time ?? defaultActionTime("amend", update.publishedAt);
       announcedTime = confirmedTime = null;
       confirmationId = null;
       officialConfirmed = false;
@@ -189,7 +195,7 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
       announcedTime = null;
     } else if (action.action === "announce" && status !== "cancelled" && !officialConfirmed) {
       status = "announced";
-      time = action.time ?? defaultActionTime(action.action, update.publishedAt);
+      time = action.time;
       announcedTime = time;
       confirmedTime = confirmationId = null;
     } else if (
@@ -199,15 +205,8 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
       status = "in_progress";
       time = action.time ?? { kind: "instant", at: update.publishedAt };
       announcedTime = confirmedTime = confirmationId = null;
-    } else if (action.action === "amend" && status !== "cancelled" && !officialConfirmed) {
-      if (action.time !== null) {
-        status = "announced";
-        announcedTime = action.time;
-        confirmedTime = confirmationId = null;
-      }
-      time = ["announced", "in_progress"].includes(status)
-        ? (action.time ?? { kind: "instant", at: update.publishedAt })
-        : time;
+    } else if (action.action === "amend" && status === "in_progress") {
+      time = action.time ?? defaultActionTime("amend", update.publishedAt);
     }
   }
   return {

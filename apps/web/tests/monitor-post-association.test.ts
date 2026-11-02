@@ -23,7 +23,7 @@ async function open(page: Page, product: Product, query = "", id = "post-3") {
   return url;
 }
 async function chooseEvent(page: Page, product: Product, title = `${product.product} 官方活动`) {
-  await dialog(page).getByRole("button", { name: "关联已有事件", exact: true }).click();
+  await dialog(page).getByRole("button", { name: "关联事件", exact: true }).click();
   const picker = child(page, "选择事件");
   await picker.getByLabel("搜索事件", { exact: true }).fill(title);
   await picker.getByRole("button", { name: new RegExp(title) }).click();
@@ -47,11 +47,14 @@ async function stageNewEvent(page: Page, title: string) {
   await form.getByLabel("摘要（中文）", { exact: true }).fill("新一期活动说明");
   await form.getByLabel("影响范围（中文）", { exact: true }).fill("所有付费用户");
   await expect(form.getByLabel("动作", { exact: true })).toHaveValue("announce");
+  const [actionBounds, timeBounds] = await Promise.all([form.getByLabel("动作", { exact: true }).boundingBox(), form.getByLabel("业务时间", { exact: true }).boundingBox()]);
+  assert.ok(actionBounds && timeBounds && Math.abs(actionBounds.y - timeBounds.y) < 1 && actionBounds.x + actionBounds.width <= timeBounds.x);
   await expect(form.getByLabel("动作", { exact: true }).locator('option[value="progress"]')).toBeDisabled();
   await expect(form.getByLabel("动作", { exact: true }).locator('option[value="amend"]')).toBeDisabled();
   await form.getByLabel("动作标题（中文）", { exact: true }).fill("新一期额度活动预告");
   await form.getByLabel("动作摘要（中文）", { exact: true }).fill("当前帖子明确预告下一轮额度活动");
-  await form.getByLabel("明确业务时间", { exact: true }).selectOption("date");
+  await form.getByLabel("业务时间", { exact: true }).selectOption("date");
+  assert.deepEqual(await form.getByLabel("时间时区", { exact: true }).locator("option").allTextContents(), ["太平洋时间", "UTC", "北京时间"]);
   await form.getByLabel("业务日期", { exact: true }).fill("2026-10-30");
   await form.getByRole("button", { name: "确定", exact: true }).click();
   await expect(form).toHaveCount(0);
@@ -71,13 +74,13 @@ async function newConfirmation(page: Page, title: string) {
   const form = child(page, "新增动作并关联");
   await form.getByLabel("动作", { exact: true }).selectOption("confirm");
   await form.getByLabel("动作标题（中文）", { exact: true }).fill(title);
-  await form.getByLabel("明确业务时间", { exact: true }).selectOption("instant");
-  await form.getByLabel("业务时间时区", { exact: true }).selectOption("UTC");
+  await form.getByLabel("业务时间", { exact: true }).selectOption("instant");
+  await form.getByLabel("时间时区", { exact: true }).selectOption("UTC");
   await form.getByLabel("业务时刻", { exact: true }).fill("2026-10-23T08:00");
   return form;
 }
 async function stageRemove(page: Page, title: string) {
-  await dialog(page).getByRole("button", { name: `移除关联：${title}`, exact: true }).click();
+  await dialog(page).getByRole("button", { name: `移除：${title}`, exact: true }).click();
   await child(page, "移除关联").getByRole("button", { name: "确定移除", exact: true }).click();
   await expect(child(page, "移除关联")).toHaveCount(0);
 }
@@ -103,7 +106,7 @@ for (const product of platforms) for (const width of [1280, 390]) test(`${produc
       await route.fulfill({ response, json: detail });
     });
     const url = await open(page, product);
-    await dialog(page).getByRole("button", { name: "关联已有事件", exact: true }).click();
+    await dialog(page).getByRole("button", { name: "关联事件", exact: true }).click();
     const picker = child(page, "选择事件"), list = picker.getByRole("list", { name: "可选事件", exact: true }), pagination = picker.getByRole("navigation", { name: "事件分页", exact: true });
     await expect(picker.getByLabel("搜索事件", { exact: true })).toBeFocused();
     await expect(list.getByRole("listitem")).toHaveCount(10);
@@ -153,7 +156,7 @@ for (const product of platforms) test(`${product.product}: association summary o
     await expect(dialog(page).locator("input, select, textarea")).toHaveCount(0);
     await expect(dialog(page).getByRole("button", { name: "预览影响", exact: true })).toBeDisabled();
     const heading = await dialog(page).getByRole("heading", { name: "当前关联", exact: true }).boundingBox();
-    const operation = await dialog(page).getByRole("button", { name: "关联已有事件", exact: true }).boundingBox();
+    const operation = await dialog(page).getByRole("button", { name: "关联事件", exact: true }).boundingBox();
     assert.ok(heading && operation && operation.x > heading.x + heading.width && Math.abs(operation.y + operation.height / 2 - heading.y - heading.height / 2) < 16);
     await stageSource(page, product);
     assert.equal(fixture.writes.length, 0, "child dialogs must not preview or commit changes");
@@ -239,7 +242,7 @@ test("official evidence can correct a source-less confirmation without changing 
     await expect(picker.getByLabel("动作标题（中文）", { exact: true })).toHaveValue("已到预告时间");
     await picker.getByLabel("动作标题（中文）", { exact: true }).fill("官方确认额度已重置");
     await picker.getByLabel("动作摘要（中文）", { exact: true }).fill("官方帖子明确表示重置完成");
-    await picker.getByLabel("业务时间时区", { exact: true }).selectOption("UTC");
+    await picker.getByLabel("时间时区", { exact: true }).selectOption("UTC");
     await picker.getByLabel("业务时刻", { exact: true }).fill("2026-10-23T08:00");
     await picker.getByRole("button", { name: "确定", exact: true }).click();
     assert.equal(fixture.writes.length, 0);
@@ -327,11 +330,11 @@ test("removal opens its own dialog, can be undone, and is saved with additions o
   const page = await browser.newPage();
   try {
     await open(page, platforms[0], "", "post-1");
-    await dialog(page).getByRole("button", { name: "移除关联：额度活动预告", exact: true }).click();
+    await dialog(page).getByRole("button", { name: "移除：额度活动预告", exact: true }).click();
     const removal = child(page, "移除关联");
     await expect(removal).toContainText("最后一条来源");
     await removal.getByRole("button", { name: "取消", exact: true }).click();
-    await expect(dialog(page).getByRole("button", { name: "移除关联：额度活动预告", exact: true })).toBeFocused();
+    await expect(dialog(page).getByRole("button", { name: "移除：额度活动预告", exact: true })).toBeFocused();
     await expect(dialog(page).getByRole("button", { name: "预览影响", exact: true })).toBeDisabled();
     await stageRemove(page, "额度活动预告");
     await expect(dialog(page).getByText("待移除", { exact: true })).toBeVisible();

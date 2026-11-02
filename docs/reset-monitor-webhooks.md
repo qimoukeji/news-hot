@@ -31,9 +31,9 @@
 | action | created、updated、withdrawn、restored |
 | event | v2 列表事件对象，不包含 bonusCredit；withdrawn 时为 null |
 
-`event.updates` 是完整动作时间线，包含动作 ID、`announce`／`confirm`／`amend`／`progress`、`invalidatesEvent`、七语言标题摘要、业务时间 `time`、发布时间及全部 `sources: [{postId,sourceId,url}]`。`time` 保留精确时间、日期或区间，未明确或无法解析时在入库阶段保存最早有效来源发帖时间，time 非空。只有 `confirm` 可返回空数组；有来源时 `publishedAt` 取最早有效来源发布时间，无来源时取动作创建时间，不冒充生效时间。后续官方确认补充同一动作的来源、标题摘要及实际时间，保持动作 ID，通知修订号递增，事件不重复计数。
+`event.updates` 是完整动作时间线，包含动作 ID、`announce`／`confirm`／`amend`／`progress`、`invalidatesEvent`、七语言标题摘要、业务时间 `time`、发布时间及全部 `sources: [{postId,sourceId,url}]`。`time` 保留精确时间、日期或区间，预告时间未明确或无法解析时保存 time=null，并公开为时间未公布；amend 缺时间时保存不早于来源发帖时刻的最近一个 10:00 UTC，confirm、progress 缺时间时保存最早有效来源发帖时刻，未知预告的 event.time 也为 null。只有 `confirm` 可返回空数组；有来源时 `publishedAt` 取最早有效来源发布时间，无来源时取动作创建时间，不冒充生效时间。后续官方确认补充同一动作的来源、标题摘要及实际时间，保持动作 ID，通知修订号递增，事件不重复计数。
 
-三类事件共用状态与动作规则，关闭领取、到期、重开使用 progress，取消使用 amend 的 invalidatesEvent=true，取消为业务终态，只能更正或删除错误取消动作后重算；普通 amend 不覆盖有效官方确认，新预告、计划修订、延期、取消可使旧无来源确认不再决定当前结果。同帖可支持多个动作，多帖可支持同一动作，原帖链接使用已保存值；不返回动作 result 或 scope。接口地址、schemaVersion=2 和签名协议不变，严格客户端须接受空来源确认、仅四种业务动作并移除旧判定元数据。Webhook 的外层 `action=restored` 仍表示管理撤回后的可见性恢复，与已取消业务无关，继续保留。切换时清理旧格式待发通知并建立当前基线，不补发历史消息；不保留旧载荷兼容模式。数据版本与请求头的签名算法版本分别管理。
+三类事件共用状态与动作规则，关闭领取、到期、重开使用 progress，取消使用 amend 的 invalidatesEvent=true，取消为业务终态，只能更正或删除错误取消动作后重算；普通 amend 不改变预告计划、恢复预告或使已有确认失效；明确新计划和改期使用 announce，预告、延期、取消可使旧无来源确认不再决定当前结果。同帖可支持多个动作，多帖可支持同一动作，原帖链接使用已保存值；不返回动作 result 或 scope。接口地址、schemaVersion=2 和签名协议不变，严格客户端须接受空来源确认、仅四种业务动作并移除旧判定元数据。Webhook 的外层 `action=restored` 仍表示管理撤回后的可见性恢复，与已取消业务无关，继续保留。切换时清理旧格式待发通知并建立当前基线，不补发历史消息；不保留旧载荷兼容模式。数据版本与请求头的签名算法版本分别管理。
 
 撤回只提供通知 ID、事件 ID、平台和版本；接收方应撤下对应事件。恢复后的 `event` 提供完整当前内容。通知不包含总览的预测时间；明确计划到期后，由分钟任务新增确认动作引起状态变化，不由读取请求直接推断。
 
@@ -70,4 +70,4 @@
 
 实现位于共享监控模块：`webhooks.ts` 定义协议，`backend/webhook-events.ts` 与业务事务一起记录变化，`backend/webhooks.ts` 管理订阅和投递。站点仅注册一次管理页面、队列和恢复扫描。已有飞书群通知独立运行，行为不变。
 
-时间缺失或无法解析时，预告（announce）保存最早有效来源发帖当天的北京时间日期，在次日零点才自动完成；其他动作保存发帖时刻。明确业务时间不变，不增加时间依据字段。
+时间缺失或无法解析时，预告（announce）保存 null，不触发自动确认，也不继承其他轮次时间；amend 保存不早于来源发帖时刻的最近一个 10:00 UTC，confirm、progress 保存发帖时刻。自动确认的 time 为到期边界的 instant，原始预告不改：时刻及截止取 at、区间取 through、纯日期取当天北京时间18点。无来源动作的 publishedAt 仍是实际创建时间，不替代生效时刻。

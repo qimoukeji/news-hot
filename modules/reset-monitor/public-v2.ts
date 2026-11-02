@@ -20,6 +20,8 @@ const businessTimestampSchema = timestampSchema
     try { Temporal.Instant.from(value); return true; } catch { return false; }
   }, "Business timestamps require a valid instant")
   .meta({ format: "date-time", description: "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC." });
+export const utcInstantSchema = businessTimestampSchema.regex(/Z$/, "Overview instants must be UTC timestamps ending in Z")
+  .meta({ format: "date-time", description: "A UTC ISO timestamp ending in Z, with at most nine fractional-second digits." });
 export const calendarDate = z.iso.date();
 export const localizedTextSchema = z.strictObject({
   en: text, zh: text, "zh-Hant": text, ja: text, ko: text, ru: text, es: text,
@@ -45,29 +47,34 @@ export type BusinessTime = z.infer<typeof businessTimeSchema>;
 export const eventTimeSchema = z.union([businessTimeSchema, z.strictObject({ kind: z.literal("unknown") })]);
 export type EventTime = z.infer<typeof eventTimeSchema>;
 
-export const publicTimeSchema = businessTimeSchema;
+export const publicTimeSchema = businessTimeSchema.nullable();
 export type PublicTime = z.infer<typeof publicTimeSchema>;
 const updateFields = { id: identifier, publishedAt: timestampSchema, title: localizedTextSchema, summary: localizedTextSchema.nullable() };
 function updateSchema() {
   const fields = { ...updateFields, time: publicTimeSchema };
   return z.discriminatedUnion("action", [
-  z.strictObject({ ...fields, action: z.literal("confirm"), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema) }),
-  z.strictObject({ ...fields, action: z.enum(["announce", "progress"]), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema).min(1) }),
-  z.strictObject({ ...fields, action: z.literal("amend"), invalidatesEvent: z.boolean(), sources: z.array(updateSourceSchema).min(1) }),
+  z.strictObject({ ...fields, time: businessTimeSchema, action: z.literal("confirm"), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema) }),
+  z.strictObject({ ...fields, action: z.literal("announce"), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema).min(1) }),
+  z.strictObject({ ...fields, time: businessTimeSchema, action: z.literal("progress"), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema).min(1) }),
+  z.strictObject({ ...fields, time: businessTimeSchema, action: z.literal("amend"), invalidatesEvent: z.boolean(), sources: z.array(updateSourceSchema).min(1) }),
   ]);
 }
 export const eventUpdateSchema = updateSchema();
 export const rawEventUpdateSchema = eventUpdateSchema;
 /** Preserve date precision and fractional seconds while expressing instants in UTC. */
+export function normalizePublicTime(time: BusinessTime): BusinessTime;
+export function normalizePublicTime(time: null): null;
+export function normalizePublicTime(time: PublicTime): PublicTime;
 export function normalizePublicTime(time: PublicTime): PublicTime {
   const value = publicTimeSchema.parse(time);
+  if (value === null) return null;
   const utc = (at: string) => at.endsWith("Z") ? at : Temporal.Instant.from(at).toString();
   if (value.kind === "date") return value;
   if (value.kind === "range") return { kind: "range", from: utc(value.from), through: utc(value.through) };
   return { ...value, at: utc(value.at) };
 }
 export function serializeEventTime(time: EventTime): PublicTime {
-  if (time.kind === "unknown") throw new Error("Unknown time cannot be public");
+  if (time.kind === "unknown") return null;
   return normalizePublicTime(time);
 }
 
@@ -78,6 +85,10 @@ export function businessTimeBoundary(time: BusinessTime): string {
 }
 export function compareBusinessTime(a: BusinessTime, b: BusinessTime): number {
   return Temporal.Instant.compare(businessTimeBoundary(a), businessTimeBoundary(b));
+}
+/** Unknown planned times use publication only for ordering, never as an occurrence time. */
+export function eventOrderTime(event: { time: PublicTime; publishedAt: string }): BusinessTime {
+  return event.time ?? { kind: "instant", at: event.publishedAt };
 }
 /** A calendar date has occurred only once that date starts in its source time zone. */
 export function isFutureBusinessTime(time: BusinessTime, at: string): boolean {
@@ -98,6 +109,7 @@ const eventObjectSchema = z.strictObject({
   time: publicTimeSchema, updates: z.array(eventUpdateSchema).min(1), scope: scopeSchema,
 });
 function validateEvent(event: z.infer<typeof eventObjectSchema>, context: z.RefinementCtx) {
+  if (event.time === null && event.status !== "announced") context.addIssue({ code: "custom", path: ["time"], message: "Only an announcement may have an unknown time" });
   for (const key of ["productCodes", "planCodes", "quotaWindowCodes"] as const) {
     if (new Set(event.scope[key]).size !== event.scope[key].length) context.addIssue({ code: "custom", path: ["scope", key], message: "Catalog references must be unique" });
   }
@@ -129,13 +141,14 @@ export const statisticsSchema = z.strictObject({
 });
 const overviewFields = {
   platform: platformSchema, sources: z.array(sourceSchema), catalog: catalogSchema, statistics: statisticsSchema,
-  predictedResetTime: publicTimeSchema.nullable(), announcedResetTime: publicTimeSchema.nullable(), resetTime: publicTimeSchema.nullable(),
+  hasAnnouncement: z.boolean(), predictedResetTime: utcInstantSchema.nullable(), announcedResetTime: publicTimeSchema, resetTime: utcInstantSchema.nullable(),
 };
 type OverviewFields = {
   sources: z.infer<typeof sourceSchema>[]; catalog: z.infer<typeof catalogSchema>;
-  announcedResetTime: PublicTime | null; resetTime: PublicTime | null;
+  hasAnnouncement: boolean; announcedResetTime: PublicTime; resetTime: string | null;
 };
 function validateOverview(value: OverviewFields, context: z.RefinementCtx) {
+  if (!value.hasAnnouncement && value.announcedResetTime !== null) context.addIssue({ code: "custom", path: ["announcedResetTime"], message: "An announced time requires an announcement" });
   const unique = (ids: string[], path: (string | number)[]) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: "custom", path, message: "IDs must be unique" });
   };
@@ -150,12 +163,12 @@ export const overviewSchema = z.strictObject({
     context.addIssue({ code: "custom", path: ["platforms"], message: "Platforms must be unique" });
   }
 });
-function validateEventOrder(events: Array<{ id: string; time: PublicTime }>, context: z.RefinementCtx, path: string) {
+function validateEventOrder(events: Array<{ id: string; time: PublicTime; publishedAt: string }>, context: z.RefinementCtx, path: string) {
   if (new Set(events.map(event => event.id)).size !== events.length) context.addIssue({ code: "custom", path: [path], message: "Event IDs must be unique" });
   events.forEach((event, index) => {
     const prior = events[index - 1];
-    if (prior && publicTimeSchema.safeParse(prior.time).success && publicTimeSchema.safeParse(event.time).success
-      && (compareBusinessTime(prior.time, event.time) < 0 || compareBusinessTime(prior.time, event.time) === 0 && prior.id > event.id)) {
+    if (prior && businessTimeSchema.safeParse(eventOrderTime(prior)).success && businessTimeSchema.safeParse(eventOrderTime(event)).success
+      && (compareBusinessTime(eventOrderTime(prior), eventOrderTime(event)) < 0 || compareBusinessTime(eventOrderTime(prior), eventOrderTime(event)) === 0 && prior.id > event.id)) {
       context.addIssue({ code: "custom", path: [path, index], message: "Events must be in descending time order with ID ascending ties" });
     }
   });

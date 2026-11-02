@@ -67,24 +67,63 @@ test("clear retrospective completions do not require a time excerpt or fabricate
 test("a linked follow-up announcement does not require explicit timing to provide action evidence", () => {
   const action = { ...claim(), eventId: "known-event", localEventKey: null, action: "announce" as const, excerpt: "It will land soon." };
   assert.equal(actionEvidence({ ...action, scope: action.rawScope }, []), "action");
-  assert.deepEqual(resolveActionTime(action, post(action.excerpt)), { time: bt("2026-10-23"), issue: null });
+  assert.deepEqual(resolveActionTime(action, post(action.excerpt)), { time: null, issue: null });
   assert.equal(actionEvidence({ ...action, eventId: null, scope: action.rawScope }, []), "related", "a time default cannot identify a missing event");
 });
 
-test("all unresolved announcement times use the Beijing publication date, including UTC date rollover", () => {
+test("unresolved announcements stay unknown and confirmations and progress use source instants", () => {
   for (const published_at of ["2026-10-23T15:59:59Z", "2026-10-23T16:00:00Z", "2026-10-23T23:30:00Z"]) {
-    const date = published_at < "2026-10-23T16:00:00Z" ? "2026-10-23" : "2026-10-24";
     for (const timeExcerpt of [null, "soon", "nonliteral time", "2026-02-30"]) {
-      assert.deepEqual(resolveActionTime({ action: "announce", invalidatesEvent: false, timeExcerpt }, { text: "We will reset usage soon; 2026-02-30 is invalid.", published_at }), { time: bt(date), issue: null });
+      assert.deepEqual(resolveActionTime({ action: "announce", invalidatesEvent: false, timeExcerpt }, { text: "We will reset usage soon; 2026-02-30 is invalid.", published_at }), { time: null, issue: null });
     }
-    for (const action of ["confirm", "progress", "amend"] as const)
+    for (const action of ["confirm", "progress"] as const)
       assert.deepEqual(resolveActionTime({ action, invalidatesEvent: false, timeExcerpt: null }, { text: "Usage reset update.", published_at }).time, bt(new Date(published_at).toISOString()));
   }
+});
+
+test("amendments without usable time use the earliest 10:00 UTC at or after publication", () => {
+  for (const [published_at, expected] of [
+    ["2026-10-23T09:59:59Z", "2026-10-23T10:00:00.000Z"],
+    ["2026-10-23T10:00:00Z", "2026-10-23T10:00:00.000Z"],
+    ["2026-10-23T09:59:59.999999999Z", "2026-10-23T10:00:00.000Z"],
+    ["2026-10-23T10:00:00.000000001Z", "2026-10-24T10:00:00.000Z"],
+    ["2026-10-23T10:00:00.001Z", "2026-10-24T10:00:00.000Z"],
+    ["2026-10-23T10:00:01Z", "2026-10-24T10:00:00.000Z"],
+    ["2026-10-23T15:59:59Z", "2026-10-24T10:00:00.000Z"],
+    ["2026-10-23T16:00:00Z", "2026-10-24T10:00:00.000Z"],
+    ["2026-10-23T23:59:59Z", "2026-10-24T10:00:00.000Z"],
+    ["2026-10-24T00:00:00Z", "2026-10-24T10:00:00.000Z"],
+    ["2026-10-31T17:00:00Z", "2026-11-01T10:00:00.000Z"],
+    ["2026-11-02T17:00:00Z", "2026-11-03T10:00:00.000Z"],
+    ["2026-12-31T17:00:00Z", "2027-01-01T10:00:00.000Z"],
+    ["2027-01-01T00:00:00Z", "2027-01-01T10:00:00.000Z"],
+    ["2026-10-23T23:30:00-07:00", "2026-10-24T10:00:00.000Z"],
+    ["2027-01-01T02:00:00+09:00", "2027-01-01T10:00:00.000Z"],
+  ]) {
+    for (const timeExcerpt of [undefined, null, "", "  ", "soon", "not in the source", "2026-02-30"]) {
+      const action = actionRecognitionSchema.parse({ relevant: true, needsReview: false, title: properName("Eligibility correction"), summary: null,
+        actions: [{ ...claim(), action: "amend", timeExcerpt }] }).actions[0]!;
+      const source = { text: "Eligibility corrected; soon and 2026-02-30 give no usable time.", published_at: published_at! };
+      assert.deepEqual(resolveActionTime(action, source), { time: bt(expected!), issue: null }, `${published_at}: ${String(timeExcerpt)}`);
+    }
+  }
+});
+
+test("explicit amendment times retain their precision instead of using the daily default", () => {
+  for (const [expression, expected] of [
+    ["2026-10-23", { kind: "date", date: "2026-10-23", timeZone: "UTC" }],
+    ["2026-10-23T09:15:00.123456789Z", bt("2026-10-23T09:15:00.123456789Z")],
+    ["2026-10-23T08:00:00Z/2026-10-23T09:00:00Z", bt("2026-10-23T08:00:00Z/2026-10-23T09:00:00Z")],
+  ] as const) assert.deepEqual(resolveActionTime({ action: "amend", invalidatesEvent: false, timeExcerpt: expression },
+    post(`Eligibility corrected on ${expression}.`)), { time: expected, issue: null });
 });
 
 test("all platform prompts tell the model that missing time alone does not require review", () => {
   for (const definition of [codex, claude, grok]) inMonitor(definition, () => {
     assert.match(recognitionPrompt(), /Missing or unparseable time alone must not set needsReview/);
+    assert.match(recognitionPrompt(), /amendment defaults to the earliest 10:00 UTC at or after its source publication instant/);
+    assert.match(recognitionPrompt(), /do not fabricate a timeExcerpt/);
+    assert.match(recognitionPrompt(), /Ordinary amendments never change the announcement plan/);
     assert.doesNotMatch(recognitionPrompt(), /明确回顾完成但没有发生时间或唯一目标时复核/);
   });
 });

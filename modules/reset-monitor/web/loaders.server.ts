@@ -5,12 +5,13 @@ import type { AdminEntries, AdminPosts, AdminEventDetail } from "./admin-types.t
 import type { EventList, Overview, PlatformOverview } from "../public-v2.ts";
 import { publicV2Path, type ResetMonitorWebDefinition } from "../definition.ts";
 
-export type ResetMonitorPageData = { overview: PlatformOverview; events: EventList["list"]; selectedDate: string | null; month: string; today: string };
+export type ResetMonitorPageData = { overview: PlatformOverview; events: EventList["list"]; selectedDate: string | null; month: string; today: string; initialNow: number };
 
 export function createPublicLoader(profile: ResetMonitorWebDefinition) {
   return async ({ request, params }: { request: Request; params: { date?: string } }): Promise<ResetMonitorPageData> => {
     const url = new URL(request.url);
-    const today = beijingDate(new Date().toISOString());
+    const initialNow = Date.now();
+    const today = beijingDate(initialNow);
     const selectedDate = params.date ?? null;
     const month = selectedDate?.slice(0, 7) ?? url.searchParams.get("month") ?? today.slice(0, 7);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || selectedDate && (!/^\d{4}-\d{2}-\d{2}$/.test(selectedDate) || !Number.isFinite(Date.parse(selectedDate)) || new Date(selectedDate).toISOString().slice(0, 10) !== selectedDate)) {
@@ -25,7 +26,7 @@ export function createPublicLoader(profile: ResetMonitorWebDefinition) {
     ]);
     const overview = all.platforms.find(platform => platform.platform === profile.publicV2?.platform);
     if (!overview) throw new Response("监控不存在", { status: 404 });
-    return { overview, events: list.list, selectedDate, month, today };
+    return { overview, events: list.list, selectedDate, month, today, initialNow };
   };
 }
 

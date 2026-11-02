@@ -52,6 +52,60 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: m
   await assert.rejects(previewMonitorEventReview("event", { version: latest.version, reason: "test", verification: { outcome: "not_effective", time: null } }));
 }));
 
+for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: unknown announcement time survives storage, another source and manual wording edits without inference`, async () => inMonitor(definition, async () => {
+  const at = "2026-10-10T12:00:00Z";
+  await sql`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,text,processing_status) VALUES(${definition.monitorId},'source',${definition.authors[0]!.handle},${at},'https://example.test/source','Synthetic promise','processed')`;
+  await sql.begin(async db => writePostActions(db, (await sourcePost("source", db))!, [{ eventId: "event", action: "announce", title: properName("Another round is coming"), summary: null, time: null }], { events: [{ id: "event", type: "reset_credit" }] }));
+  let input = await loadActionInput(); const announcement = input.actions[0]!;
+  assert.equal(announcement.time, null);
+  await sql`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,text,processing_status) VALUES(${definition.monitorId},'second',${definition.authors[0]!.handle},${at},'https://example.test/second','Same promise','processed')`;
+  await sql.begin(async db => writePostActions(db, (await sourcePost("second", db))!, [{ id: announcement.id, eventId: "event", action: "announce", title: announcement.title, summary: announcement.summary, time: null }]));
+  const detail = (await monitorEventDetail("event"))!;
+  const body = { version: detail.version, versions: detail.versions, actions: { update: [{ id: announcement.id, action: "announce", title: properName("Next round announced"), summary: null, time: null }] } };
+  const preview = (await previewMonitorEventReview("event", body))!;
+  await submitMonitorEventReview("event", { ...body, previewToken: preview.previewToken }, "test-admin");
+  await sweepConfirmationResults([definition], Date.parse("2027-01-01T00:00:00Z"));
+  input = await loadActionInput();
+  assert.equal(input.actions.length, 1); assert.equal(input.actions[0]!.time, null); assert.equal(input.actions[0]!.sources.length, 2);
+  const snapshot = await publicV2Snapshot();
+  assert.equal(snapshot.hasAnnouncement, true); assert.equal(snapshot.announcedResetTime, null);
+  assert.equal(snapshot.events[0]!.status, "announced"); assert.equal(snapshot.events[0]!.time, null);
+}));
+
+test("clearing an inferred announcement schedule restores an unknown announcement instead of retaining completion", async () => inMonitor(codex, async () => {
+  const at = "2026-10-10T12:00:00Z";
+  await sql`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,text,processing_status) VALUES('codex','source',${codex.authors[0]!.handle},${at},'https://example.test/source','Synthetic promise','processed')`;
+  await sql.begin(async db => writePostActions(db, (await sourcePost("source", db))!, [{ eventId: "event", action: "announce", title: properName("Reset planned"), summary: null, time: bt(at) }], { events: [{ id: "event", type: "direct_reset" }] }));
+  await sweepConfirmationResults([codex]);
+  const input = await loadActionInput(), announcement = input.actions.find(action => action.action === "announce")!;
+  assert.equal(input.actions.some(action => action.sources.length === 0), true);
+  const detail = (await monitorEventDetail("event"))!;
+  const body = { version: detail.version, versions: detail.versions, actions: { update: [{ id: announcement.id, action: "announce", title: announcement.title, summary: announcement.summary, time: null }] } };
+  const preview = (await previewMonitorEventReview("event", body))!;
+  await submitMonitorEventReview("event", { ...body, previewToken: preview.previewToken }, "test-admin");
+  await sweepConfirmationResults([codex], Date.parse("2027-01-01T00:00:00Z"));
+  const snapshot = await publicV2Snapshot();
+  assert.equal(snapshot.events[0]!.status, "announced"); assert.equal(snapshot.events[0]!.time, null);
+  assert.equal(snapshot.hasAnnouncement, true); assert.equal(snapshot.announcedResetTime, null); assert.equal(snapshot.resetTime, null);
+}));
+
+test("correcting an inferred announcement to a known schedule appends an announcement and supersedes the old inferred result", async () => inMonitor(codex, async () => {
+  const at = "2026-10-10T12:00:00Z", future = new Date(Date.now() + 86_400_000).toISOString();
+  await sql`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,text,processing_status) VALUES('codex','source',${codex.authors[0]!.handle},${at},'https://example.test/source','Synthetic promise','processed')`;
+  await sql.begin(async db => writePostActions(db, (await sourcePost("source", db))!, [{ eventId: "event", action: "announce", title: properName("Reset planned"), summary: null, time: bt(at) }], { events: [{ id: "event", type: "direct_reset" }] }));
+  await sweepConfirmationResults([codex]);
+  const input = await loadActionInput(), announcement = input.actions.find(action => action.action === "announce")!, confirmation = input.actions.find(action => !action.sources.length)!;
+  const detail = (await monitorEventDetail("event"))!;
+  const body = { version: detail.version, versions: detail.versions, actions: { update: [{ id: announcement.id, action: "announce", title: announcement.title, summary: announcement.summary, time: bt(future) }] } };
+  const preview = (await previewMonitorEventReview("event", body))!;
+  await submitMonitorEventReview("event", { ...body, previewToken: preview.previewToken }, "test-admin");
+  const saved = await loadActionInput(), latest = saved.actions.sort((a,b) => a.sequence-b.sequence).at(-1)!;
+  assert.equal(latest.action, "announce"); assert.notEqual(latest.id, announcement.id); assert.deepEqual(latest.time, bt(future));
+  assert.ok(saved.actions.some(action => action.id === confirmation.id));
+  const snapshot = await publicV2Snapshot();
+  assert.equal(snapshot.events[0]!.status, "announced"); assert.deepEqual(snapshot.announcedResetTime, bt(future)); assert.equal(snapshot.resetTime, null);
+}));
+
 test("new manual date confirmations cannot claim a date that is still future in its source zone", async t => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-02T00:00:00Z") });
   await inMonitor(codex, async () => {
@@ -64,7 +118,7 @@ test("new manual date confirmations cannot claim a date that is still future in 
   });
 });
 
-test("editing an announcement preserves an already inferred date even before that date starts in its source zone", async t => {
+test("editing an announcement preserves its inferred instant even before that date starts in its source zone", async t => {
   const now = Date.parse("2026-11-02T10:00:00Z"), sourceAt = "2026-10-10T12:00:00Z";
   t.mock.timers.enable({ apis: ["Date"], now: new Date(now) });
   await inMonitor(codex, async () => {
@@ -80,7 +134,7 @@ test("editing an announcement preserves an already inferred date even before tha
     const preview = (await previewMonitorEventReview("event", body))!;
     await submitMonitorEventReview("event", { ...body, previewToken: preview.previewToken }, "test-admin");
     const saved = (await loadActionInput()).actions.find(action => action.id === confirmation.id)!;
-    assert.deepEqual(saved.time, time);
+    assert.deepEqual(saved.time, bt("2026-11-02T10:00:00Z"));
     assert.deepEqual(saved.sources, []);
   });
 });

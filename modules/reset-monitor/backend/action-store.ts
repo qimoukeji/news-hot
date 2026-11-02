@@ -234,7 +234,7 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
     const upgrading = existing?.action === "confirm" && existing.sources.length === 0 && draft.action === "confirm";
     if (draft.id && (!existing || existing.event_id !== event.id)) throw invalid("动作不属于目标事件");
     const sourceOnly = existing && !upgrading && !options.editExisting;
-    const time = normalizePublicTime(draft.time ?? (sourceOnly ? existing.time : null) ?? defaultActionTime(draft.action, actual.published_at));
+    const time = normalizePublicTime(sourceOnly ? draft.time ?? existing.time : draft.time ?? defaultActionTime(draft.action, actual.published_at));
     if (existing && !upgrading && !options.editExisting && (existing.action !== draft.action || existing.invalidates_event !== (draft.invalidatesEvent ?? false) || stableJson(existing.time) !== stableJson(time))) throw invalid("补充来源不能修改已接受动作事实");
     const sources = existing ? [...existing.sources] : [];
     if (!sources.some(source => source.postId === post.id)) sources.push({ postId: post.id });

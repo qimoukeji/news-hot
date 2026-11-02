@@ -4,10 +4,10 @@ import { stableJson } from "@aihot/backend/lib/ids";
 import { completeReceipt } from "@aihot/backend/providers/receipts";
 import { monitor, isAuthor } from "./context.ts";
 import { sourcePost, loadActionInput, saveAcceptedPost, markPostReview, StalePostWork, lockActionRecords, rowVersion, type ActionDraft, type EventWrite } from "./action-store.ts";
-import { actionEvidence, quotedInPost, confirmsCompletedAction } from "./evidence.ts";
+import { actionEvidence, quotedInPost, confirmsCompletedAction, bankedRoundCounts } from "./evidence.ts";
 export { quotedInPost } from "./evidence.ts";
 import { recognizedScope, scopeSummary } from "./recognition-scope.ts";
-import { relatedContextEvents, uniqueContextEvent } from "./context-association.ts";
+import { relatedContextEvents, uniqueContextEvent, uniqueRoundContextEvent } from "./context-association.ts";
 import { reduceEvent, type ActionKind, type ActionInput, type SourcePostRow } from "../actions.ts";
 import { resolveActionTime } from "./public-v2-time.ts";
 import { actionRecognitionSchema, type ActionRecognition, type ActionRecognitionBody, type Proposition, type ThreadRecognition } from "./recognize.ts";
@@ -107,13 +107,21 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
   if (recognition.needsReview && reviewDetail) reasons.push(reviewDetail);
   for (const original of recognition.actions) {
     const claim = structuredClone(original);
+    const round = bankedRoundCounts(claim.excerpt);
+    if (!claim.eventId && claim.action === "announce" && round
+      && (recognition.needsReview || round.completed <= 0 || round.completed >= round.total
+        || !acceptedClaims.some(prior => prior.action === "confirm" && prior.kind === claim.kind && prior.eventId))) {
+      reasons.push("下一轮预告缺少已核验的前轮确认或剩余轮次依据"); continue;
+    }
     if (claim.localEventKey && localEvents.has(claim.localEventKey) && input.events.some(event => event.id === localEvents.get(claim.localEventKey!))) {
       claim.eventId = localEvents.get(claim.localEventKey)!; claim.localEventKey = null;
     }
     const followup = claim.action !== "announce" || !/\b(?:resets?|banked|quota|credits?|usage|limits?)\b|重置|额度|額度/i.test(claim.excerpt);
     const related = followup ? relatedContextEvents(post, input, claim.kind) : [];
-    const contextual = followup ? uniqueContextEvent(post, input, claim.kind) : null;
-    if (related.length > 1) { reasons.push("上下文存在多个可能事件，需人工确定目标"); continue; }
+    const roundTarget = related.length > 1 && claim.action === "confirm" && claim.eventId && !recognition.needsReview
+      ? uniqueRoundContextEvent(post, input, claim.kind) : null;
+    const contextual = followup ? uniqueContextEvent(post, input, claim.kind) ?? roundTarget : null;
+    if (related.length > 1 && roundTarget?.id !== claim.eventId) { reasons.push("上下文存在多个可能事件，需人工确定目标"); continue; }
     if (!claim.eventId && related.length && (!contextual || related.length !== 1)) {
       reasons.push("上下文关联不唯一或事件已取消、撤回"); continue;
     }
@@ -139,7 +147,11 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
       reasons.push("动作缺少本帖明确依据"); continue;
     }
     if (!explicitLifecycle(claim)) { reasons.push("活动结果缺少明确整体状态依据"); continue; }
-    if (claim.action === "confirm" && !confirmsCompletedAction(claim.excerpt)) {
+    const verifiedBankedEvent = target?.type === "reset_credit" && !recognition.needsReview
+      && input.actions.some(action => action.event_id === target.id && action.sources.some(ref => input.posts.some(source => source.id === ref.postId
+        && isAuthor(source.author) && source.author.toLowerCase() === post.author.toLowerCase()
+        && new Date(source.published_at).getTime() < new Date(post.published_at).getTime())));
+    if (claim.action === "confirm" && !confirmsCompletedAction(claim.excerpt, verifiedBankedEvent)) {
       reasons.push("预期或否定不能确认完成"); continue;
     }
     const samePostEvent = claim.localEventKey && localEvents.has(claim.localEventKey);
@@ -153,7 +165,8 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     const scopeLiteral = [claim.rawScope.audienceSource, claim.rawScope.productsZh, ...(claim.rawScope.plans ?? [])].filter(Boolean);
     if (scopeLiteral.length && !claim.scopeExcerpt) { reasons.push("明确范围缺少来源引文"); continue; }
     const inherited = (target ? events.get(target.id)?.scope ?? target.scope : null) ?? (claim.localEventKey ? events.get(localEvents.get(claim.localEventKey) ?? "")?.scope : null);
-    const resolvedScope = recognizedScope(claim, text, post.author, inherited);
+    const remainingRound = claim.action === "announce" && !claim.eventId && round !== null;
+    const resolvedScope = recognizedScope(claim, text, post.author, inherited, !remainingRound);
     if (resolvedScope.issue) { reasons.push(resolvedScope.issue); continue; }
     claim.scope = resolvedScope.scope;
     if (claim.scope.type === "unknown" || claim.scope.productCodes.length === 0 || /\bhourly\b/i.test(claim.scopeExcerpt ?? claim.excerpt)) claim.summary = scopeSummary(claim);

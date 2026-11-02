@@ -26,11 +26,20 @@ const revision = (row: { id: string }): Revision => ({ id: row.id, version: rowV
 const material = (post: SourcePostRow) => ({ id: post.id, author: post.author, text: post.text ?? "", publishedAt: new Date(post.published_at).toISOString(),
   replyTo: post.reply_to, quotedPostId: post.quoted_post?.id ?? null, version: rowVersion(post) });
 
-export async function relevantFacts(group: ThreadGroup, saved: ActionInput): Promise<{ baseline: ActionInput; events: ThreadRecognitionInput["events"] }> {
+export async function relevantFacts(group: ThreadGroup, saved: ActionInput): Promise<{ baseline: ActionInput; events: ThreadRecognitionInput["events"]; context: SourcePostRow[] }> {
   const candidates = await Promise.all(group.targets.map(post => openEvents(new Date(post.published_at), postContext(post, saved.posts), saved, post)));
-  const events = [...new Map(candidates.flat().map(event => [event.id, event])).values()].sort((a, b) => a.id.localeCompare(b.id));
+  const events = [...new Map(candidates.flat().map(event => [event.id, event])).values()];
   const ids = new Set(events.map(event => event.id));
-  return { events, baseline: { posts: saved.posts, events: saved.events.filter(event => ids.has(event.id)), actions: saved.actions.filter(action => ids.has(action.event_id)) } };
+  const targetIds = new Set(group.targets.map(post => post.id));
+  const evidence = events.flatMap(event => {
+    const sources = saved.posts.filter(post => event.sourcePostIds.includes(post.id) && post.text?.trim())
+      .sort((a, b) => new Date(a.published_at).getTime() - new Date(b.published_at).getTime() || a.id.localeCompare(b.id));
+    // The promise and most recent delivery evidence survive any number of intervening unrelated posts.
+    return sources.length ? [sources[0]!, sources.at(-1)!] : [];
+  });
+  const context = [...new Map([...group.context, ...evidence].filter(post => !targetIds.has(post.id)).map(post => [post.id, post])).values()]
+    .sort((a, b) => new Date(a.published_at).getTime() - new Date(b.published_at).getTime() || a.id.localeCompare(b.id));
+  return { events, context, baseline: { posts: saved.posts, events: saved.events.filter(event => ids.has(event.id)), actions: saved.actions.filter(action => ids.has(action.event_id)) } };
 }
 
 /** Pending work stores revisions only. Originals remain exclusively in the source-post records. */
@@ -63,7 +72,8 @@ export async function processPending(limit = Infinity): Promise<{ processed: num
     const issues = [...group.issues, ...group.targets.flatMap(post => sourceContentIssue(post.text ?? "") ? ["资料不完整：原帖只有文章链接或缺少正文"] : [])];
     if (issues.length) { await review(group.targets, [...new Set(issues)].join("；")); continue; }
     const latest = await loadActionInput();
-    const { baseline } = await relevantFacts(group, latest);
+    const { baseline, context } = await relevantFacts(group, latest);
+    group.context = context;
     const work: Work = { targets: group.targets.map(revision), context: group.context.map(revision), events: baseline.events.map(revision), actions: baseline.actions.map(revision),
       model: await modelFor("monitor"), promptVersion: threadRecognitionVersion, modelRevision: await threadModelRevision() };
     const key = `recognition:pending:${sha256(stableJson(work))}`;

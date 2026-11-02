@@ -14,8 +14,8 @@ export function planActionDefaults(input: ActionInput, prior?: ActionInput) {
     for (const { action, publishedAt } of sourcedActions(event, after)) {
       const oldDefault = priorDefaults.get(action.id);
       if (action.time === null || action.action === "announce" && oldDefault !== undefined && (action.time?.kind === "instant" && action.time.at === oldDefault)) {
-        action.time = defaultActionTime(action.action, oldDefault ?? publishedAt);
-        actions.push(action.id);
+        const time = defaultActionTime(action.action, oldDefault ?? publishedAt);
+        if (action.time !== null || time !== null) { action.time = time; actions.push(action.id); }
       }
     }
     if (event.scope?.note && Object.values(event.scope.note).some(note => /\bunknown\b/i.test(note ?? ""))) {
@@ -27,7 +27,7 @@ export function planActionDefaults(input: ActionInput, prior?: ActionInput) {
       events.push(event.id);
     }
   }
-  if (after.actions.some(action => action.time === null)) throw new Error("Missing time has no valid source; review before repair");
+  if (after.actions.some(action => action.time === null && (action.action !== "announce" || !after.posts.some(post => !post.context_only && action.sources.some(source => source.postId === post.id))))) throw new Error("Missing time has no valid source; review before repair");
   return { after, actions, events };
 }
 
@@ -74,12 +74,12 @@ async function main() {
             const row = planned.after.events.find(event => event.id === id)!;
             await db`UPDATE monitor_event_records SET scope=${row.scope ? db.json(row.scope) : null},updated_at=clock_timestamp() WHERE monitor_id=${definition.monitorId} AND id=${id}`;
           }
-          await audit("operator", auditAction("repair_defaults"), auditSubject("event", "defaults"), "Normalize audience labels and default unresolved times by action: Beijing date for announcements, publication instant for other actions",
+          await audit("operator", auditAction("repair_defaults"), auditSubject("event", "defaults"), "Normalize audience labels; preserve unknown announcements, use the next 10:00 UTC for amendments, and source instants for confirmations and progress",
             { events: before.events.filter(event => planned.events.includes(event.id)), actions: before.actions.filter(action => planned.actions.includes(action.id)) },
             { events: planned.after.events.filter(event => planned.events.includes(event.id)), actions: planned.after.actions.filter(action => planned.actions.includes(action.id)) }, { db });
           await enqueuePublicV2(db, affected);
           const saved = await loadActionInput(db);
-          assert.equal(saved.actions.filter(action => action.time === null).length, 0);
+          assert.equal(saved.actions.filter(action => action.time === null && action.action !== "announce").length, 0);
           assert.equal(planActionDefaults(saved, prior).events.length, 0);
           assert.equal(planActionDefaults(saved, prior).actions.length, 0);
         }

@@ -64,14 +64,14 @@ export function AssociationManager({ detail, base, onClose, onDone, onBusy, onRe
   }}>
     <div className="min-h-0 space-y-4 overflow-y-auto p-4">
       <section aria-label="当前关联" className="min-w-0">
-        <header className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-[14px] font-medium">当前关联</h3><div className="flex items-center gap-2"><Button size="sm" disabled={blocked} onClick={() => setStep({ kind: "choose-event" })}>关联已有事件</Button><Button size="sm" tone="primary" disabled={blocked} onClick={() => setStep({ kind: "new-event" })}>新建事件</Button></div></header>
+        <header className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-[14px] font-medium">当前关联</h3><div className="flex items-center gap-2"><Button size="sm" disabled={blocked} onClick={() => setStep({ kind: "choose-event" })}>关联事件</Button><Button size="sm" tone="primary" disabled={blocked} onClick={() => setStep({ kind: "new-event" })}>新建事件</Button></div></header>
         <p className="mt-3 text-[12px] text-ink-4">{groups.size} 个事件 · {rows.length} 个动作{dirty && ` · ${additions.length + removed.length} 项待保存`}</p>
         <div className="mt-3 space-y-3">{[...groups.values()].map(group => <section key={group[0]!.eventId} className="overflow-hidden rounded-control border border-line" aria-label={`关联事件：${group[0]!.eventTitle}`}>
           <header className="bg-bg-sunk p-3"><h4 className="break-words text-[13px] font-medium">{group[0]!.eventTitle}</h4><p className="mt-1 text-[12px] text-ink-4">{KIND[group[0]!.eventType]} · {group[0]!.event ? group[0]!.event.withdrawn ? "已撤回" : group[0]!.event.status ? STATUS[group[0]!.event.status] : "缺少有效初始动作" : "待创建"}</p></header>
           <ul className="divide-y divide-line">{group.map(row => <li key={row.key} className="flex items-start justify-between gap-3 p-3 text-[13px]" aria-label={`关联动作：${text(row.fact.title)}`}>
             <div className={`min-w-0 ${row.removed ? "opacity-60" : ""}`}><p className="break-words">{ACTION[row.fact.action]} · {text(row.fact.title)}</p><p className="mt-1 text-[12px] text-ink-4">{stamp(row.fact.time)} · {row.sourceCount} 条来源{row.removed ? <span className="ml-2 text-amber-ink">待移除</span> : row.addition && <span className="ml-2 text-accent">{row.addition.kind === "source" ? "待补充来源" : "待添加"}</span>}</p></div>
             {row.addition || row.removed ? <Button size="sm" tone="ghost" disabled={blocked} aria-label={`撤销：${text(row.fact.title)}`} onClick={() => { if (row.addition) setAdditions(additions.filter(addition => addition.key !== row.addition!.key)); else setRemoved(removed.filter(id => id !== row.current!.id)); changed(); }}>撤销</Button>
-              : <Button size="sm" tone="danger" disabled={blocked} aria-label={`移除关联：${text(row.fact.title)}`} onClick={() => setStep({ kind: "remove", action: row.current! })}>移除关联</Button>}
+              : <Button size="sm" tone="danger" disabled={blocked} aria-label={`移除：${text(row.fact.title)}`} onClick={() => setStep({ kind: "remove", action: row.current! })}>移除</Button>}
           </li>)}</ul>
         </section>)}{!rows.length && <p className="py-6 text-center text-[13px] text-ink-4">暂无关联事件</p>}</div>
       </section>

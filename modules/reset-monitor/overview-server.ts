@@ -27,7 +27,7 @@ export function createOverviewServer(definitions: readonly ResetMonitorBackendDe
         const result = await modulePublication<Overview>(overviewModule.name, "overview");
         const { generatedAt: _generated, ...content } = result;
         return sendJsonWithEtag(req, reply, result, {
-          etagPrefix: "reset-actions-overview-v2.4", etagOf: content,
+          etagPrefix: "reset-actions-overview-v2.6", etagOf: content,
           cacheControl: "public, max-age=60, s-maxage=60, must-revalidate",
         });
       }));

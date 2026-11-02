@@ -10,7 +10,7 @@ export function ResetCalendar({ events, month, selectedDate, today, onSelectDate
   const offset = (new Date(Date.UTC(year, number - 1, 1)).getUTCDay() + 6) % 7;
   const adjacent = (delta: number) => new Date(Date.UTC(year, number - 1 + delta, 1)).toISOString().slice(0, 7);
   const counts = new Map<string, number>();
-  for (const event of events) { const day = eventDate(event.time); counts.set(day, (counts.get(day) ?? 0) + 1); }
+  for (const event of events) { const day = eventDate(event.time, event.publishedAt); counts.set(day, (counts.get(day) ?? 0) + 1); }
   return <section aria-label="事件日历" className="rounded-card border border-line bg-surface p-4">
     <div className="mb-4 flex items-center justify-between text-[13px]">
       <Link className="text-accent" to={`${pagePath}?month=${adjacent(-1)}`}>← 上月</Link>

@@ -1,6 +1,6 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { decodeCursor, encodeCursor, queryBinding } from "@aihot/backend/lib/cursor";
-import { calendarDate, eventListSchema, type ResetSnapshot } from "../public-v2.ts";
+import { calendarDate, eventListSchema, eventOrderTime, type ResetSnapshot } from "../public-v2.ts";
 import { timeBoundary } from "./public-v2.ts";
 
 export class PublicV2QueryError extends Error {}
@@ -33,12 +33,12 @@ export function parsePublicV2Query(query: Record<string, unknown>, now = Date.no
 
 export function paginatePublicV2(snapshot: ResetSnapshot, query: PublicV2Query) {
   const { from, to, timeZone, limit, cursor } = query;
-  const binding = queryBinding({ platform: snapshot.platform, from, to, timeZone, limit });
+  const binding = queryBinding({ contract: "v2.6", platform: snapshot.platform, from, to, timeZone, limit });
   const start = Temporal.PlainDate.from(from).toZonedDateTime(timeZone).epochMilliseconds;
   const end = Temporal.PlainDate.from(to).add({ days: 1 }).toZonedDateTime(timeZone).epochMilliseconds;
   const events = snapshot.events.filter(event => {
-    if (event.time.kind === "date") return event.time.date >= from && event.time.date <= to;
-    const at = Date.parse(timeBoundary(event.time)!);
+    if (event.time?.kind === "date") return event.time.date >= from && event.time.date <= to;
+    const at = Date.parse(timeBoundary(eventOrderTime(event))!);
     return at >= start && at < end;
   });
   let remaining = events;
@@ -47,7 +47,7 @@ export function paginatePublicV2(snapshot: ResetSnapshot, query: PublicV2Query) 
       const value = decodeCursor<{ binding: string; at: string; id: string }>("rmb1", cursor);
       if (limit === null || value.binding !== binding || typeof value.at !== "string" || typeof value.id !== "string" || !value.id.trim()) throw new Error("Cursor does not match the query");
       remaining = events.filter(event => {
-        const order = Temporal.Instant.compare(timeBoundary(event.time)!, Temporal.Instant.from(value.at));
+        const order = Temporal.Instant.compare(timeBoundary(eventOrderTime(event))!, Temporal.Instant.from(value.at));
         return order < 0 || order === 0 && event.id > value.id;
       });
     } catch { throw new PublicV2QueryError("Cursor is malformed or does not match the query"); }
@@ -57,6 +57,6 @@ export function paginatePublicV2(snapshot: ResetSnapshot, query: PublicV2Query) 
   const last = list.at(-1);
   return eventListSchema.parse({ list, pagination: {
     limit, total: events.length, hasMore,
-    nextCursor: hasMore && last ? encodeCursor("rmb1", { binding, at: timeBoundary(last.time)!, id: last.id }) : null,
+    nextCursor: hasMore && last ? encodeCursor("rmb1", { binding, at: timeBoundary(eventOrderTime(last))!, id: last.id }) : null,
   } });
 }

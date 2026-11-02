@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { beijingDate } from "@aihot/contracts/time";
-import { compareBusinessTime, type BusinessTime, eventListSchema, overviewSchema, type EventList, type EventStatus, type Overview, type PlatformOverview } from "../../../../modules/reset-monitor/public-v2.ts";
+import { compareBusinessTime, eventOrderTime, type BusinessTime, eventListSchema, overviewSchema, type EventList, type EventStatus, type Overview, type PlatformOverview } from "../../../../modules/reset-monitor/public-v2.ts";
 import type { AdminEvent, AdminPost, AdminEntries, AdminTimelineEvent, ReviewAction, AdminReviewDetail, ReviewCommands, ProcessingStatus } from "../../../../modules/reset-monitor/web/admin-types.ts";
 
 export const day = "2026-10-23";
@@ -33,14 +33,14 @@ export function createMonitorFixture() {
     eventScope?: EventList["list"][number]["scope"];
     actionTimes?: [BusinessTime | null, BusinessTime | null];
     actionPublishedAt?: [string, string];
-    typicalInterval: PlatformOverview["statistics"]["typicalInterval"]; predictedResetTime: BusinessTime | null; resetTime?: BusinessTime | null;
+    typicalInterval: PlatformOverview["statistics"]["typicalInterval"]; predictedResetTime: string | null; resetTime?: string | null;
   } = { type: "direct_reset", status: "completed", noActions: false, emptyConfirmation: false, emptyConfirmationTitle: "已到预告时间", previewConflict: false, processingStatus: "needs_attention", reviewReason: "来源关系需要管理员核对", withdrawn: false, filteredOut: false, replyTo: null, publicEventCount: 1,
-    typicalInterval: { value: 3.0625, unit: "day", sampleCount: 5 }, predictedResetTime: date("2026-10-28") };
+    typicalInterval: { value: 3.0625, unit: "day", sampleCount: 5 }, predictedResetTime: "2026-10-28T00:00:00Z" };
   const event = (product: Product): EventList["list"][number] => ({
     id: "event-1", type: state.type, status: state.status, publishedAt: at, title: localized(`${product.product} 官方活动`),
-    summary: localized("仅限 Pro 套餐，每周额度。"), time: instant(at), scope: state.eventScope ?? { ...scope, productCodes: [...scope.productCodes], planCodes: [...scope.planCodes], quotaWindowCodes: [...scope.quotaWindowCodes], note: localized("仅限 Pro 用户") },
+    summary: localized("仅限 Pro 套餐，每周额度。"), time: state.status === "announced" && state.actionTimes ? state.actionTimes[0] : instant(at), scope: state.eventScope ?? { ...scope, productCodes: [...scope.productCodes], planCodes: [...scope.planCodes], quotaWindowCodes: [...scope.quotaWindowCodes], note: localized("仅限 Pro 用户") },
     updates: [
-      { id: "announce-action", action: "announce", invalidatesEvent: false, title: localized("额度活动预告"), summary: null, time: state.actionTimes?.[0] ?? date(beijingDate(at)), publishedAt: state.actionPublishedAt?.[0] ?? at, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }] },
+      { id: "announce-action", action: "announce", invalidatesEvent: false, title: localized("额度活动预告"), summary: null, time: state.actionTimes ? state.actionTimes[0] : date(beijingDate(at)), publishedAt: state.actionPublishedAt?.[0] ?? at, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }] },
       { id: "confirm-action", title: localized(state.emptyConfirmation ? state.emptyConfirmationTitle : "额度活动状态确认"), summary: localized("以官方公告明确的活动结果为准。"), time: state.actionTimes?.[1] ?? instant(at), publishedAt: state.actionPublishedAt?.[1] ?? at,
         ...(state.status === "cancelled" ? { action: "amend" as const, invalidatesEvent: true, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }, { postId: "post-2", sourceId: "other", url: "https://example.org/official-2" }] }
           : { action: "confirm" as const, invalidatesEvent: false as const, sources: state.emptyConfirmation ? [] : [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }, { postId: "post-2", sourceId: "other", url: "https://example.org/official-2" }] }) },
@@ -50,7 +50,7 @@ export function createMonitorFixture() {
     sources: ["official", "other"].map((id, index) => ({ id, type: "official_social", name: localized(`官方账号 ${index + 1}`), url: `https://example.org/account-${index}` })),
     catalog: { products: [{ code: "product", name: localized(product.product) }], plans: [{ code: "pro", name: localized("Pro") }], quotaWindows: [{ code: "weekly", name: localized("周额度") }] },
     statistics: { typicalInterval: state.typicalInterval, resetsLast30Days: state.type !== "bonus_credit" && state.status !== "cancelled" ? 1 : 0, cardsLast30Days: 0, bonusesLast30Days: state.type === "bonus_credit" && state.status !== "cancelled" ? 1 : 0 },
-    predictedResetTime: state.predictedResetTime, announcedResetTime: state.status === "announced" ? state.actionTimes?.[0] ?? instant(at) : null, resetTime: state.resetTime !== undefined ? state.resetTime : state.status === "cancelled" ? null : state.status === "announced" ? instant("2026-10-20T16:30:00Z") : instant(at),
+    hasAnnouncement: state.status === "announced", predictedResetTime: state.predictedResetTime, announcedResetTime: state.status === "announced" ? state.actionTimes ? state.actionTimes[0] : instant(at) : null, resetTime: state.resetTime !== undefined ? state.resetTime : state.status === "cancelled" ? null : state.status === "announced" ? "2026-10-20T16:30:00Z" : at,
   });
   const adminEvent = (product: Product): AdminEvent => ({ ...event(product), withdrawn: state.withdrawn, version: "event-version", actionCount: state.noActions ? 0 : 2, sourcePostCount: state.noActions ? 0 : 2, ...(state.noActions ? { status: null, time: null, updates: [], title: null, scope: null } : {}) });
   const post = (): AdminPost => ({ id: "post-1", author: "official", publishedAt: at, title: localized("官方帖子摘要"), summary: localized("这条帖子同时包含活动预告及确认事实。"), url: "https://example.org/official-1", text: "Original outer post: quota reset announced and confirmed.", quotedPost: { text: "Quoted context is separate evidence.", author: "other", url: "https://example.org/quoted" }, replyTo: state.replyTo, filteredOut: state.filteredOut, processingStatus: state.processingStatus, reviewReason: state.reviewReason, version: "post-version", actionCount: state.noActions ? 0 : 2 });
@@ -67,7 +67,7 @@ export function createMonitorFixture() {
     const otherAction: ReviewAction = { id: "other-action", eventId: "event-2", sequence: 1, action: "announce", invalidatesEvent: false, title: localized("另一期活动预告"), summary: null, time: null, sources: [{ postId: "post-2" }], version: "other-action-version" };
     const allActions = associationActions.get(product.platform) ?? [...actions(), otherAction];
     const allEvents = [e, otherEvent, ...createdEvents.filter(row => row.platform === product.platform).map(row => row.event)];
-    const detailedEvent: AdminTimelineEvent = { ...adminEvent(product), ...e, latestAt: at, timeline: state.noActions ? [] : event(product).updates.map((update, index) => ({ ...update, time: state.actionTimes?.[index] ?? (index === 0 ? date(beijingDate(at)) : instant(at)), sequence: index + 1, sources: update.sources.map(source => sourcePosts(product).find(post => post.id === source.postId)!) })).reverse() };
+    const detailedEvent: AdminTimelineEvent = { ...adminEvent(product), ...e, latestAt: at, timeline: state.noActions ? [] : event(product).updates.map((update, index) => ({ ...update, time: state.actionTimes ? state.actionTimes[index] : index === 0 ? date(beijingDate(at)) : instant(at), sequence: index + 1, sources: update.sources.map(source => sourcePosts(product).find(post => post.id === source.postId)!) })).reverse() };
     return { version: eventMode ? "event-review-version" : "review-version", versions: { events: Object.fromEntries(allEvents.map(event => [event.id, event.version])), actions: Object.fromEntries(allActions.map(action => [action.id, action.version])), posts: Object.fromEntries(sourcePosts(product).map(post => [post.id, post.version])) }, ...(eventMode ? { event: detailedEvent } : { post: post() }), actions: allActions.filter(action => eventMode ? action.eventId === "event-1" : action.sources.some(source => source.postId === "post-1")), options: { events: allEvents, actions: allActions, posts: sourcePosts(product) } };
   };
   const orphanPost = (): AdminPost => ({ ...post(), id: "post-3", title: localized("待核对的独立帖子"), actionCount: 0, events: [] });
@@ -86,10 +86,10 @@ export function createMonitorFixture() {
   };
   const refreshCreated = (record: typeof createdEvents[number]) => {
     const actions = record.actions, event = record.event;
-    for (const action of actions) action.time ??= action.action === "announce" ? date(beijingDate(action.publishedAt)) : instant(action.publishedAt);
+    for (const action of actions) if (action.action !== "announce") action.time ??= instant(action.publishedAt);
     const last = actions.at(-1);
     event.status = last ? last.action === "confirm" ? "completed" : last.action === "announce" ? "announced" : last.invalidatesEvent ? "cancelled" : "in_progress" : null;
-    event.time = last?.time ?? (last ? instant(last.publishedAt) : null);
+    event.time = last ? last.action === "announce" ? last.time : last.time ?? instant(last.publishedAt) : null;
     event.actionCount = actions.length;
     event.sourcePostCount = new Set(actions.flatMap(action => action.sources.map(source => source.postId))).size;
     event.timeline = actions.map(action => ({ ...action, sources: action.sources.map(source => [...sourcePosts(platforms.find(product => product.platform === record.platform)!), orphanPost()].find(post => post.id === source.postId)!) })).reverse();
@@ -112,12 +112,12 @@ export function createMonitorFixture() {
       const month = url.searchParams.get("from")?.slice(0, 7) ?? "2026-10";
       const list = Array.from({ length: state.publicEventCount }, (_, index) => ({ ...event(product), id: state.publicEventCount === 1 ? "event-1" : `event-${String(index + 1).padStart(3, "0")}`,
         title: localized(`${product.product} 官方活动${state.publicEventCount === 1 ? "" : ` ${index + 1}`}`),
-        time: instant(`${month}-${index < 16 ? "22" : "21"}T16:30:00.000Z`) }));
+        time: state.status === "announced" && state.actionTimes?.[0] === null ? null : instant(`${month}-${index < 16 ? "22" : "21"}T16:30:00.000Z`) }));
       for (const record of createdEvents.filter(record => record.platform === product.platform && record.event.status)) {
-        list.push({ ...event(product), id: record.event.id, type: record.event.type, publishedAt: record.event.publishedAt, updates: record.event.updates.map(update => ({ ...update, time: update.time })), title: localized(record.event.title?.zh ?? "Manual event"), summary: record.event.summary ? localized(record.event.summary.zh ?? "Summary") : null,
+        list.push({ ...event(product), id: record.event.id, type: record.event.type, publishedAt: record.event.publishedAt, updates: record.event.updates, title: localized(record.event.title?.zh ?? "Manual event"), summary: record.event.summary ? localized(record.event.summary.zh ?? "Summary") : null,
           scope: { ...(record.event.scope ?? event(product).scope), note: record.event.scope?.note ? localized(record.event.scope.note.zh ?? "Scope") : null }, status: record.event.status!, time: record.event.time! });
       }
-      list.sort((a, b) => compareBusinessTime(b.time, a.time) || a.id.localeCompare(b.id));
+      list.sort((a, b) => compareBusinessTime(eventOrderTime(b), eventOrderTime(a)) || a.id.localeCompare(b.id));
       return send(eventListSchema.parse({ list, pagination: { limit: null, total: list.length, hasMore: false, nextCursor: null } } satisfies EventList));
     }
     if (req.method === "POST" || req.method === "PATCH") {

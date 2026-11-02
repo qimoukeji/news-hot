@@ -8,6 +8,15 @@ test("literal completed assertions include terse follow-ups and propagated reset
     assert.equal(confirmsCompletedAction(source), true, source);
 });
 
+test("banked round delivery requires a verified event and preserves factual boundaries", () => {
+  for (const source of ["Banked 1/2", "Day 28/ Banked 2/2"]) {
+    assert.equal(confirmsCompletedAction(source), false, source);
+    assert.equal(confirmsCompletedAction(source, true), true, source);
+  }
+  for (const source of ["Will be banked 2/2", "Banked 2/2?", "Not banked 1/2", "My banked 1/2", "Banked 0/2", "Banked 3/2", "Banked resets"])
+    assert.equal(confirmsCompletedAction(source, true), false, source);
+});
+
 test("natural connectors preserve a literal completed follow-up without weakening factual boundaries", () => {
   for (const source of [
     "And it's done.", "And it’s done. See you tomorrow for some good news.", "Now, it is done.",

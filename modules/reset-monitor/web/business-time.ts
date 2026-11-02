@@ -5,7 +5,11 @@ export const defaultTimeZone = "Asia/Shanghai";
 export type TimeInputKind = BusinessTime["kind"] | "empty";
 export type TimeInput = { kind: TimeInputKind; timeZone: string; start: string; end: string };
 
-export function businessDate(value: BusinessTime, timeZone = defaultTimeZone): string {
+export function businessDate(value: BusinessTime | null, timeZone = defaultTimeZone, publishedAt?: string): string {
+  if (value === null) {
+    if (!publishedAt) throw new Error("未知业务时间需要来源发布时间归日");
+    return Temporal.Instant.from(publishedAt).toZonedDateTimeISO(timeZone).toPlainDate().toString();
+  }
   return value.kind === "date" ? value.date : Temporal.Instant.from(value.kind === "range" ? value.from : value.at).toZonedDateTimeISO(timeZone).toPlainDate().toString();
 }
 

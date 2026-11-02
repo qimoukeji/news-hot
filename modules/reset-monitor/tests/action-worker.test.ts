@@ -333,7 +333,7 @@ test("one post creates announce and confirm actions for one local event and disc
   const input = await inMonitor(codex, () => loadActionInput()), snapshot = await inMonitor(codex, () => publicV2Snapshot());
   assert.equal(input.events.length, 1); assert.equal(input.actions.length, 2);
   assert.equal(snapshot.events[0]!.updates.length, 2); assert.equal(snapshot.events[0]!.status, "completed");
-  assert.deepEqual(snapshot.events[0]!.time, bt(at)); assert.deepEqual(snapshot.announcedResetTime, null); assert.deepEqual(snapshot.resetTime, bt(at));
+  assert.deepEqual(snapshot.events[0]!.time, bt(at)); assert.deepEqual(snapshot.announcedResetTime, null); assert.deepEqual(snapshot.resetTime, at);
 });
 
 test("a repeated accepted action adds its source and does not overwrite accepted facts", async () => {

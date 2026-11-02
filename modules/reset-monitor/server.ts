@@ -72,7 +72,7 @@ export function createMonitorServer(definition: ResetMonitorBackendDefinition) {
       apiPath: `/api/v2/agent${definition.agentPath}`,
       path: definition.agentPath, title: subject, ask: bonusEnabled ? `${definition.product} 最近有没有${kinds}？` : `${definition.product} 最近有没有额度重置或重置卡？`,
       answer: bound(async () => monitorAnswer(await read())),
-      etagPrefix: `${definition.monitorId}-agent-v2.4`, cacheControl: "public, max-age=60, s-maxage=60",
+      etagPrefix: `${definition.monitorId}-agent-v2.5`, cacheControl: "public, max-age=60, s-maxage=60",
       mcp: { tool: definition.mcpTool, use: `for ${definition.product} ${bonusEnabled ? "quota events and bonus credit campaigns" : "reset announcements and confirmations"}`,
         description: `查询 ${definition.product} ${kinds}，返回 v2 事件和完整动作时间线，每个动作包含全部原帖链接。三类事件共用状态与统计规则，取消修订使事件退出总览与统计。${bonusEnabled ? "奖励确认不表示个人到账，领取截止与奖励到期作为进展表达。" : "个人账户报告不构成活动完成确认。"}`, input: z.object({}),
         run: bound(async () => { const data = await read(); return { text: monitorAnswer(data), structured: { ...data } }; }),

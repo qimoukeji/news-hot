@@ -2,7 +2,29 @@
 
 ## 重置监控升级
 
-v2 保留所有时间字段名，将 `event.time`、`updates[].time`、`announcedResetTime`、`predictedResetTime` 和 `resetTime` 统一改为 BusinessTime 对象：`instant {at}`、`date {date,timeZone}`、`range {from,through}`、`deadline {at}`。`publishedAt`、`generatedAt` 继续使用 ISO 时间戳。调用方必须同步升级，旧标量和中文展示时间不再接受，不提供兼容模式。接口接入示例见 [v2 契约](reset-monitor-v2.md)。
+v2 保留所有时间字段名。`event.time`、`updates[].time` 和 `announcedResetTime` 使用 BusinessTime 对象：`instant {at}`、`date {date,timeZone}`、`range {from,through}`、`deadline {at}`，这些字段拒绝标量和中文展示时间；`resetTime` 和 `predictedResetTime` 仅使用 UTC ISO 8601 时间字符串或 null，严格拒绝旧对象格式。`publishedAt`、`generatedAt` 继续使用 ISO 时间戳。调用方必须同步升级，不提供兼容模式。接口接入示例见 [v2 契约](reset-monitor-v2.md)。
+
+### 非连续帖子与未知预告时间
+
+同作者独立帖子可按明确事项、承诺与轮次关联，不要求相邻；原始回复、引用仍优先。每轮发放独立计为事件，一条来源可确认前轮并预告后轮。预告没有明确或可解析时间时保存 null，不再补发帖日期、不自动确认。公开 event.time 与 announce 的 time 支持 null，总览新增必填 hasAnnouncement；调用方与静态 OpenAPI 必须同步更新。未知时间按 publishedAt 排序和归日，展示为时间未公布，不能用统计预测代替。无需新增列或迁移 SQL。
+
+已有明确时间及统计口径不变。历史曾由旧规则补齐的预告时间不按数值或文案自动还原，须有原始备份证据并单独预览；旧补日期工具不得用于新记录。历史定点修复保留原事件及动作 ID，核验备份与记录版本，抑制历史通知，不批量重跑其他帖子。
+
+普通 amend 保留事件当前状态、预告计划和确认结果；明确改期及后台计划时间更正使用 announce。amend 缺时间时先将最早有效来源时间戳转为 UTC，保存不早于发帖时刻的最近一个 10:00 UTC；当日未到或恰好到点取当天，过点顺延次日，跨月和跨年同样处理。此规则不批量改写已有修订时间；历史曾以 amend 表达明确改期的记录须在备份、预览和单独授权后核验更正，不能按 time 非空自动转换。
+
+### 总览单点时间与自动确认
+
+此更新不新增数据库列或迁移 SQL。新自动确认保存到期边界的 instant：时刻和截止取 at、区间取 through、纯日期取当天北京时间18点；原始预告、动作 ID 和创建时间保持不变。resetTime 只取最新有效确认的单一时刻，predictedResetTime 为该点加典型间隔，过期保留原时间点；三类事件及官方、管理员、自动推定的既定混合统计口径不变。
+
+已有自动确认须在停写、完整备份及恢复演练后修复。先运行只读预览：`node --env-file-if-exists=.env modules/reset-monitor/scripts/repair-inferred-time.ts --output <新预览目录>`。核对 preview.json 的逐监控清单和问题项；存在无法证明原始计划的记录时不执行。工具仅处理有生成身份和原预告证据的无来源自动确认，不修改官方确认、管理员核对或已有官方补证的动作。
+
+既有标量转 JSONB 的升级保留动作 ID，离线工具按原生成公式核验这些历史 ID；这不是运行时格式兼容。曾补齐原始空预告时间的记录，预览时还须加 `--prior-defaults <原默认值修复的备份目录>`，提供各平台原 `*-before.json`。工具仅提取原时间为 null 的动作 ID、事件、顺序、来源和发布时间证据，要求当前日期仍是同一来源的北京时间日期，并唯一复现原生成 ID；证据随预览保存，执行时不能替换证据或按文案猜测。
+
+确认方案并获得目标数据库修复授权后，用新目录执行：`node --env-file-if-exists=.env modules/reset-monitor/scripts/repair-inferred-time.ts --apply --preview <预览目录>/preview.json --worker-stopped --database-backup <完整custom备份> --output <新执行目录>`。停止 API 写入、Worker 和 Webhook 投递；应用前恢复验证完整备份，重新核对全部监控指纹，再在同一事务更新动作、有效概述与翻译绑定及通知基线。受影响事件尚未发送的 pending/sending/failed 投递取消，已发送历史保留，不补发历史通知。可用进程环境变量配合 `--verification-database-env <变量名>` 指定独立恢复验证库，不修改 .env。备份、预览和执行目录保留用于核验与恢复。
+
+news-hot 与 when-reset 的新校验、页面和 OpenAPI 一起切换，旧对象式总览与旧游标直接拒绝。公开出口及缓存均从新投影生成，读请求不修复数据。修复失败先保留日志与现场，不删除唯一备份或把已修复数据交给旧契约程序。
+
+### 首次升级到 JSONB 动作时间
 
 数据库最终列名仍为 `monitor_event_actions.time`，类型改为 JSONB。这是需要停写、备份与独立数据转换的升级，不能直接在有数据的旧库执行完整 `db:migrate`。工具和 SQL 的准备不授权实际 schema 修改、数据转换、真实模型调用、推送或部署，执行前须取得使用者的具体授权。
 
@@ -16,9 +38,9 @@ v2 保留所有时间字段名，将 `event.time`、`updates[].time`、`announce
 
 自动发布脚本按完整迁移路径识别待执行的 `0152`，在发布计划中输出 `needsBusinessTimeUpgrade` 并纳入审批摘要；缺少 `0146` 或转换工具时在停服前拒绝。批准后停止写入并备份，依次执行截止到 `0146` 的迁移、转换 CLI、完整 setup。转换只读挂载完整 dump，使用宿主 UID/GID 和私有输出目录，结果与备份一同保留。开始迁移后失败保持停服并记录 blocked-release，不让旧程序连接已转换的库。已完成转换的库和普通迁移沿用原发布流程。发布计划及脚本就绪不代表授权实际迁移或部署。
 
-纯日期预告仍在该日期北京时间 18:00 自动确认；日期所属时区保留供展示，程序边界不补成官方承诺的精确时刻。未明确或无法解析时间时，announce 保存最早有效来源发帖当天的北京时间日期，其他动作保存发帖时刻。公开 `updates.time` 非空。`scope.note` 保留简洁七语言用户标签，结构化范围代码和摘要中的实际限制不变。现有分钟 Worker 的概述生成仍经过模型安全阀、预算和回执；仅生成概述不另发业务通知。
+纯日期预告仍在该日期北京时间 18:00 自动确认；日期所属时区保留供展示，程序边界不补成官方承诺的精确时刻。未明确或无法解析时间时，announce 保存 null，不触发自动确认；amend 保存不早于来源发帖时刻的最近一个 10:00 UTC，confirm、progress 保存发帖时刻。公开事件及预告动作 time 可空，总览 hasAnnouncement 区分无预告与时间未公布。`scope.note` 保留简洁七语言用户标签，结构化范围代码和摘要中的实际限制不变。现有分钟 Worker 的概述生成仍经过模型安全阀、预算和回执；仅生成概述不另发业务通知。
 
-已有数据先运行 `node --env-file-if-exists=.env modules/reset-monitor/scripts/repair-action-defaults.ts --output .data/local-preview/action-defaults-preview` 预览；经授权后换一个新输出目录并加 `--apply`。工具先保存不含帖子原文的备份，在备份副本上验证，再按相关记录加锁写入、审计并同步通知基线，不补发历史通知。不修改明确时间；空时间没有有效来源或存在自定义 unknown 范围说明时停止，交人工核对。此修正不新增数据库列或修改历史 SQL；执行过的目录保留用于核验和恢复。已执行过旧的发帖时刻补齐时，增加 `--prior-backup <上次实际修正的输出目录>`：仅更正该备份能证明原本缺时间、当前仍为上次默认值的预告，不凭时间相同猜测，也不改明确业务时间。
+历史 action-defaults 修复目录仅保留为原始缺失时间及恢复证据；不要再用旧工具将空预告时间补为发帖日期。已有默认时间只能在可核验备份、预览与明确授权下定点还原，不能凭当前值与发帖时间相同推断。
 
 当前版本仅支持当前动作模型的数据库，运行时不探测或兼容旧三表、旧人工核实字段、旧来源关系或旧动作类型。本版不提供旧监控库的原地转换路径；旧结构部署按[重新部署与数据导入](#重新部署与数据导入)从已核验的当前结构备份恢复到空库。新安装正常运行完整迁移，已发布的 SQL 文件保留且不修改。
 

@@ -10,7 +10,9 @@ const readable = (text: EditorialText | null) => text?.en?.trim() || text?.zh?.t
 
 export async function openEvents(before: Date, context: ContextInput[], savedInput?: ActionInput, source?: SourcePostRow): Promise<OpenEventInput[]> {
   const input = savedInput ?? await loadActionInput();
-  const officialInput = { ...input, actions: input.actions.filter(action => action.sources.length > 0) };
+  const visibleSources = new Set(input.posts.filter(post => new Date(post.published_at).getTime() <= before.getTime()).map(post => post.id));
+  const officialInput = { ...input, actions: input.actions.map(action => ({ ...action, sources: action.sources.filter(source => visibleSources.has(source.postId)) }))
+    .filter(action => action.sources.length > 0) };
   const snapshot = projectRawV2(officialInput, monitor(), before.getTime());
   const contextual = new Set(input.actions.filter(action => action.sources.some(source => context.some(post => post.id === source.postId))).map(action => action.event_id));
   if (source) for (const kind of monitor().eventKinds) for (const event of relatedContextEvents(source, input, kind)) contextual.add(event.id);
@@ -22,9 +24,19 @@ export async function openEvents(before: Date, context: ContextInput[], savedInp
       title: translated(latest?.title) ? latest.title : publicV2Title(monitor().product, row.type, official.status),
       summary: translated(latest?.summary) ? latest.summary : null };
   });
+  const authorSources = new Set(input.posts.filter(post => source && post.author.toLowerCase() === source.author.toLowerCase()).map(post => post.id));
+  const sameAuthorEvents = new Set(officialInput.actions.filter(action => action.sources.some(ref => authorSources.has(ref.postId))).map(action => action.event_id));
+  // These literal hints rank material only. The model still has to verify the specific promise and round.
+  const hint = /\bbanked\b|\breset\s+(?:cards?|credits?)\b|重置卡/i.test(source?.text ?? "") ? "reset_credit"
+    : /\b(?:bonus|reward|promotional)\b|奖励|獎勵/i.test(source?.text ?? "") ? "bonus_credit" : null;
+  const active = (event: typeof officialEvents[number]) => event.status === "announced" || event.status === "in_progress";
   return officialEvents.filter(event => Date.parse(event.publishedAt) <= before.getTime()
     && (contextual.has(event.id) || event.type !== "direct_reset" || event.status !== "completed" || Date.parse(timeBoundary(event.time)!) >= before.getTime() - 48 * 3600_000))
-    .sort((a, b) => Number(contextual.has(b.id)) - Number(contextual.has(a.id)) || Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || a.id.localeCompare(b.id))
+    .sort((a, b) => Number(contextual.has(b.id)) - Number(contextual.has(a.id))
+      || Number(sameAuthorEvents.has(b.id)) - Number(sameAuthorEvents.has(a.id))
+      || Number(b.type === hint) - Number(a.type === hint)
+      || Number(active(b)) - Number(active(a))
+      || Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || a.id.localeCompare(b.id))
     .slice(0, 24).map(event => {
       const eventActions = officialInput.actions.filter(action => action.event_id === event.id).sort((a, b) => a.sequence - b.sequence || a.id.localeCompare(b.id));
       const sourceIds = [...new Set(eventActions.flatMap(action => action.sources.map(source => source.postId)))];
