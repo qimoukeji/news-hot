@@ -50,10 +50,12 @@ test("bonus review uses common actions and explicitly marks a cancellation amend
     await page.getByRole("checkbox", { name: "取消活动，使事件失效", exact: false }).check();
     await expect(page.getByRole("button", { name: "确认提交", exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "预览影响" }).click();
+    await expect(page.getByRole("button", { name: "确认提交", exact: true })).toBeVisible();
     assert.equal(fixture.writes.at(-1)!.body.actions.update[0].invalidatesEvent, true);
     await expect(page.getByRole("region", { name: "动作事实变化" }).getByText("修订 · 已取消", { exact: false })).toBeVisible();
     await page.getByLabel("动作", { exact: true }).last().selectOption("progress");
     await page.getByRole("button", { name: "预览影响" }).click();
+    await expect(page.getByRole("button", { name: "确认提交", exact: true })).toBeVisible();
     assert.equal(fixture.writes.at(-1)!.body.actions.update[0].invalidatesEvent, false);
   } finally { await page.close(); }
 });
