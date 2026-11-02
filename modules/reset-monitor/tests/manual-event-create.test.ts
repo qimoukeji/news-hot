@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import { listEvents } from "./admin-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
@@ -43,19 +44,19 @@ for (const definition of definitions) test(`${definition.monitorId}: manual even
   assert.equal(entries.rows.length, 1);
   const row = entries.rows[0]!; assert.equal(row.kind, "event");
   if (row.kind === "event") {
-    assert.equal(row.event.id, event.id); assert.equal(row.event.status, null); assert.equal(row.event.time, null);
+    assert.equal(row.event.id, event.id); assert.equal(row.event.status, null); assert.deepEqual(row.event.time, null);
     assert.equal(row.event.actionCount, 0); assert.equal(row.event.sourcePostCount, 0); assert.deepEqual(row.event.timeline, []);
   }
   assert.equal((await listEvents({ visibility: "unpublished" })).events[0]!.id, event.id);
   let snapshot = await publicV2Snapshot();
-  assert.deepEqual(snapshot.events, []); assert.equal(snapshot.resetTime, null); assert.equal(snapshot.statistics.resetsLast30Days, 0);
+  assert.deepEqual(snapshot.events, []); assert.deepEqual(snapshot.resetTime, null); assert.equal(snapshot.statistics.resetsLast30Days, 0);
   assert.equal((await sql`SELECT 1 FROM monitor_webhook_notifications`).length, 0);
   const [audit] = await sql`SELECT actor,action,subject,reason,before,after FROM audit_log`;
   assert.equal(audit!.actor, "manual-admin"); assert.equal(audit!.action, definition.names.auditActionPrefix + ".create");
   assert.equal(audit!.reason, "创建事件"); assert.equal(audit!.before, null); assert.equal(audit!.after.id, event.id);
 
   const detail = (await monitorEventDetail(event.id))!;
-  const time = new Date(Date.now() - 3600_000).toISOString();
+  const time = bt(new Date(Date.now() - 3600_000).toISOString());
   const body = { version: detail.version, versions: detail.versions, actions: { create: [{ localKey: "initial", eventId: event.id, action: "confirm", title: properName("人工核实已生效"), summary: null, time }] } };
   const preview = (await previewMonitorEventReview(event.id, body))!;
   await submitMonitorEventReview(event.id, { ...body, previewToken: preview.previewToken }, "manual-admin");
@@ -69,7 +70,7 @@ test("manual creation requires a Chinese title and rejects business facts, forei
   const valid = { type: "direct_reset", title: { zh: "人工创建" } };
   for (const body of [
     {}, { title: { zh: "缺类型" } }, { type: "direct_reset" }, { ...valid, title: { en: "No Chinese title" } }, { ...valid, title: { zh: "   " } },
-    { ...valid, type: "unknown" }, { ...valid, status: "completed" }, { ...valid, time: "2026-10-27" },
+    { ...valid, type: "unknown" }, { ...valid, status: "completed" }, { ...valid, time: bt("2026-10-27") },
     { ...valid, id: "client-id" }, { ...valid, monitorId: "grok" }, { ...valid, actions: [] }, { ...valid, posts: [] }, { ...valid, sources: [] },
     { ...valid, scope: { ...scope, productCodes: ["unknown-product"] } },
   ]) await assert.rejects(createMonitorEvent(body, "manual-admin"));

@@ -74,7 +74,15 @@ async function upload(s: Store, key: string, file: string, sha: string, size: nu
   if (!res.ok) throw new Error(`backup upload ${key}: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
-export async function runBackup(now = new Date()) {
+/** Pack the attachment roots, including a valid empty archive when none exist. */
+export async function packBackupFiles(archive: string, dataDir: string, roots: readonly string[]): Promise<void> {
+  const packing = run("tar", roots.length ? ["-czf", archive, "-C", dataDir, ...roots] : ["-czf", archive, "-T", "-"]);
+  // An empty file list on stdin works on GNU tar and Windows bsdtar alike.
+  packing.child.stdin?.end();
+  await packing;
+}
+
+export async function runBackup(now = new Date(), pack = packBackupFiles) {
   const s = store();
   const dir = path.join(config.dataDir, "backups");
   await mkdir(dir, { recursive: true });
@@ -101,10 +109,10 @@ export async function runBackup(now = new Date()) {
     kept.push(d);
   }
   let filesError: string | null = null;
-  if (!kept.length) await run("tar", ["-czf", files, "-T", "/dev/null"]);
+  if (!kept.length) await pack(files, config.dataDir, kept);
   else {
-    const pack = () => run("tar", ["-czf", files, "-C", config.dataDir, ...kept]);
-    await pack().catch(() => pack()).catch((error: unknown) => {
+    const attempt = () => pack(files, config.dataDir, kept);
+    await attempt().catch(() => attempt()).catch((error: unknown) => {
       // tar's own words: the message starts with the whole command line, which can fill the excerpt.
       const stderr = (error as { stderr?: unknown })?.stderr;
       filesError = String(typeof stderr === "string" && stderr.trim() ? stderr.trim() : error instanceof Error ? error.message : error).slice(0, 300);

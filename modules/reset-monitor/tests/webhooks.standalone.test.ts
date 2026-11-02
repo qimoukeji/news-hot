@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/standalone.ts";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
@@ -13,8 +14,8 @@ const payload: WebhookPayload = {
   event: {
     id: "shared-event", type: "direct_reset", status: "completed", publishedAt: "2026-10-19T04:00:00Z",
     title: { en: "Quota reset", zh: "额度重置", "zh-Hant": "額度重置", ja: "リセット", ko: "초기화", ru: "Сброс", es: "Reinicio" },
-    summary: null, time: "2026-10-19T04:00:00Z",
-    updates: [{ id: "action-1", action: "confirm", invalidatesEvent: false, title: { en:"Confirmed", zh:"已确认", "zh-Hant":"已確認", ja:"確認済み", ko:"확인됨", ru:"Подтверждено", es:"Confirmado" }, publishedAt: "2026-10-19T04:00:00Z", time: "2026-10-18", summary: null,
+    summary: null, time: bt("2026-10-19T04:00:00Z"),
+    updates: [{ id: "action-1", action: "confirm", invalidatesEvent: false, title: { en:"Confirmed", zh:"已确认", "zh-Hant":"已確認", ja:"確認済み", ko:"확인됨", ru:"Подтверждено", es:"Confirmado" }, publishedAt: "2026-10-19T04:00:00Z", time: bt("2026-10-18"), summary: null,
       sources: [{ postId:"source-post", sourceId: "x-account:claudeai", url: "https://x.com/claudeai/status/source-post" }] }],
     scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null },
   },
@@ -22,6 +23,10 @@ const payload: WebhookPayload = {
 
 test("webhook contract preserves all v2 languages and limits withdrawal to a null event", () => {
   assert.deepEqual(webhookPayloadSchema.parse(payload), payload);
+  for (const time of ["2026-10-18", "2026-10-19T04:00:00Z", "2026-10-19T04:00:00Z/2026-10-19T05:00:00Z"]) {
+    const event = structuredClone(payload.event)!;
+    assert.equal(webhookPayloadSchema.safeParse({ ...payload, event: { ...event, updates: [{ ...event.updates[0], time }] } }).success, false, "scalar action times are rejected");
+  }
   assert.equal(webhookPayloadSchema.safeParse({ ...payload, action: "withdrawn" }).success, false);
   assert.equal(webhookPayloadSchema.safeParse({ ...payload, event: null }).success, false);
   assert.equal(webhookPayloadSchema.safeParse({ ...payload, eventId: "another-event" }).success, false);

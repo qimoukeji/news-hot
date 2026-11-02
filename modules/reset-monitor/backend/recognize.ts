@@ -1,3 +1,4 @@
+import type { BusinessTime } from "../public-v2.ts";
 import { monitor as currentMonitor, purpose as requestPurpose } from "./context.ts";
 // Recognition of the monitored author's posts: the model translates and states what the post claims; code checks
 // the boundaries (kinds, actions, times, relations) independent of wording.
@@ -15,7 +16,7 @@ export interface ContextInput {
 }
 export interface OpenEventInput {
   id: string; kind: ResetMonitorEventKind; status: EventStatus; publishedAt: string; author?: string;
-  title: string; summary: string | null; time: string; scope: string | null;
+  title: string; summary: string | null; time: BusinessTime; scope: string | null;
   actions: Array<{ id: string; action: string; invalidatesEvent: boolean; sequence: number; title: string; summary: string | null }>;
   sourcePostIds: string[];
 }

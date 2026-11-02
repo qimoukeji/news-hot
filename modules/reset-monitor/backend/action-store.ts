@@ -40,7 +40,8 @@ export async function loadActionInput(db: Db = sql): Promise<ActionInput> {
   const actions = await db<
     ActionRow[]
   >`SELECT id,event_id,sequence,action,invalidates_event,title,summary,time,sources,created_at,updated_at FROM monitor_event_actions WHERE monitor_id=${monitorId()} ORDER BY id`;
-  return { events, posts, actions };
+  const states = await db<{ key: string; value: NonNullable<ActionInput["editorials"]>[string] }[]>`SELECT key,value FROM monitor_state WHERE monitor_id=${monitorId()} AND key LIKE 'public_v2:overview:%'`;
+  return { events, posts, actions, editorials: Object.fromEntries(states.map(row => [row.key.slice("public_v2:overview:".length), row.value])) };
 }
 
 export async function storeCollectedPost(
@@ -239,13 +240,13 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
     if (!sources.some(source => source.postId === post.id)) sources.push({ postId: post.id });
     sources.sort((a, b) => a.postId.localeCompare(b.postId));
     if (existing) {
-      if (options.editExisting || upgrading) await db`UPDATE monitor_event_actions SET action=${draft.action},invalidates_event=${draft.invalidatesEvent ?? false},title=${db.json(draft.title)},summary=${draft.summary ? db.json(draft.summary) : null},time=${time},sources=${db.json(sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${existing.id}`;
+      if (options.editExisting || upgrading) await db`UPDATE monitor_event_actions SET action=${draft.action},invalidates_event=${draft.invalidatesEvent ?? false},title=${db.json(draft.title)},summary=${draft.summary ? db.json(draft.summary) : null},time=${time === null ? null : db.json(time)},sources=${db.json(sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${existing.id}`;
       else await db`UPDATE monitor_event_actions SET sources=${db.json(sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${existing.id}`;
     } else {
       const [max] = await db<{ sequence: number }[]>`SELECT coalesce(max(sequence),0)+1 AS sequence FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND event_id=${event.id}`;
       const id = options.newActionIds?.[index] ?? randomUUID();
       await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources)
-        VALUES(${monitorId()},${id},${event.id},${max!.sequence},${draft.action},${draft.invalidatesEvent ?? false},${db.json(draft.title)},${draft.summary ? db.json(draft.summary) : null},${time},${db.json(sources)})`;
+        VALUES(${monitorId()},${id},${event.id},${max!.sequence},${draft.action},${draft.invalidatesEvent ?? false},${db.json(draft.title)},${draft.summary ? db.json(draft.summary) : null},${time === null ? null : db.json(time)},${db.json(sources)})`;
     }
   }
   const removedIds = previous.map(action => action.id);

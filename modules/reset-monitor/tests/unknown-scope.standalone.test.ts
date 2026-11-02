@@ -10,6 +10,7 @@ import { projectPublicV2, properName } from "../backend/public-v2.ts";
 import { eventListSchema } from "../public-v2.ts";
 import { defaultScopeLabel } from "../backend/scope-labels.ts";
 import { webhookPayloadSchema } from "../webhooks.ts";
+import { editorialVersion, editorialRecordVersion } from "../backend/event-editorial.ts";
 import { fixture, at } from "./action-fixture.ts";
 
 for (const definition of [codex, claude, grok]) test(`${definition.monitorId} keeps incomplete scope in API, webhook and agent output`, () => {
@@ -18,6 +19,7 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId} ke
   const note = defaultScopeLabel("unknown");
   input.events[0]!.scope = { type: "unknown", productCodes: [], planCodes: plan ? [plan] : [], quotaWindowCodes: [], note };
   input.events[0]!.summary = properName("Only eligible accounts in the announced products; exact catalog mapping is unavailable.");
+  input.editorials = { [input.events[0]!.id]: { status: "ready", version: editorialVersion(input.events[0]!, input), recordVersion: editorialRecordVersion(input.events[0]!) } };
   const snapshot = projectPublicV2(input, definition, Date.parse(at)), event = snapshot.events[0]!;
   assert.equal(event.status, "completed");
   assert.deepEqual(event.scope, input.events[0]!.scope);

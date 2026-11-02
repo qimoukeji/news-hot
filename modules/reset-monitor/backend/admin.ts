@@ -11,6 +11,7 @@ import {
   editorialScopeSchema,
   reduceEvent,
   sourcedActions,
+  translated,
   iso,
   type ActionInput,
   type SourcePostRow,
@@ -21,6 +22,7 @@ import { monitorEventDetail as reviewEventDetail } from "./manual-review.ts";
 import { projectPublicV2 } from "./public-v2.ts";
 import { eventStatuses, sourceUrlSchema, timestampSchema } from "../public-v2.ts";
 import { enqueuePublicV2 } from "./public-v2-work.ts";
+import { saveEditorialState } from "./event-editorial.ts";
 import { adminTimeFilter } from "./admin-time.ts";
 export {
   monitorPostDetail,
@@ -61,7 +63,7 @@ function eventRows(input: ActionInput) {
       id: action.id, action: action.action, invalidatesEvent: action.invalidates_event, title: action.title, summary: action.summary, time: action.time ?? defaultActionTime(action.action, publishedAt), sequence: action.sequence,
       publishedAt, sources: posts.map(post => postRow(post, input)),
     })).sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || a.id.localeCompare(b.id));
-    return { ...row, title: row.title ?? event?.title ?? actions.at(-1)?.action.title ?? null, summary: row.summary,
+    return { ...row, title: event?.title ?? row.title, summary: event ? event.summary : row.summary, editorial: { title: row.title, summary: row.summary },
       version: rowVersion(row), status: reduced?.status ?? null, time: reduced?.time ?? null, scope: row.scope,
       visibility: row.withdrawn ? "withdrawn" as const : reduced ? "public" as const : "unpublished" as const,
       actionCount: actions.length, sourcePostCount: posts.length, timeline, latestAt: posts.map(post => iso(post.published_at)).sort().at(-1) ?? iso(row.created_at),
@@ -274,6 +276,10 @@ export async function updateMonitorEvent(
       after,
       { db: tx },
     );
+    if ("title" in input.patch || "summary" in input.patch) {
+      const fresh = await loadActionInput(tx), row = fresh.events.find(row => row.id === id)!;
+      await saveEditorialState(tx, row, fresh, translated(row.title) && (row.summary === null || translated(row.summary)) ? "ready" : "edited");
+    }
     await enqueuePublicV2(tx, [id]);
     return after;
   });

@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/standalone.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -11,7 +12,7 @@ import { backendDefinition as claude } from "../../claude-reset/backend-definiti
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
 const now = Date.parse("2026-10-27T08:00:00Z"), plan = "2026-10-26T08:00:00Z";
 function announced(time: string | null = plan) {
-  const input = fixture(); Object.assign(input.actions[0]!, { action: "announce", time }); return input;
+  const input = fixture(); Object.assign(input.actions[0]!, { action: "announce", time: bt(time) }); return input;
 }
 for (const definition of [codex, claude, grok]) for (const type of ["direct_reset", "reset_credit", "bonus_credit"] as const) test(`${definition.monitorId}/${type}: persisted empty-source confirmations complete the shared public timeline once`, () => {
   const input = announced(); input.events[0]!.type = type;
@@ -30,40 +31,40 @@ for (const definition of [codex, claude, grok]) for (const type of ["direct_rese
   const counts = snapshot.statistics; assert.equal(counts.resetsLast30Days! + counts.cardsLast30Days! + counts.bonusesLast30Days!, 1);
   const official = reduceEvent(input.events[0]!, { ...input, actions: input.actions.filter(item => item.sources.length) });
   assert.equal(official!.status, "announced");
-  Object.assign(action, { sources: [{ postId: input.posts[0]!.id }], time: "2026-10-27T06:00:00Z" });
+  Object.assign(action, { sources: [{ postId: input.posts[0]!.id }], time: bt("2026-10-27T06:00:00Z") });
   snapshot = read(); assert.equal(snapshot.events[0]!.updates.find(item => item.id === action.id)!.sources.length, 1);
-  assert.equal(snapshot.resetTime, "2026-10-27T06:00:00Z"); assert.equal(input.actions.length, 2);
+  assert.deepEqual(snapshot.resetTime, bt("2026-10-27T06:00:00Z")); assert.equal(input.actions.length, 2);
 });
 
 test("instant, Beijing-date and interval plans generate exactly at their boundaries", () => {
   for (const time of [plan, "2026-10-26", "2026-10-26T08:00:00Z/2026-10-27T08:00:00Z"]) {
-    const input = announced(time), boundary = inferenceBoundary(time);
+    const input = announced(time), boundary = inferenceBoundary(bt(time));
     assert.equal(inferredConfirmation(input.events[0]!, input, boundary - 1), null);
     const action = inferredConfirmation(input.events[0]!, input, boundary)!;
-    assert.equal(action.time, time); assert.deepEqual(action.sources, []);
+    assert.deepEqual(action.time, bt(time)); assert.deepEqual(action.sources, []);
     input.actions.push(action); assert.equal(inferredConfirmation(input.events[0]!, input, boundary + 60_000), null);
   }
-  assert.equal(inferenceBoundary("2026-10-26"), Date.parse("2026-10-26T16:00:00Z"));
+  assert.equal(inferenceBoundary(bt("2026-10-26")), Date.parse("2026-10-26T10:00:00Z"));
 });
 
 test("publication-time defaults trigger completion while progress, review conflicts and withdrawal block it", () => {
   const input = announced(null);
-  assert.equal(inferredConfirmation(input.events[0]!, input, now)!.time, "2026-10-10");
-  input.actions[0]!.time = plan; input.posts[0]!.processing_status = "needs_attention";
+  assert.deepEqual(inferredConfirmation(input.events[0]!, input, now)!.time, bt("2026-10-10"));
+  input.actions[0]!.time = bt(plan); input.posts[0]!.processing_status = "needs_attention";
   assert.equal(inferredConfirmation(input.events[0]!, input, now), null);
   input.posts[0]!.processing_status = "processed"; addAction(input, "delayed", "progress", plan);
   assert.equal(inferredConfirmation(input.events[0]!, input, now), null);
-  addAction(input, "rescheduled", "announce", plan, { time: "2026-10-28" });
+  addAction(input, "rescheduled", "announce", plan, { time: bt("2026-10-28") });
   assert.equal(inferredConfirmation(input.events[0]!, input, now), null);
-  input.events[0]!.withdrawn = true; assert.equal(inferredConfirmation(input.events[0]!, input, inferenceBoundary("2026-10-28")), null);
+  input.events[0]!.withdrawn = true; assert.equal(inferredConfirmation(input.events[0]!, input, inferenceBoundary(bt("2026-10-28"))), null);
 });
 
 test("new plans and cancellation invalidate prior unsourced confirmations without deleting history", () => {
   const input = announced(); const first = inferredConfirmation(input.events[0]!, input, now)!; input.actions.push(first);
-  addAction(input, "new-plan", "announce", "2026-10-27T00:00:00Z", { time: "2026-10-28" });
+  addAction(input, "new-plan", "announce", "2026-10-27T00:00:00Z", { time: bt("2026-10-28") });
   assert.equal(reduceEvent(input.events[0]!, input)!.status, "announced");
   assert.equal(inferredConfirmation(input.events[0]!, input, now), null);
-  const second = inferredConfirmation(input.events[0]!, input, inferenceBoundary("2026-10-28"))!;
+  const second = inferredConfirmation(input.events[0]!, input, inferenceBoundary(bt("2026-10-28")))!;
   assert.notEqual(second.id, first.id); input.actions.push(second);
   addAction(input, "cancel", "amend", "2026-10-29T00:00:00Z", { invalidates_event: true });
   assert.equal(reduceEvent(input.events[0]!, input)!.status, "cancelled");
@@ -73,7 +74,7 @@ test("new plans and cancellation invalidate prior unsourced confirmations withou
 test("dates and intervals preserve precision without introducing interval samples", () => {
   for (const time of ["2026-10-26", "2026-10-26T08:00:00Z/2026-10-27T08:00:00Z"]) {
     const input = announced(time); input.actions.push(inferredConfirmation(input.events[0]!, input, now)!);
-    const snapshot = projectPublicV2(input, codex, now); assert.equal(snapshot.resetTime, time); assert.equal(snapshot.statistics.typicalInterval, null);
+    const snapshot = projectPublicV2(input, codex, now); assert.deepEqual(snapshot.resetTime, bt(time)); assert.equal(snapshot.statistics.typicalInterval, null);
   }
 });
 

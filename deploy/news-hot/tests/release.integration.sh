@@ -24,6 +24,8 @@ for arg in "$@"; do
   if [[ $arg == /* && -e $arg ]]; then arg=$(wslpath -w "$arg"); fi
   args+=("$arg")
 done
+# WSL does not forward newly exported Linux variables to Windows processes automatically.
+export WSLENV="${WSLENV:+$WSLENV:}TEST_HISTORY_FINGERPRINT:TEST_HISTORY_CHANGES"
 exec "$NEWSHOT_TEST_NODE_EXE" "${args[@]}"
 NODE
   chmod +x "$temp/node-bin/node"
@@ -31,7 +33,7 @@ NODE
 fi
 command -v node > /dev/null
 
-die() { echo "FAIL: $*" >&2; exit 1; }
+die() { echo "FAIL: $*" >&2; if [[ -f ${root:-}/output ]]; then cat "$root/output" >&2; fi; exit 1; }
 assert_no_stop() { ! grep -q ' stop api worker web' "$log" || die "$case_name stopped the running site"; }
 assert_old_restart() {
   grep -q "$old_sha .* up -d --no-deps api web" "$log" || die "$case_name did not restore previous app";
@@ -101,6 +103,26 @@ case $1 in
     elif [[ $* == *' web printenv AIHOT_RELEASE'* ]]; then printf '%s\n' "$RELEASE_SHA";
     else exit 92; fi;;
   run)
+    if [[ $* == *'accessSync("modules/reset-monitor/scripts/migrate-business-time.ts")'* && $FAIL_STAGE == business_tool ]]; then exit 20; fi
+    if [[ $* == *'scripts/migrate.ts --through 0146_monitor_actions_business_time.sql'* && $FAIL_STAGE == business_cutoff ]]; then exit 21; fi
+    if [[ $* == *'modules/reset-monitor/scripts/migrate-business-time.ts --apply '* ]]; then
+      args=("$@")
+      output_parent=
+      backup_file=
+      for ((i=0; i<${#args[@]}; i++)); do
+        if [[ ${args[i]} == -v ]]; then
+          volume=${args[i+1]}
+          if [[ $volume == *:/run/newshot-business-time ]]; then output_parent=${volume%:/run/newshot-business-time}; fi
+          if [[ $volume == *:/run/newshot-backup.dump:ro ]]; then backup_file=${volume%:/run/newshot-backup.dump:ro}; fi
+        fi
+      done
+      [[ -s $backup_file && -d $output_parent && ! -e $output_parent/apply ]] || exit 22
+      [[ $(stat -c %a "$output_parent") == 700 ]] || exit 23
+      [[ $* == *'--worker-stopped --database-backup /run/newshot-backup.dump --output /run/newshot-business-time/apply'* ]] || exit 24
+      mkdir "$output_parent/apply"
+      printf '{"fakeConversion":true}\n' > "$output_parent/apply/report.json"
+      [[ $FAIL_STAGE != business_conversion ]] || exit 25
+    fi
     if [[ $* == *scripts/cleanup-monitor-history.ts* ]]; then
       if [[ $* == *' --apply '* ]]; then
         [[ $FAIL_STAGE != cleanup ]] || exit 16
@@ -360,6 +382,123 @@ export FAIL_STAGE=health FAIL_PREVIOUS_START=true
 expect_failure
 [[ $(cat "$root/shared/blocked-release") == "$new_sha" ]] || die 'failed previous restart did not block release'
 assert_current "$old_sha"
+ok
+
+business_candidate() {
+  mkdir -p "$source/modules/reset-monitor/migrations" "$source/modules/reset-monitor/scripts"
+  for name in 0146_monitor_actions_business_time 0147_monitor_actions_business_time_check 0148_monitor_actions_validate_business_time 0149_monitor_actions_structured_sources_check 0150_monitor_actions_validate_structured_sources 0151_monitor_actions_drop_scalar_sources_check 0152_monitor_actions_drop_scalar_time 0153_monitor_actions_rename_business_time; do
+    printf 'SELECT 1;\n' > "$source/modules/reset-monitor/migrations/$name.sql"
+  done
+  if [[ ${1:-} != missing ]]; then printf '// Conversion entrypoint\n' > "$source/modules/reset-monitor/scripts/migrate-business-time.ts"; fi
+  candidate
+}
+
+fixture business_missing_source_tool
+business_candidate missing
+expect_failure
+assert_no_stop
+assert_current "$old_sha"
+grep -q 'lacks the business time conversion tool' "$root/output" || die 'missing conversion tool reason absent'
+ok
+
+fixture business_missing_image_tool
+business_candidate
+export FAIL_STAGE=business_tool
+expect_failure
+assert_no_stop
+assert_current "$old_sha"
+ok
+
+fixture business_missing_approval
+business_candidate
+expect_failure
+assert_no_stop
+ok
+
+fixture business_stale_approval
+business_candidate
+approved=$(approval)
+[[ $(node "$tool" get "$root/prepare.json" needsBusinessTimeUpgrade) == true ]] || die 'conversion absent from plan'
+printf '0146_monitor_actions_business_time.sql\n' >> "$root/ledger"
+expect_failure "$approved"
+assert_no_stop
+ok
+
+for state in legacy partial empty; do
+  fixture "business_success_$state"
+  business_candidate
+  if [[ $state == partial ]]; then printf '0146_monitor_actions_business_time.sql\n' >> "$root/ledger"; fi
+  if [[ $state == empty ]]; then : > "$root/ledger"; fi
+  approved=$(approval)
+  : > "$log"
+  bash "$release_script" apply "$new_sha" "$approved" > "$root/output" 2>&1 || { cat "$root/output" >&2; die 'business time update failed'; }
+  assert_current "$new_sha"
+  node - "$log" <<'NODE'
+const fs = require('fs');
+const log = fs.readFileSync(process.argv[2], 'utf8').split('\n');
+const steps = ['accessSync(', ' stop api worker web', ' db pg_dump ', ' db pg_restore ', ' run --rm --network none ', 'scripts/migrate.ts --through 0146_monitor_actions_business_time.sql', 'modules/reset-monitor/scripts/migrate-business-time.ts --apply', ' run --rm --no-deps setup', ' up -d --no-deps api web', 'scripts/smoke.ts'];
+let previous = -1;
+for (const step of steps) {
+  const index = log.findIndex(line => line.includes(step));
+  if (index <= previous) throw new Error('Invalid business time deployment order: ' + step);
+  previous = index;
+}
+const conversion = log.find(line => line.includes('migrate-business-time.ts --apply'));
+if (!/--user \d+:\d+ /.test(conversion)) throw new Error('Conversion must use backup owner UID/GID');
+if (!/-v .*newshot\.dump:\/run\/newshot-backup\.dump:ro/.test(conversion)) throw new Error('Conversion backup must be read-only');
+if (!conversion.includes('/business-time:/run/newshot-business-time ')) throw new Error('Conversion needs a writable private output parent');
+NODE
+  [[ -s $(find "$root/backups" -name report.json -print -quit) ]] || die 'conversion report was not preserved with backup'
+  ok
+done
+
+for stage in business_cutoff business_conversion migration health; do
+  fixture "business_${stage}_failure"
+  business_candidate
+  approved=$(approval)
+  export FAIL_STAGE=$stage
+  : > "$log"
+  expect_failure "$approved"
+  assert_blocked
+  ! grep -q ' up -d --no-deps worker' "$log" || die 'failed business time release started worker'
+  if [[ $stage == business_cutoff ]]; then
+    ! grep -q 'migrate-business-time.ts --apply' "$log" || die 'failed cutoff reached conversion'
+  fi
+  if [[ $stage == business_cutoff || $stage == business_conversion ]]; then
+    ! grep -q ' run --rm --no-deps setup$' "$log" || die 'failed conversion reached final migrations'
+  fi
+  : > "$log"
+  expect_failure "$approved"
+  [[ ! -s $log ]] || die 'blocked conversion retry touched Docker'
+  ok
+done
+
+fixture business_backup_validation_failure
+business_candidate
+approved=$(approval)
+export FAIL_STAGE=backup_validation
+expect_failure "$approved"
+assert_old_restart
+! grep -q 'scripts/migrate.ts --through' "$log" || die 'invalid backup reached cutoff'
+[[ ! -e $root/shared/blocked-release ]] || die 'pre-migration backup failure blocked recovery'
+ok
+
+fixture business_already_converted
+business_candidate
+find "$source/modules/reset-monitor/migrations" -name '*.sql' -printf '%f\n' | sort >> "$root/ledger"
+bash "$release_script" apply "$new_sha" > "$root/output" 2>&1 || { cat "$root/output" >&2; die 'already converted release failed'; }
+! grep -q 'migrate-business-time.ts' "$log" || die 'already converted release repeated conversion'
+grep -q 'scripts/seed.ts' "$log" || die 'ordinary release did not seed'
+assert_current "$new_sha"
+ok
+
+fixture ordinary_migration_success
+candidate migration
+approved=$(approval)
+bash "$release_script" apply "$new_sha" "$approved" > "$root/output" 2>&1 || { cat "$root/output" >&2; die 'ordinary migration failed'; }
+! grep -q 'migrate-business-time.ts\|scripts/migrate.ts --through' "$log" || die 'ordinary migration ran business conversion'
+[[ $(grep -c ' run --rm --no-deps setup$' "$log") == 1 ]] || die 'ordinary migration setup changed'
+assert_current "$new_sha"
 ok
 
 echo "$passed release integration scenarios passed"

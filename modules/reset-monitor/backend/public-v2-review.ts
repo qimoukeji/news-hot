@@ -9,7 +9,8 @@ import {
   type ResetMonitorBackendDefinition,
 } from "./context.ts";
 import { loadActionInput, rowVersion, validateScope, lockActionRecords } from "./action-store.ts";
-import { editorialTextSchema, editorialScopeSchema, eventIdsForPost } from "../actions.ts";
+import { editorialTextSchema, editorialScopeSchema, eventIdsForPost, translated } from "../actions.ts";
+import { editorialVersion, editorialRecordVersion, saveEditorialState } from "./event-editorial.ts";
 import type { ResetSnapshot } from "../public-v2.ts";
 import { projectPublicV2 } from "./public-v2.ts";
 import { enqueuePublicV2 } from "./public-v2-work.ts";
@@ -107,6 +108,7 @@ async function prepare(
       }
       const input = await loadActionInput(db),
         affected = new Set<string>(),
+        editedEvents = new Set<string>(),
         items = new Set<string>();
       for (const review of part.reviews) {
         const key = review.kind + ":" + review.id;
@@ -131,6 +133,7 @@ async function prepare(
           summary: row.summary,
           ...("scope" in row ? { scope: row.scope } : {}),
         };
+        if (review.kind === "event" && editorialRecordVersion(row) !== editorialRecordVersion(review.editorial)) editedEvents.add(row.id);
         Object.assign(row, review.editorial);
         changes.push({
           monitorId: monitorId(),
@@ -163,6 +166,12 @@ async function prepare(
             { db },
           );
         }
+      }
+      for (const id of editedEvents) {
+        const row = input.events.find(row => row.id === id)!;
+        const status = translated(row.title) && (row.summary === null || translated(row.summary)) ? "ready" : "edited";
+        input.editorials = { ...input.editorials, [row.id]: { status, version: editorialVersion(row, input), recordVersion: editorialRecordVersion(row) } };
+        if (apply) await saveEditorialState(db, row, input, status);
       }
       if (apply) await enqueuePublicV2(db, [...affected]);
       snapshots.push(projectPublicV2(input, definition));

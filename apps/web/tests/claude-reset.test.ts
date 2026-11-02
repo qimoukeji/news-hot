@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { chromium, expect, type Browser } from "@playwright/test";
 import { startWebServer, type WebServer } from "./web-server.ts";
-import { createMonitorFixture, at, day, platforms } from "./fixtures/reset-monitor.ts";
+import { createMonitorFixture, at, day, platforms, instant, date, range } from "./fixtures/reset-monitor.ts";
 import { beijingDate } from "@aihot/contracts/time";
+import { formatBusinessTime } from "../../../modules/reset-monitor/business-time.ts";
 
 const fixture = createMonitorFixture();
 let web: WebServer;
@@ -11,28 +12,44 @@ let browser: Browser;
 before(async () => { web = await startWebServer(fixture.api); browser = await chromium.launch({ channel: "chromium" }); });
 after(async () => { await browser?.close(); await web?.stop(); });
 
-for (const product of platforms) test(`${product.product} timelines preserve explicit time and default announcements to dates while confirmations keep instants`, async () => {
+for (const product of platforms) test(`${product.product} announcement keeps business time while the mobile timeline shows publication time`, async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  fixture.state.status = "announced";
+  await page.route(`${web.origin}/**`, route => route.continue());
+  try {
+    for (const value of [range("2026-10-31T05:42:26Z", "2026-11-02T05:42:26Z"), date("2026-11-02"), instant("2026-12-31T23:59:07.123Z"), { kind: "deadline", at: "2026-11-02T05:42:26Z" } as const]) {
+      fixture.state.actionTimes = [value, null];
+      await page.goto(`${web.origin}${product.path}/history/${day}`);
+      await expect(page.getByRole("region", { name: "公开预告", exact: true }).getByText(formatBusinessTime(value), { exact: true })).toBeVisible();
+      const actionTime = page.getByRole("list", { name: "事件动作" }).locator("time").first();
+      await expect(actionTime).toHaveText("2026-10-23 00:30");
+      await expect(actionTime).toHaveAttribute("datetime", at);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    }
+    assert.deepEqual(errors, []);
+  } finally { fixture.state.status = "completed"; fixture.state.actionTimes = undefined; await page.close(); }
+});
+
+for (const product of platforms) test(`${product.product} public and admin timelines read each action's publication time independently of business time`, async () => {
   const page = await browser.newPage();
   await page.route(`${web.origin}/**`, route => route.continue()); // Each fixture edit must fetch fresh page data.
+  fixture.state.actionPublishedAt = ["2026-10-22T16:31:07Z", "2026-10-22T16:30:06Z"];
   try {
-    for (const [time, display] of [
-      ["2026-10-25T02:15:00Z", "2026-10-25 10:15"],
-      ["2026-10-25", "2026-10-25"],
-      ["2026-10-25T02:15:00Z/2026-10-25T04:45:00Z", "2026-10-25 10:15 – 2026-10-25 12:45"],
-      [null, "2026-10-23"],
-    ] as const) {
+    for (const time of [instant("2026-10-25T02:15:00Z"), date("2026-10-25"), range("2026-10-25T02:15:00Z", "2026-10-25T04:45:00Z"), null]) {
       fixture.state.actionTimes = [time, null];
       for (const path of [`${product.path}/history/${day}`, `${product.admin}?kind=events`]) {
         await page.goto(`${web.origin}${path}`);
         const row = page.locator("li").filter({ has: page.getByRole("heading", { name: /额度活动预告$/ }) });
-        await expect(row.locator(":scope > time")).toHaveText(display);
-        await expect(row.locator(":scope > time")).toHaveAttribute("datetime", time ?? day);
+        await expect(row.locator(":scope > time")).toHaveText("2026-10-23 00:31");
+        await expect(row.locator(":scope > time")).toHaveAttribute("datetime", fixture.state.actionPublishedAt[0]);
         const confirmation = page.locator("li").filter({ has: page.getByRole("heading", { name: /额度活动状态确认$/ }) });
-        await expect(confirmation.locator(":scope > time")).toHaveAttribute("datetime", at);
+        await expect(confirmation.locator(":scope > time")).toHaveAttribute("datetime", fixture.state.actionPublishedAt[1]);
         await expect(confirmation.locator(":scope > time")).toHaveText("2026-10-23 00:30");
       }
     }
-  } finally { fixture.state.actionTimes = undefined; await page.close(); }
+  } finally { fixture.state.actionTimes = undefined; fixture.state.actionPublishedAt = undefined; await page.close(); }
 });
 
 for (const product of platforms) test(`${product.product} public page reads v2 and renders actions with every saved source`, async () => {
@@ -46,11 +63,11 @@ for (const product of platforms) test(`${product.product} public page reads v2 a
     const accounts = { codex: "@thsottiaux", "claude-code": "@ClaudeDevs", grok: "@bot、@grok" }[product.platform];
     await expect(page.getByText(`关注 ${accounts} 发布的消息，筛选重置信号，推送提醒，省得你反复刷推`, { exact: true })).toBeVisible();
     const overview = page.locator('dl[aria-label="重置概览"]');
-    await expect(overview.getByText("10月23日 00:30", { exact: true })).toBeVisible();
+    await expect(overview.getByText(formatBusinessTime(instant(at)), { exact: true })).toBeVisible();
     await expect(overview.getByText("3.06 天", { exact: true })).toBeVisible();
     await expect(overview.getByRole("link", { name: "官方账号 1", exact: true })).toHaveAttribute("href", "https://example.org/account-0");
     await expect(overview.getByRole("link", { name: "官方账号 2", exact: true })).toHaveAttribute("href", "https://example.org/account-1");
-    await expect(page.getByRole("region", { name: "预估时间", exact: true }).getByText("10月28日", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "预估时间", exact: true }).getByText(formatBusinessTime(date("2026-10-28")), { exact: true })).toBeVisible();
     const timeline = page.getByRole("list", { name: "事件动作" });
     await expect(timeline.getByRole("listitem").filter({ has: page.getByRole("heading", { name: "额度活动状态确认" }) })).toHaveCount(1);
     await expect(timeline.getByRole("heading", { name: "额度活动预告" })).toBeVisible();
@@ -214,32 +231,32 @@ test("a public announcement takes precedence over prediction and keeps the last 
   fixture.state.status = "announced";
   try {
     await page.goto(`${web.origin}/claude-reset/history/${day}`);
-    await expect(page.locator('dl[aria-label="重置概览"]').getByText("10月21日 00:30", { exact: true })).toBeVisible();
-    await expect(page.getByRole("region", { name: "公开预告", exact: true }).getByText("10月23日", { exact: true })).toBeVisible();
+    await expect(page.locator('dl[aria-label="重置概览"]').getByText(formatBusinessTime(instant("2026-10-20T16:30:00Z")), { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "公开预告", exact: true }).getByText(formatBusinessTime(instant(at)), { exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: "预估时间", exact: true })).toHaveCount(0);
     fixture.state.predictedResetTime = null;
     await page.reload();
-    await expect(page.getByRole("region", { name: "公开预告", exact: true }).getByText("10月23日", { exact: true })).toBeVisible();
-  } finally { fixture.state.status = "completed"; fixture.state.predictedResetTime = "2026-10-28"; await page.close(); }
+    await expect(page.getByRole("region", { name: "公开预告", exact: true }).getByText(formatBusinessTime(instant(at)), { exact: true })).toBeVisible();
+  } finally { fixture.state.status = "completed"; fixture.state.predictedResetTime = date("2026-10-28"); await page.close(); }
 });
 
 test("overview cards preserve Beijing dates, hour units, ranges and missing values", async () => {
   const page = await browser.newPage();
   try {
     fixture.state.typicalInterval = { value: 1.5, unit: "hour", sampleCount: 2 };
-    fixture.state.resetTime = "2026-10-24";
-    fixture.state.predictedResetTime = "2026-10-27T18:00:00Z";
+    fixture.state.resetTime = date("2026-10-24");
+    fixture.state.predictedResetTime = instant("2026-10-27T18:00:00Z");
     await page.goto(`${web.origin}/codex-reset?month=2026-10`);
     const overview = page.locator('dl[aria-label="重置概览"]');
     const prediction = page.getByRole("region", { name: "预估时间", exact: true });
-    await expect(overview.getByText("10月24日", { exact: true })).toBeVisible();
+    await expect(overview.getByText(formatBusinessTime(date("2026-10-24")), { exact: true })).toBeVisible();
     await expect(overview.getByText("1.5 小时", { exact: true })).toBeVisible();
-    await expect(prediction.getByText("10月28日", { exact: true })).toBeVisible();
-    fixture.state.resetTime = "2026-10-23T16:00:00Z/2026-10-24T01:00:00Z";
-    fixture.state.predictedResetTime = "2026-11-01T00:00:00Z/2026-11-02T00:00:00Z";
+    await expect(prediction.getByText(formatBusinessTime(instant("2026-10-27T18:00:00Z")), { exact: true })).toBeVisible();
+    fixture.state.resetTime = range("2026-10-23T16:00:00Z", "2026-10-24T01:00:00Z");
+    fixture.state.predictedResetTime = range("2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z");
     await page.reload();
-    await expect(overview.getByText("10月24日 00:00 – 10月24日 09:00", { exact: true })).toBeVisible();
-    await expect(prediction.getByText("11月1日 – 11月2日", { exact: true })).toBeVisible();
+    await expect(overview.getByText(formatBusinessTime(range("2026-10-23T16:00:00Z", "2026-10-24T01:00:00Z")), { exact: true })).toBeVisible();
+    await expect(prediction.getByText(formatBusinessTime(range("2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z")), { exact: true })).toBeVisible();
     fixture.state.typicalInterval = null; fixture.state.predictedResetTime = null; fixture.state.resetTime = null;
     await page.reload();
     await expect(overview.getByText("暂无记录", { exact: true })).toBeVisible();
@@ -247,7 +264,7 @@ test("overview cards preserve Beijing dates, hour units, ranges and missing valu
     await expect(prediction.getByText("暂无预估", { exact: true })).toBeVisible();
   } finally {
     fixture.state.typicalInterval = { value: 3.0625, unit: "day", sampleCount: 5 };
-    fixture.state.predictedResetTime = "2026-10-28";
+    fixture.state.predictedResetTime = date("2026-10-28");
     delete fixture.state.resetTime;
     await page.close();
   }

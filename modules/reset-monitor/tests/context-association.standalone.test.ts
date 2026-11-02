@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/standalone.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -65,7 +66,7 @@ test("withdrawn, cancelled and source-free inferred facts never form automatic t
     const input = fixture(), post = followup(input), action = input.actions[0]!;
     if (excluded === "withdrawn") input.events[0]!.withdrawn = true;
     if (excluded === "cancelled") input.actions.push({ ...action, id: "cancel", sequence: 2, action: "amend", invalidates_event: true });
-    if (excluded === "inferred") { action.sources = []; action.time = "2026-10-10T10:00:00Z"; }
+    if (excluded === "inferred") { action.sources = []; action.time = bt("2026-10-10T10:00:00Z"); }
     if (excluded === "missing_source") action.sources = [{ postId: "missing" }];
     if (excluded === "no_initial") action.action = "progress";
     assert.equal(uniqueContextEvent(post, input, "direct_reset"), null, excluded);

@@ -16,7 +16,7 @@ function pgRestore(args: string[], capture = false, env = process.env): Promise<
     child.on("close", code => code === 0 ? resolve(output) : reject(new Error(`Backup verification failed (pg_restore exit ${code}); backup is not usable`)));
   });
 }
-export async function verifyActionBackup(path: string) {
+export async function verifyActionBackup(path: string, verificationDatabaseUrl = config.databaseUrl) {
   path = resolve(path);
   if (!(await stat(path)).isFile()) throw new Error("Backup must be a regular custom-format dump file");
   const file = await open(path, "r");
@@ -35,7 +35,7 @@ export async function verifyActionBackup(path: string) {
       if (!new RegExp(`^\\d+; \\d+ \\d+ ${kind} ${escaped} `, "m").test(toc)) throw new Error(`Complete backup is missing ${kind}: ${name}`);
     }
   }
-  const target = new URL(config.databaseUrl);
+  const target = new URL(verificationDatabaseUrl);
   const [current] = await sql<{ name: string }[]>`SELECT current_database() AS name`;
   const name = `backup_verify_${sha256(current!.name).slice(0, 12)}_${randomUUID().replaceAll("-", "").slice(0, 16)}_test`;
   target.pathname = "/postgres";
@@ -43,7 +43,7 @@ export async function verifyActionBackup(path: string) {
   let created = false;
   try {
     // A readable archive can still contain invalid constraints or omit schema. Restore it for real
-    // before destructive maintenance; a role without CREATEDB must refuse the maintenance.
+    // before destructive maintenance. The verification role needs CREATEDB; the source role does not.
     await admin`CREATE DATABASE ${admin(name)} TEMPLATE template0`;
     created = true;
     target.pathname = `/${name}`;

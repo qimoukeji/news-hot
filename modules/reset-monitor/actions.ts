@@ -9,6 +9,7 @@ import {
   sourceUrlSchema,
   timestampSchema,
   type ResetEvent,
+  type BusinessTime,
 } from "./public-v2.ts";
 
 export const actionKinds = updateActions;
@@ -82,7 +83,7 @@ export interface ActionRow {
   invalidates_event: boolean;
   title: EditorialText;
   summary: EditorialText | null;
-  time: string | null;
+  time: BusinessTime | null;
   sequence: number;
   sources: Array<{ postId: string }>;
   created_at: Date | string;
@@ -92,6 +93,7 @@ export interface ActionInput {
   events: EventRow[];
   posts: SourcePostRow[];
   actions: ActionRow[];
+  editorials?: Record<string, { version: string; status: string; recordVersion?: string }>;
 }
 export const languages = [
   "en",
@@ -114,9 +116,9 @@ export function translated(
   );
 }
 export const iso = (value: Date | string) => new Date(value).toISOString();
-/** A default announcement stays pending until the end of its Beijing publication day. */
-export function defaultActionTime(action: ActionKind, publishedAt: Date | string): string {
-  return action === "announce" ? beijingDate(publishedAt) : iso(publishedAt);
+/** A default announcement keeps its Beijing calendar-date precision. */
+export function defaultActionTime(action: ActionKind, publishedAt: Date | string): BusinessTime {
+  return action === "announce" ? { kind: "date", date: beijingDate(publishedAt), timeZone: "Asia/Shanghai" } : { kind: "instant", at: iso(publishedAt) };
 }
 export function sourcedActions(event: EventRow, input: ActionInput) {
   return input.actions
@@ -164,23 +166,23 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
   );
   if (!initial) return null;
   let status: ResetEvent["status"] = "announced";
-  let time = initial.publishedAt;
-  let announcedTime: string | null = null;
-  let confirmedTime: string | null = null;
+  let time: BusinessTime = { kind: "instant", at: initial.publishedAt };
+  let announcedTime: BusinessTime | null = null;
+  let confirmedTime: BusinessTime | null = null;
   let confirmationId: string | null = null;
   let officialConfirmed = false;
   for (const update of actions.slice(actions.indexOf(initial))) {
     const action = update.action;
     if (action.action === "amend" && action.invalidates_event) {
       status = "cancelled";
-      time = action.time ?? update.publishedAt;
+      time = action.time ?? { kind: "instant", at: update.publishedAt };
       announcedTime = confirmedTime = null;
       confirmationId = null;
       officialConfirmed = false;
     } else if (action.action === "confirm" && status !== "cancelled") {
       if (!action.sources.length && officialConfirmed) continue;
       status = "completed";
-      time = action.time ?? update.publishedAt;
+      time = action.time ?? { kind: "instant", at: update.publishedAt };
       confirmedTime = time;
       confirmationId = action.id;
       officialConfirmed = action.sources.length > 0;
@@ -195,7 +197,7 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
       status !== "cancelled" && !officialConfirmed
     ) {
       status = "in_progress";
-      time = action.time ?? update.publishedAt;
+      time = action.time ?? { kind: "instant", at: update.publishedAt };
       announcedTime = confirmedTime = confirmationId = null;
     } else if (action.action === "amend" && status !== "cancelled" && !officialConfirmed) {
       if (action.time !== null) {
@@ -204,7 +206,7 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
         confirmedTime = confirmationId = null;
       }
       time = ["announced", "in_progress"].includes(status)
-        ? (action.time ?? update.publishedAt)
+        ? (action.time ?? { kind: "instant", at: update.publishedAt })
         : time;
     }
   }

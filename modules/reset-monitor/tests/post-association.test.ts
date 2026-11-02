@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
@@ -17,7 +18,7 @@ import { reduceEvent } from "../actions.ts";
 import { config } from "@aihot/backend/config";
 
 const definitions = [codex, claude, grok];
-const fact = (action: "announce" | "confirm" | "progress" | "amend" = "confirm") => ({ action, title: properName("Official quota result"), summary: properName("Verified source fact"), time: "2026-10-01T12:00:00Z" });
+const fact = (action: "announce" | "confirm" | "progress" | "amend" = "confirm") => ({ action, title: properName("Official quota result"), summary: properName("Verified source fact"), time: bt("2026-10-01T12:00:00Z") });
 beforeEach(async () => {
   await sql`DELETE FROM monitor_webhook_deliveries`; await sql`DELETE FROM monitor_webhook_notifications`; await sql`DELETE FROM monitor_webhook_subscriptions`;
   await sql`DELETE FROM monitor_event_actions`; await sql`DELETE FROM monitor_event_records`; await sql`DELETE FROM monitor_source_posts`; await sql`DELETE FROM monitor_state`; await sql`DELETE FROM audit_log`;
@@ -99,7 +100,7 @@ for (const definition of definitions) test(`${definition.monitorId}: supplementi
   assert.equal(preview.sourceChanges.length, 1); assert.deepEqual(preview.sourceChanges[0]!.after, ["first", "review"]);
   const input = await loadActionInput(), action = input.actions[0]!;
   assert.equal(input.actions.length, 1); assert.equal(action.id, original.id); assert.equal(action.sequence, original.sequence);
-  assert.deepEqual(action.title, original.title); assert.equal(action.time, original.time); assert.deepEqual(input.events, before.events);
+  assert.deepEqual(action.title, original.title); assert.deepEqual(action.time, original.time); assert.deepEqual(input.events, before.events);
   const post = input.posts.find(post => post.id === "review")!; assert.equal(post.processing_status, "failed"); assert.equal(post.review_reason, "Keep recognition explanation");
   assert.deepEqual((await listMonitorPosts({ association: "linked" })).rows.map(post => post.id).sort(), ["first", "review"]);
 }));
@@ -137,10 +138,10 @@ for (const definition of definitions) test(`${definition.monitorId}: official so
   const original = (await loadActionInput()).actions[0]!; assert.deepEqual(original.sources, []);
   await addPost("review");
   assert.equal((await monitorPostDetail("review"))!.options.events.find(row => row.id === event.id)!.unsourcedConfirmationId, original.id);
-  await associate("review", { actions: { update: [{ id: original.id, ...fact(), time: "2026-10-02T12:00:00Z" }] }, sources: { add: [{ actionId: original.id, postId: "review" }] } });
+  await associate("review", { actions: { update: [{ id: original.id, ...fact(), time: bt("2026-10-02T12:00:00Z") }] }, sources: { add: [{ actionId: original.id, postId: "review" }] } });
   const input = await loadActionInput(), updated = input.actions[0]!;
   assert.equal(input.actions.length, 1); assert.equal(updated.id, original.id); assert.equal(updated.sequence, original.sequence);
-  assert.equal(updated.title.zh, "Official quota result"); assert.equal(updated.time, "2026-10-02T12:00:00Z"); assert.deepEqual(updated.sources, [{ postId: "review" }]);
+  assert.equal(updated.title.zh, "Official quota result"); assert.deepEqual(updated.time, bt("2026-10-02T12:00:00Z")); assert.deepEqual(updated.sources, [{ postId: "review" }]);
   assert.equal(input.posts[0]!.processing_status, "needs_attention"); assert.equal(reduceEvent(input.events[0]!, input)!.status, "completed");
   assert.equal((await monitorPostDetail("review"))!.options.events.find(row => row.id === event.id)!.unsourcedConfirmationId, null);
 }));
@@ -151,8 +152,8 @@ test("two sourced confirmations in one batch remain independent when the event o
   await addPost("review"); await addPost("other-evidence", "processed");
   const body = await postBody("review", {
     actions: { create: [
-      { localKey: "first-confirmation", eventId: "event", ...fact(), title: properName("First independent completion"), time: "2026-10-01T10:00:00Z" },
-      { localKey: "second-confirmation", eventId: "event", ...fact(), title: properName("Second independent completion"), time: "2026-10-01T11:00:00Z" },
+      { localKey: "first-confirmation", eventId: "event", ...fact(), title: properName("First independent completion"), time: bt("2026-10-01T10:00:00Z") },
+      { localKey: "second-confirmation", eventId: "event", ...fact(), title: properName("Second independent completion"), time: bt("2026-10-01T11:00:00Z") },
     ] },
     sources: { add: [{ actionKey: "first-confirmation", postId: "review" }, { actionKey: "second-confirmation", postId: "other-evidence" }] },
   });
@@ -165,22 +166,22 @@ test("two sourced confirmations in one batch remain independent when the event o
   const first = input.actions.find(action => action.title.zh === "First independent completion")!, second = input.actions.find(action => action.title.zh === "Second independent completion")!;
   assert.ok(first); assert.ok(second); assert.notEqual(first.id, second.id); assert.ok(first.sequence < second.sequence);
   assert.deepEqual(first.sources, [{ postId: "review" }]); assert.deepEqual(second.sources, [{ postId: "other-evidence" }]);
-  assert.equal(Date.parse(first.time!), Date.parse("2026-10-01T10:00:00Z")); assert.equal(Date.parse(second.time!), Date.parse("2026-10-01T11:00:00Z"));
+  assert.deepEqual(first.time, bt("2026-10-01T10:00:00Z")); assert.deepEqual(second.time, bt("2026-10-01T11:00:00Z"));
   assert.equal(reduceEvent(input.events[0]!, input)!.status, "completed");
 }));
 
 test("a new sourced announcement in a batch supersedes the old unsourced confirmation before a later official confirmation", async () => inMonitor(codex, async () => {
   const event = await createMonitorEvent({ type: "direct_reset", title: properName("Inferred event") }, "test-admin");
   const detail = (await monitorEventDetail(event.id))!;
-  const initial = { version: detail.version, versions: detail.versions, actions: { create: [{ localKey: "inferred", eventId: event.id, ...fact(), title: properName("已到预告时间"), time: "2026-10-01T09:00:00Z" }] } };
+  const initial = { version: detail.version, versions: detail.versions, actions: { create: [{ localKey: "inferred", eventId: event.id, ...fact(), title: properName("已到预告时间"), time: bt("2026-10-01T09:00:00Z") }] } };
   const initialPreview = (await previewMonitorEventReview(event.id, initial))!;
   await submitMonitorEventReview(event.id, { ...initial, previewToken: initialPreview.previewToken }, "test-admin");
   const original = (await loadActionInput()).actions[0]!;
   await addPost("review"); await addPost("other-evidence", "processed");
   const body = await postBody("review", {
     actions: { create: [
-      { localKey: "new-plan", eventId: event.id, ...fact("announce"), title: properName("New official plan"), time: "2026-10-01T10:00:00Z" },
-      { localKey: "official-result", eventId: event.id, ...fact(), title: properName("Official result of the new plan"), time: "2026-10-01T11:00:00Z" },
+      { localKey: "new-plan", eventId: event.id, ...fact("announce"), title: properName("New official plan"), time: bt("2026-10-01T10:00:00Z") },
+      { localKey: "official-result", eventId: event.id, ...fact(), title: properName("Official result of the new plan"), time: bt("2026-10-01T11:00:00Z") },
     ] },
     sources: { add: [{ actionKey: "new-plan", postId: "review" }, { actionKey: "official-result", postId: "other-evidence" }] },
   });
@@ -190,13 +191,13 @@ test("a new sourced announcement in a batch supersedes the old unsourced confirm
   await submitMonitorReview("review", { ...body, previewToken: preview.previewToken }, "association-admin");
   const input = await loadActionInput(), preserved = input.actions.find(action => action.id === original.id)!;
   assert.equal(input.actions.length, 3);
-  assert.deepEqual(preserved.title, original.title); assert.deepEqual(preserved.summary, original.summary); assert.equal(preserved.time, original.time);
+  assert.deepEqual(preserved.title, original.title); assert.deepEqual(preserved.summary, original.summary); assert.deepEqual(preserved.time, original.time);
   assert.equal(preserved.sequence, original.sequence); assert.deepEqual(preserved.sources, []);
   const announcement = input.actions.find(action => action.title.zh === "New official plan")!, confirmation = input.actions.find(action => action.title.zh === "Official result of the new plan")!;
   assert.ok(announcement); assert.ok(confirmation); assert.notEqual(confirmation.id, original.id); assert.ok(original.sequence < announcement.sequence && announcement.sequence < confirmation.sequence);
   assert.deepEqual(announcement.sources, [{ postId: "review" }]); assert.deepEqual(confirmation.sources, [{ postId: "other-evidence" }]);
   const reduced = reduceEvent(input.events[0]!, input)!;
-  assert.equal(reduced.status, "completed"); assert.equal(reduced.confirmationId, confirmation.id); assert.equal(Date.parse(reduced.confirmedTime!), Date.parse("2026-10-01T11:00:00Z"));
+  assert.equal(reduced.status, "completed"); assert.equal(reduced.confirmationId, confirmation.id); assert.deepEqual(reduced.confirmedTime, bt("2026-10-01T11:00:00Z"));
 }));
 
 test("post metadata, recognition completion, retention and empty commands still require a review reason", async () => inMonitor(codex, async () => {

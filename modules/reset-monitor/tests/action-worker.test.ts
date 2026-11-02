@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import { listEvents } from "./admin-fixture.ts";
 import { stub, Reply, gate } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
@@ -16,7 +17,7 @@ import { storeCollectedPost, sourcePost, loadActionInput, writePostActions } fro
 import { processPending, collectPosts, monitorTick, openEvents } from "../backend/scan.ts";
 import { cursorKey } from "../config.ts";
 import { recognizeThread, type ActionRecognition } from "../backend/recognize.ts";
-import { processPublicV2Pending } from "../backend/public-v2-generate.ts";
+import { translatePublicV2Pending as processPublicV2Pending } from "../backend/public-v2-generate.ts";
 import { publicV2Snapshot } from "../backend/public-v2.ts";
 import { updateMonitorEvent, updateMonitorPost } from "../backend/admin.ts";
 import { monitorEventDetail, previewMonitorEventReview, submitMonitorEventReview } from "../backend/manual-review.ts";
@@ -86,6 +87,9 @@ const model = await stub(async (_hit, request) => {
     const saved = answers.get(input.post.id);
     content = invalidOutput ? { invalid: true } : saved ? { relevant: saved.relevant, needsReview: saved.needsReview, title: saved.title, summary: saved.summary, actions: saved.actions } : null;
   }
+  else if (input.actions && input.status) {
+    content = { title: local(`Activity overview: ${input.status}`), summary: local("The activity overview includes its scope and current result.") };
+  }
   else {
     assert.match(body.messages[0].content, /Return a JSON object/);
     assert.match(body.messages[0].content, /Each non-null field must be an object with exactly seven string keys/);
@@ -117,10 +121,10 @@ afterEach(() => mock.timers.reset());
 test("model candidates retain official state and fallback titles after public inference", async () => inMonitor(codex, async () => {
   const post = await addPost(codex, "Synthetic planned reset.");
   await sql.begin(async db => writePostActions(db, (await sourcePost(post.id, db))!, [
-    { eventId: "planned", action: "announce", title: { zh: "预告重置" }, summary: null, time: at },
+    { eventId: "planned", action: "announce", title: { zh: "预告重置" }, summary: null, time: bt(at) },
   ], { events: [{ id: "planned", type: "direct_reset" }] }));
   await sql`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,title,summary,time,sources)
-    VALUES('codex','inferred-confirmation','planned',2,'confirm',${sql.json({ zh: "已到预告时间" })},NULL,${at},'[]'::jsonb)`;
+    VALUES('codex','inferred-confirmation','planned',2,'confirm',${sql.json({ zh: "已到预告时间" })},NULL,${sql.json(bt(at))},'[]'::jsonb)`;
   const snapshot = await publicV2Snapshot();
   assert.equal(snapshot.events[0]!.status, "completed");
   assert.equal(snapshot.events[0]!.updates.find(action => action.id === "inferred-confirmation")!.sources.length, 0);
@@ -139,7 +143,7 @@ test("post-backed worker accepts a first confirmation and keeps original bodies 
     await inMonitor(definition, () => applyRecognition(post.id, recognition(post.text, post.modelReceiptId)));
     const input = await inMonitor(definition, () => loadActionInput());
     const snapshot = await inMonitor(definition, () => publicV2Snapshot());
-    assert.equal(snapshot.events[0]!.status, "completed"); assert.equal(snapshot.events[0]!.time, at);
+    assert.equal(snapshot.events[0]!.status, "completed"); assert.deepEqual(snapshot.events[0]!.time, bt(at));
     assert.equal(snapshot.events[0]!.updates[0]!.sources[0]!.postId, post.id);
     assert.equal(input.posts[0]!.processing_status, "processed");
     assert.deepEqual(input.events[0]!.summary, input.actions[0]!.summary);
@@ -329,7 +333,7 @@ test("one post creates announce and confirm actions for one local event and disc
   const input = await inMonitor(codex, () => loadActionInput()), snapshot = await inMonitor(codex, () => publicV2Snapshot());
   assert.equal(input.events.length, 1); assert.equal(input.actions.length, 2);
   assert.equal(snapshot.events[0]!.updates.length, 2); assert.equal(snapshot.events[0]!.status, "completed");
-  assert.equal(snapshot.events[0]!.time, at); assert.equal(snapshot.announcedResetTime, null); assert.equal(snapshot.resetTime, at);
+  assert.deepEqual(snapshot.events[0]!.time, bt(at)); assert.deepEqual(snapshot.announcedResetTime, null); assert.deepEqual(snapshot.resetTime, bt(at));
 });
 
 test("a repeated accepted action adds its source and does not overwrite accepted facts", async () => {
@@ -453,8 +457,10 @@ test("editorial translation preserves manual text and cannot write status or tim
   const before = (await inMonitor(codex, () => publicV2Snapshot())).events[0]!;
   assert.equal((await inMonitor(codex, () => processPublicV2Pending())).enriched, 1);
   const after = (await inMonitor(codex, () => publicV2Snapshot())).events[0]!;
-  assert.equal(after.title.zh, "人工标题"); assert.equal(after.summary!.en, "Manual summary");
-  assert.equal(Object.keys(after.title).length, 7); assert.equal(after.status, before.status); assert.equal(after.time, before.time);
+  const saved = (await inMonitor(codex, () => loadActionInput())).events[0]!;
+  assert.equal(saved.title!.zh, "人工标题"); assert.equal(saved.summary!.en, "Manual summary");
+  assert.notEqual(after.title.zh, "人工标题"); assert.equal(after.summary, null, "unversioned overview stays private until refreshed");
+  assert.equal(Object.keys(after.title).length, 7); assert.equal(after.status, before.status); assert.deepEqual(after.time, before.time);
   assert.deepEqual((await inMonitor(codex, () => loadActionInput())).actions, input.actions);
 });
 
@@ -701,7 +707,7 @@ test("reward closure, reopening and expiry are progress and preserve confirmatio
     const snapshot = await inMonitor(claude, () => publicV2Snapshot());
     assert.equal((await inMonitor(claude, () => sourcePost(post.id)))!.processing_status, "processed");
     assert.equal(snapshot.events[0]!.status, "completed");
-    assert.equal(snapshot.events[0]!.time, at);
+    assert.deepEqual(snapshot.events[0]!.time, bt(at));
     assert.equal(snapshot.events[0]!.updates[0]!.action, "progress");
     assert.equal(snapshot.statistics.bonusesLast30Days, 1);
   }
@@ -738,8 +744,8 @@ for (const kind of ["direct_reset", "reset_credit", "bonus_credit"] as const) {
     const snapshot = await inMonitor(definition, () => publicV2Snapshot());
     assert.equal(snapshot.events[0]!.status, "cancelled");
     assert.equal(snapshot.events[0]!.updates[0]!.invalidatesEvent, true);
-    assert.equal(snapshot.resetTime, null);
-    assert.equal(snapshot.announcedResetTime, null);
+    assert.deepEqual(snapshot.resetTime, null);
+    assert.deepEqual(snapshot.announcedResetTime, null);
     assert.equal(snapshot.statistics.resetsLast30Days, 0);
     assert.equal(snapshot.statistics.cardsLast30Days, 0);
     assert.equal(snapshot.statistics.bonusesLast30Days, 0);
@@ -828,10 +834,10 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: i
   process.env.COLLECT_ENABLED = "false";
   const scheduled = createMonitorServer(definition).schedules!.find(item => item.name === `${definition.monitorId}-reset.translate`)!;
   assert.equal(scheduled.when!(), true);
-  assert.deepEqual(await scheduled.run(), { enriched: 6 });
+  assert.deepEqual(await scheduled.run(), { enriched: 6, overviews: 1 });
   const after = await loadActionInput();
-  assert.equal(after.events[0]!.title!.zh, "事件中文标题");
-  assert.equal(after.events[0]!.summary!.en, "Preserved event summary");
+  assert.equal(after.events[0]!.title!.zh, "Activity overview: completed");
+  assert.equal(after.events[0]!.summary!.en, "The activity overview includes its scope and current result.");
   assert.equal(after.events[0]!.scope!.note!.zh, "明确范围说明");
   assert.equal(after.actions[0]!.title.zh, "动作中文标题");
   assert.equal(after.actions[0]!.summary!.zh, "动作中文摘要");
@@ -846,7 +852,7 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: i
   assert.deepEqual(after.events[0]!.scope!.productCodes, before.events[0]!.scope!.productCodes);
   assert.equal(after.events[0]!.withdrawn, before.events[0]!.withdrawn);
   assert.deepEqual(await scheduled.run(), { enriched: 0 });
-  assert.equal(model.hits() - calls, 6);
+  assert.equal(model.hits() - calls, 7);
   assert.ok(editorialInputs.every(input => Object.keys(input).sort().join(",") === "note,summary,title"));
   assert.equal(JSON.stringify(editorialInputs).includes("Private original marker"), false);
 
@@ -863,14 +869,14 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: i
   assert.deepEqual(edited.events[0]!.title, { zh: "再次编辑事件" });
   assert.deepEqual(edited.actions[0]!.title, { zh: "再次编辑动作" });
   assert.deepEqual(edited.posts.find(post => post.id === postIds[0])!.title, { zh: "再次编辑帖子" });
-  assert.deepEqual(await scheduled.run(), { enriched: 3 });
+  assert.deepEqual(await scheduled.run(), { enriched: 3, overviews: 1 });
   const retranslated = await loadActionInput();
-  assert.equal(retranslated.events[0]!.title!.zh, "再次编辑事件");
+  assert.equal(retranslated.events[0]!.title!.zh, "Activity overview: completed");
   assert.equal(retranslated.actions[0]!.title.zh, "再次编辑动作");
   assert.equal(retranslated.posts.find(post => post.id === postIds[0])!.title!.zh, "再次编辑帖子");
   assert.equal(retranslated.posts.find(post => post.id === postIds[0])!.processing_status, "pending");
   assert.deepEqual(await scheduled.run(), { enriched: 0 });
-  assert.equal(model.hits() - calls, 9);
+  assert.equal(model.hits() - calls, 11);
 }));
 
 test("a failed translation version is not purchased again, while editing the post allows new translation", async () => inMonitor(codex, async () => {

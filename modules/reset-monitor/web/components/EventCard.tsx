@@ -35,15 +35,16 @@ export function EventCardFrame({ event, catalog, title, footer, children, eventI
 }
 
 export function EventActionRow({ action, children, actionId }: {
-  action: Pick<AdminTimelineAction, "action" | "invalidatesEvent" | "time" | "publishedAt" | "title" | "summary">; children: ReactNode; actionId?: string;
+  action: Pick<AdminTimelineAction, "action" | "invalidatesEvent" | "publishedAt" | "title" | "summary" | "time">; children: ReactNode; actionId?: string;
 }) {
-  const time = action.time ?? action.publishedAt;
+  const time = action.publishedAt;
   return <li className="grid min-w-0 grid-cols-[7.25rem_minmax(0,1fr)] gap-3 sm:grid-cols-[8.5rem_minmax(0,1fr)] sm:gap-4" data-timeline-action={actionId}>
-    <time dateTime={time} className="num text-[12px] leading-5 text-ink-4">{stamp(time)}</time>
+    <time dateTime={time} className="num break-words text-[12px] leading-5 text-ink-4">{stamp(time)}</time>
     <div className="min-w-0 border-l-2 border-line-strong pl-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h4 className="break-words text-[13px] font-medium leading-5 text-ink"><Badge className="mr-2 align-middle" tone={action.invalidatesEvent ? "hot" : action.action === "confirm" ? "ok" : "accent"}>{action.invalidatesEvent ? "修订 · 已取消" : ACTION[action.action]}</Badge><span className="align-middle">{text(action.title)}</span></h4>
+          {action.time && <p className="num mt-1 break-words text-[12px] text-ink-4">业务时间：{stamp(action.time)}</p>}
           {action.summary && <p className="mt-1 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-ink-3">{text(action.summary)}</p>}
         </div>
         {children}

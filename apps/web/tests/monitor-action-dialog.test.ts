@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
-import { after, before, test } from "node:test";
+import { after, before, beforeEach, test } from "node:test";
+import { mkdir } from "node:fs/promises";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import { startWebServer, type WebServer } from "./web-server.ts";
-import { createMonitorFixture, platforms } from "./fixtures/reset-monitor.ts";
+import { createMonitorFixture, platforms, instant, date } from "./fixtures/reset-monitor.ts";
 
 const fixture = createMonitorFixture();
 let web: WebServer;
 let browser: Browser;
 before(async () => { web = await startWebServer(fixture.api); browser = await chromium.launch({ channel: "chromium" }); });
 after(async () => { await browser?.close(); await web?.stop(); });
+beforeEach(() => { fixture.state.actionTimes = undefined; });
 const dialog = (page: Page) => page.getByRole("dialog", { name: /^(添加动作|编辑动作)$/ });
 const source = (page: Page, name = "官方帖子摘要") => dialog(page).getByLabel("已关联帖子", { exact: true }).getByRole("listitem").filter({ has: page.getByRole("heading", { name, exact: true }) });
 const addSources = async (page: Page, ...names: string[]) => {
@@ -22,6 +24,7 @@ const removeSource = (page: Page, name = "官方帖子摘要") => source(page, n
 const preview = async (page: Page) => {
   await dialog(page).getByRole("button", { name: "预览影响", exact: true }).click();
   await expect(dialog(page).getByLabel("变更预览", { exact: true })).toBeVisible();
+  await expect(dialog(page).getByRole("button", { name: "确认提交", exact: true })).toBeEnabled();
 };
 
 for (const product of platforms) test(`${product.product} creates a confirmation without posts using the action form`, async () => {
@@ -42,12 +45,13 @@ for (const product of platforms) test(`${product.product} creates a confirmation
 
     await dialog(page).getByRole("button", { name: "预览影响", exact: true }).click();
     assert.equal(fixture.writes.length, 0);
-    await time.fill("2026-10-23");
+    await time.selectOption("date");
+    await dialog(page).getByLabel("业务日期", { exact: true }).fill("2026-10-23");
     await preview(page);
     const body = fixture.writes[0]!.body;
     assert.equal("reason" in body, false);
     assert.equal(body.actions.create[0].action, "confirm");
-    assert.equal(body.actions.create[0].time, "2026-10-23");
+    assert.deepEqual(body.actions.create[0].time, date("2026-10-23"));
     assert.deepEqual(body.sources, { add: [], remove: [] });
     assert.equal("verification" in body, false);
     await dialog(page).getByLabel("动作摘要（中文）").fill("已核对实际使用情况");
@@ -73,7 +77,8 @@ for (const product of platforms) test(`${product.product} edits a source-less co
     const row = page.locator('[data-timeline-action="confirm-action"]');
     await expect(row.getByText("无关联帖子", { exact: true })).toHaveCount(0);
     await row.getByRole("button", { name: /^编辑动作/ }).click();
-    await expect(dialog(page).getByLabel("明确业务时间")).toHaveValue("2026-10-22T16:30:00.000Z");
+    await expect(dialog(page).getByLabel("明确业务时间")).toHaveValue("instant");
+    await expect(dialog(page).getByLabel("业务时刻", { exact: true })).toHaveValue("2026-10-23T00:30");
     await expect(dialog(page).getByRole("alert")).toHaveCount(0);
     await dialog(page).getByLabel("动作摘要（中文）").fill("人工核对生效情况");
      await preview(page);
@@ -81,12 +86,13 @@ for (const product of platforms) test(`${product.product} edits a source-less co
     assert.deepEqual(fixture.writes[0]!.body.sources, { add: [], remove: [] });
     await addSources(page, "官方帖子摘要");
     await dialog(page).getByLabel("动作标题（中文）").fill("额度活动状态确认");
-    await dialog(page).getByLabel("明确业务时间").fill("2026-10-23T08:00:00Z");
+    await dialog(page).getByLabel("业务时间时区", { exact: true }).selectOption("UTC");
+    await dialog(page).getByLabel("业务时刻", { exact: true }).fill("2026-10-23T08:00");
     await expect(dialog(page).getByLabel("变更预览")).toHaveCount(0);
     await preview(page);
     const body = fixture.writes.at(-1)!.body;
     assert.equal(body.actions.update[0].id, "confirm-action");
-    assert.equal(body.actions.update[0].time, "2026-10-23T08:00:00Z");
+    assert.deepEqual(body.actions.update[0].time, instant("2026-10-23T08:00:00Z"));
     assert.deepEqual(body.sources.add, [{ actionId: "confirm-action", postId: "post-1" }]);
     await dialog(page).getByRole("button", { name: "确认提交", exact: true }).click();
     await expect(dialog(page)).toHaveCount(0);
@@ -107,7 +113,8 @@ for (const product of platforms) test(`${product.product} adds actions in a dial
     await expect(dialog(page).getByLabel("动作", { exact: true })).toHaveValue("announce");
     await expect(source(page)).toHaveCount(0);
     await dialog(page).getByLabel("动作标题（中文）").fill("新的确认事实");
-    await dialog(page).getByLabel("明确业务时间").fill("2026-10-23");
+    await dialog(page).getByLabel("明确业务时间").selectOption("date");
+    await dialog(page).getByLabel("业务日期", { exact: true }).fill("2026-10-23");
 
     await dialog(page).getByRole("button", { name: "预览影响", exact: true }).click();
     await expect(dialog(page).getByRole("alert")).toContainText("至少一条来源");
@@ -118,7 +125,7 @@ for (const product of platforms) test(`${product.product} adds actions in a dial
     const body = fixture.writes[0]!.body;
     assert.equal(fixture.writes[0]!.path, `${product.api}/events/event-1/review/preview`);
     assert.equal(body.actions.create[0].eventId, "event-1");
-    assert.equal(body.actions.create[0].time, "2026-10-23");
+    assert.deepEqual(body.actions.create[0].time, date("2026-10-23"));
     assert.deepEqual(body.sources.add, [{ actionKey: "new-action", postId: "post-1" }, { actionKey: "new-action", postId: "post-2" }]);
     assert.deepEqual(body.events, { create: [], update: [] });
     assert.deepEqual(body.orders, []);
@@ -394,4 +401,145 @@ for (const width of [1280, 390]) test(`dialog scrolls with visible actions and t
     await page.screenshot({ path: `.data/local-preview/action-dialog-${width}.png` });
     await page.keyboard.press("Escape"); await expect(dialog(page)).toHaveCount(0);
   } finally { await page.close(); }
+});
+
+for (const colorScheme of ["light", "dark"] as const) for (const width of [390, 1280]) test(`time picker validates ranges and deadlines at ${width}px in ${colorScheme} mode`, async () => {
+  fixture.writes.length = 0;
+  const page = await browser.newPage({ viewport: { width, height: 900 }, colorScheme });
+  try {
+    await page.goto(`${web.origin}/admin/codex-reset`);
+    await page.getByRole("button", { name: "添加动作", exact: true }).click();
+    const form = dialog(page);
+    await form.getByLabel("动作", { exact: true }).selectOption("confirm");
+    await form.getByLabel("明确业务时间", { exact: true }).selectOption("range");
+    await form.getByRole("button", { name: "预览影响", exact: true }).click();
+    assert.equal(fixture.writes.length, 0);
+    await form.getByLabel("业务时间时区", { exact: true }).selectOption("UTC");
+    await form.getByLabel("开始时间", { exact: true }).fill("2026-10-23T08:00:26");
+    await form.getByLabel("结束时间", { exact: true }).fill("2026-10-23T07:00:26");
+    await expect(form.getByRole("alert")).toContainText("结束时间不能早于开始时间");
+    await form.getByRole("button", { name: "预览影响", exact: true }).click();
+    assert.equal(fixture.writes.length, 0);
+    await form.getByLabel("结束时间", { exact: true }).fill("2026-10-23T09:00:26");
+    await preview(page);
+    assert.deepEqual(fixture.writes.at(-1)!.body.actions.create[0].time, { kind: "range", from: "2026-10-23T08:00:26Z", through: "2026-10-23T09:00:26Z" });
+    await form.getByLabel("结束时间", { exact: true }).fill("2026-10-23T10:00:26");
+    await expect(form.getByLabel("变更预览")).toHaveCount(0);
+    await form.getByLabel("明确业务时间", { exact: true }).selectOption("deadline");
+    await form.getByLabel("截止时间", { exact: true }).fill("2026-10-23T11:00:26");
+    await preview(page);
+    assert.deepEqual(fixture.writes.at(-1)!.body.actions.create[0].time, { kind: "deadline", at: "2026-10-23T11:00:26Z" });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    await page.keyboard.press("Escape");
+    await expect(form).toHaveCount(0);
+  } finally { await page.close(); }
+});
+
+test("editing other action fields preserves fractional seconds and source-date zones", async () => {
+  fixture.writes.length = 0;
+  fixture.state.emptyConfirmation = true;
+  const precise = instant("2026-10-22T16:30:00.123456789Z");
+  fixture.state.actionTimes = [date("2026-10-23", "Asia/Tokyo"), precise];
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${web.origin}/admin/codex-reset`);
+    await page.getByRole("button", { name: "编辑动作：已到预告时间", exact: true }).click();
+    await dialog(page).getByLabel("动作摘要（中文）").fill("仅补充业务摘要");
+    await preview(page);
+    assert.deepEqual(fixture.writes.at(-1)!.body.actions.update[0].time, precise);
+    await dialog(page).getByRole("button", { name: "取消", exact: true }).click();
+    await expect(dialog(page)).toHaveCount(0);
+    await page.getByRole("button", { name: "编辑动作：额度活动预告", exact: true }).click();
+    await expect(dialog(page).getByLabel("明确业务时间", { exact: true })).toHaveValue("date");
+    await expect(dialog(page).getByLabel("业务日期", { exact: true })).toHaveValue("2026-10-23");
+    await expect(dialog(page).getByLabel("业务时间时区", { exact: true })).toHaveValue("Asia/Tokyo");
+    await dialog(page).getByLabel("动作标题（中文）").fill("补充活动预告说明");
+    await preview(page);
+    assert.deepEqual(fixture.writes.at(-1)!.body.actions.update[0].time, date("2026-10-23", "Asia/Tokyo"));
+  } finally { fixture.state.actionTimes = undefined; fixture.state.emptyConfirmation = false; await page.close(); }
+});
+
+for (const product of platforms) for (const kind of ["instant", "date", "range", "deadline"] as const) test(`${product.product} ${kind} selection survives save and reopening`, async () => {
+  fixture.writes.length = 0;
+  const page = await browser.newPage({ viewport: { width: kind === "date" || kind === "deadline" ? 390 : 1280, height: 900 }, colorScheme: kind === "range" || kind === "deadline" ? "dark" : "light" });
+  try {
+    await page.goto(`${web.origin}${product.admin}`);
+    const trigger = page.getByRole("button", { name: "编辑动作：额度活动状态确认", exact: true });
+    await trigger.click();
+    await dialog(page).getByLabel("明确业务时间", { exact: true }).selectOption(kind);
+    await dialog(page).getByLabel("业务时间时区", { exact: true }).selectOption(kind === "date" ? "Asia/Tokyo" : "UTC");
+    if (kind === "date") await dialog(page).getByLabel("业务日期", { exact: true }).fill("2026-10-23");
+    else if (kind === "range") {
+      await dialog(page).getByLabel("开始时间", { exact: true }).fill("2026-10-23T08:00:26");
+      await dialog(page).getByLabel("结束时间", { exact: true }).fill("2026-10-23T09:00:26");
+    } else await dialog(page).getByLabel(kind === "deadline" ? "截止时间" : "业务时刻", { exact: true }).fill("2026-10-23T08:00:26");
+    await preview(page);
+    const expected = kind === "date" ? date("2026-10-23", "Asia/Tokyo") : kind === "range" ? { kind, from: "2026-10-23T08:00:26Z", through: "2026-10-23T09:00:26Z" } : { kind, at: "2026-10-23T08:00:26Z" };
+    assert.deepEqual(fixture.writes.at(-1)!.body.actions.update[0].time, expected);
+    await dialog(page).getByRole("button", { name: "确认提交", exact: true }).click();
+    await expect(dialog(page)).toHaveCount(0);
+    await trigger.click();
+    await expect(dialog(page).getByLabel("明确业务时间", { exact: true })).toHaveValue(kind);
+    if (kind === "date") {
+      await expect(dialog(page).getByLabel("业务日期", { exact: true })).toHaveValue("2026-10-23");
+      await expect(dialog(page).getByLabel("业务时间时区", { exact: true })).toHaveValue("Asia/Tokyo");
+    } else await expect(dialog(page).getByLabel(kind === "range" ? "开始时间" : kind === "deadline" ? "截止时间" : "业务时刻", { exact: true })).toHaveValue("2026-10-23T16:00:26");
+    await dialog(page).getByLabel("动作摘要（中文）").fill("重新打开后补充业务摘要");
+    await preview(page);
+    assert.deepEqual(fixture.writes.at(-1)!.body.actions.update[0].time, expected);
+    if (product.platform === "codex") {
+      await mkdir(".data/local-preview/business-time-ui", { recursive: true });
+      await page.screenshot({ path: `.data/local-preview/business-time-ui/admin-${kind}.png`, fullPage: true });
+    }
+  } finally { fixture.state.actionTimes = undefined; await page.close(); }
+});
+
+test("native picker rejects skipped and repeated DST clocks before sending a preview", async () => {
+  fixture.writes.length = 0;
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${web.origin}/admin/codex-reset`);
+    await page.getByRole("button", { name: "编辑动作：额度活动状态确认", exact: true }).click();
+    await dialog(page).getByLabel("动作摘要（中文）").fill("核对业务时间");
+    await dialog(page).getByLabel("明确业务时间", { exact: true }).selectOption("instant");
+    await dialog(page).getByLabel("业务时间时区", { exact: true }).selectOption("America/Los_Angeles");
+    for (const at of ["2026-03-08T02:30:00", "2026-11-01T01:30:00"]) {
+      await dialog(page).getByLabel("业务时刻", { exact: true }).fill(at.slice(0, 16));
+      await expect(dialog(page).getByRole("alert")).toContainText("夏令时歧义");
+      await dialog(page).getByRole("button", { name: "预览影响", exact: true }).click();
+      assert.equal(fixture.writes.length, 0);
+    }
+    await dialog(page).getByLabel("业务时间时区", { exact: true }).selectOption("UTC");
+    await preview(page);
+    assert.deepEqual(fixture.writes.at(-1)!.body.actions.update[0].time, instant("2026-11-01T01:30:00Z"));
+  } finally { await page.close(); }
+});
+
+test("switching an existing instant or range input zone preserves absolute time and unedited nanoseconds", async () => {
+  const page = await browser.newPage();
+  const from = "2026-10-22T16:30:00.123456789Z";
+  try {
+    for (const value of [instant(from), { kind: "range", from, through: "2026-10-22T17:45:00.987654321Z" } as const, { kind: "deadline", at: from } as const]) {
+      fixture.state.actionTimes = [null, value]; fixture.writes.length = 0;
+      await page.goto(`${web.origin}/admin/codex-reset`);
+      await page.getByRole("button", { name: "编辑动作：额度活动状态确认", exact: true }).click();
+      await dialog(page).getByLabel("动作摘要（中文）").fill("补充业务说明");
+      const startLabel = value.kind === "range" ? "开始时间" : value.kind === "deadline" ? "截止时间" : "业务时刻";
+      await dialog(page).getByLabel("业务时间时区", { exact: true }).selectOption("UTC");
+      await expect(dialog(page).getByLabel(startLabel, { exact: true })).toHaveValue("2026-10-22T16:30");
+      await preview(page);
+      assert.deepEqual(fixture.writes.at(-1)!.body.actions.update[0].time, value);
+      await dialog(page).getByLabel("业务时间时区", { exact: true }).selectOption("America/Los_Angeles");
+      await expect(dialog(page).getByLabel(startLabel, { exact: true })).toHaveValue("2026-10-22T09:30");
+      await preview(page);
+      assert.deepEqual(fixture.writes.at(-1)!.body.actions.update[0].time, value);
+      if (value.kind === "range") {
+        await dialog(page).getByLabel("结束时间", { exact: true }).fill("2026-10-22T11:46:26");
+        await preview(page);
+        assert.deepEqual(fixture.writes.at(-1)!.body.actions.update[0].time, { ...value, through: "2026-10-22T18:46:26Z" });
+      }
+      await dialog(page).getByRole("button", { name: "取消", exact: true }).click();
+      await expect(dialog(page)).toHaveCount(0);
+    }
+  } finally { fixture.state.actionTimes = undefined; await page.close(); }
 });

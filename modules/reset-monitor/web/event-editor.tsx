@@ -8,6 +8,7 @@ import { EventFields } from "./event-fields.tsx";
 import { AdminDialog } from "./admin-dialog.tsx";
 
 export function EventEditorDialog({ event, onClose, onCreated }: { event?: ReviewEvent; onClose: () => void; onCreated?: (event: { id: string; createdAt?: string }) => void }) {
+  if (event?.editorial) event = { ...event, ...event.editorial };
   const { adminApiPath, eventKinds } = useMonitor();
   const { run, busy } = useAdminAction();
   const initial = () => ({ type: event?.type ?? eventKinds[0]!, title: text(event?.title), summary: text(event?.summary), scope: text(event?.scope?.note) });

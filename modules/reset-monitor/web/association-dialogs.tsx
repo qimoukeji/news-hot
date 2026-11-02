@@ -7,6 +7,7 @@ import { useMonitor } from "./context.tsx";
 import { ACTION, KIND, STATUS, stamp, text } from "./components/format.ts";
 import type { ActionFact, AdminReviewDetail, EventDraft, ReviewAction, ReviewEvent } from "./admin-types.ts";
 import type { AssociationAddition } from "./association-draft.ts";
+import { compareBusinessTime } from "../public-v2.ts";
 
 export type AssociationStep = { kind: "choose-event" } | { kind: "event" | "source" | "action"; eventId: string } | { kind: "new-event" } | { kind: "remove"; action: ReviewAction };
 
@@ -40,7 +41,7 @@ function EventChoice({ detail, onChoose, onClose }: { detail: AdminReviewDetail;
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const events = detail.options.events.filter(event => `${text(event.title)} ${KIND[event.type]}`.toLowerCase().includes(query.trim().toLowerCase()))
-    .sort((a, b) => (Date.parse(b.time?.split("/")[0] ?? "") || 0) - (Date.parse(a.time?.split("/")[0] ?? "") || 0));
+    .sort((a, b) => a.time && b.time ? compareBusinessTime(b.time, a.time) : a.time ? -1 : b.time ? 1 : 0);
   const totalPages = Math.ceil(events.length / 10);
   const currentPage = Math.min(page, Math.max(1, totalPages));
   const visible = events.slice((currentPage - 1) * 10, currentPage * 10);

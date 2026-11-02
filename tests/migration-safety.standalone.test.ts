@@ -66,8 +66,8 @@ test("a column or a constraint nothing uses can be dropped alone, never with its
   for (const statement of [
     "ALTER TABLE articles DROP COLUMN IF EXISTS flag;",
     "ALTER TABLE public.articles DROP COLUMN IF EXISTS flag;",
-    "ALTER TABLE articles DROP CONSTRAINT IF EXISTS positive;",
-  ]) assert.equal(migrationPlan(statement).kind, "transaction", statement);
+  ]) assert.equal(migrationPlan(statement).kind, "drop-column", statement);
+  assert.equal(migrationPlan("ALTER TABLE articles DROP CONSTRAINT IF EXISTS positive;").kind, "transaction");
   for (const statement of [
     "ALTER TABLE articles DROP COLUMN flag;",
     "ALTER TABLE articles DROP flag;",
@@ -79,6 +79,19 @@ test("a column or a constraint nothing uses can be dropped alone, never with its
     "ALTER TABLE articles DROP CONSTRAINT positive;",
     "ALTER TABLE articles DROP CONSTRAINT IF EXISTS positive CASCADE;",
   ]) assert.throws(() => migrationPlan(statement), statement);
+});
+
+test("one column can be renamed under the metadata lock budget without changing its type", () => {
+  for (const statement of [
+    "ALTER TABLE monitor_event_actions RENAME COLUMN business_time TO time;",
+    'ALTER TABLE public."actions" RENAME COLUMN "old . name" TO "time";',
+  ]) assert.equal(migrationPlan(statement).kind, "transaction");
+  for (const statement of [
+    "ALTER TABLE actions RENAME old TO time;",
+    "ALTER TABLE actions RENAME COLUMN old TO time, ALTER COLUMN time TYPE jsonb;",
+    "ALTER TABLE actions RENAME COLUMN old TO time; ALTER TABLE actions DROP COLUMN IF EXISTS other;",
+    "ALTER TABLE actions RENAME TO other;",
+  ]) assert.throws(() => migrationPlan(statement));
 });
 
 test("concurrent indexes have one retriable statement per file, outside a transaction", () => {

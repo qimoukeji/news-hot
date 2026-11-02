@@ -1,0 +1,1 @@
+ALTER TABLE monitor_event_actions ADD CONSTRAINT monitor_actions_structured_sources_check CHECK (jsonb_typeof(sources) = 'array' AND (jsonb_array_length(sources) > 0 OR (action = 'confirm' AND business_time IS NOT NULL AND NOT invalidates_event))) NOT VALID;

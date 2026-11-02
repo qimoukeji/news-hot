@@ -14,6 +14,12 @@ export const sourceUrlSchema = z.string().regex(sourceUrlPattern, "Source URL re
   }, "Source URL must use HTTP(S) without credentials")
   .meta({ format: "uri", pattern: sourceUrlPattern.source });
 export const timestampSchema = z.iso.datetime({ offset: true });
+const businessTimestampSchema = timestampSchema
+  .regex(/^(?!.*\.\d{10})/, "Business timestamps support at most nine fractional-second digits")
+  .refine(value => {
+    try { Temporal.Instant.from(value); return true; } catch { return false; }
+  }, "Business timestamps require a valid instant")
+  .meta({ format: "date-time", description: "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC." });
 export const calendarDate = z.iso.date();
 export const localizedTextSchema = z.strictObject({
   en: text, zh: text, "zh-Hant": text, ja: text, ko: text, ru: text, es: text,
@@ -25,35 +31,59 @@ export const updateActions = ["announce", "confirm", "progress", "amend"] as con
 const timeZone = text.refine(value => {
   try { return !/^[+-]/.test(new Intl.DateTimeFormat("en", { timeZone: value }).resolvedOptions().timeZone); } catch { return false; }
 }, "Invalid source time zone");
-export const eventTimeSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("instant"), at: timestampSchema }),
+export const businessTimeSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("instant"), at: businessTimestampSchema }),
   z.strictObject({ kind: z.literal("date"), date: calendarDate, timeZone }),
-  z.strictObject({ kind: z.literal("range"), from: timestampSchema, through: timestampSchema })
-    .refine(value => Date.parse(value.through) >= Date.parse(value.from), "Range end precedes start"),
-  z.strictObject({ kind: z.literal("deadline"), at: timestampSchema }),
-  z.strictObject({ kind: z.literal("unknown") }),
+  z.strictObject({ kind: z.literal("range"), from: businessTimestampSchema, through: businessTimestampSchema })
+    .refine(value => {
+      // Zod may run a refinement even when a child string has format issues.
+      try { return Temporal.Instant.compare(value.through, value.from) >= 0; } catch { return false; }
+    }, "Range requires valid endpoints with its end at or after its start"),
+  z.strictObject({ kind: z.literal("deadline"), at: businessTimestampSchema }),
 ]);
+export type BusinessTime = z.infer<typeof businessTimeSchema>;
+export const eventTimeSchema = z.union([businessTimeSchema, z.strictObject({ kind: z.literal("unknown") })]);
 export type EventTime = z.infer<typeof eventTimeSchema>;
 
-export const publicTimeSchema = z.union([timestampSchema, calendarDate, z.string().refine(value => {
-  const parts = value.split("/");
-  return parts.length === 2 && parts.every(part => timestampSchema.safeParse(part).success) && Date.parse(parts[1]!) >= Date.parse(parts[0]!);
-}, "Time requires an ISO timestamp, date or timestamp interval")]);
+export const publicTimeSchema = businessTimeSchema;
 export type PublicTime = z.infer<typeof publicTimeSchema>;
-const updateFields = { id: identifier, publishedAt: timestampSchema, time: publicTimeSchema.describe("Saved action time. When unresolved, announce defaults to the earliest source's Beijing calendar date and completes only after that day ends; other actions default to source publication time."), title: localizedTextSchema, summary: localizedTextSchema.nullable() };
-export const eventUpdateSchema = z.discriminatedUnion("action", [
-  z.strictObject({ ...updateFields, action: z.literal("confirm"), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema) }),
-  z.strictObject({ ...updateFields, action: z.enum(["announce", "progress"]), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema).min(1) }),
-  z.strictObject({ ...updateFields, action: z.literal("amend"), invalidatesEvent: z.boolean(), sources: z.array(updateSourceSchema).min(1) }),
-]);
+const updateFields = { id: identifier, publishedAt: timestampSchema, title: localizedTextSchema, summary: localizedTextSchema.nullable() };
+function updateSchema() {
+  const fields = { ...updateFields, time: publicTimeSchema };
+  return z.discriminatedUnion("action", [
+  z.strictObject({ ...fields, action: z.literal("confirm"), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema) }),
+  z.strictObject({ ...fields, action: z.enum(["announce", "progress"]), invalidatesEvent: z.literal(false), sources: z.array(updateSourceSchema).min(1) }),
+  z.strictObject({ ...fields, action: z.literal("amend"), invalidatesEvent: z.boolean(), sources: z.array(updateSourceSchema).min(1) }),
+  ]);
+}
+export const eventUpdateSchema = updateSchema();
+export const rawEventUpdateSchema = eventUpdateSchema;
 /** Preserve date precision and fractional seconds while expressing instants in UTC. */
 export function normalizePublicTime(time: PublicTime): PublicTime {
-  if (time.length === 10) return time;
-  return time.split("/").map(at => at.endsWith("Z") ? at : Temporal.Instant.from(at).toString()).join("/");
+  const value = publicTimeSchema.parse(time);
+  const utc = (at: string) => at.endsWith("Z") ? at : Temporal.Instant.from(at).toString();
+  if (value.kind === "date") return value;
+  if (value.kind === "range") return { kind: "range", from: utc(value.from), through: utc(value.through) };
+  return { ...value, at: utc(value.at) };
 }
 export function serializeEventTime(time: EventTime): PublicTime {
   if (time.kind === "unknown") throw new Error("Unknown time cannot be public");
-  return normalizePublicTime(time.kind === "date" ? time.date : time.kind === "range" ? `${time.from}/${time.through}` : time.at);
+  return normalizePublicTime(time);
+}
+
+/** Ordering uses source-local midnight for dates; it never supplies an occurrence time. */
+export function businessTimeBoundary(time: BusinessTime): string {
+  if (time.kind === "date") return Temporal.PlainDate.from(time.date).toZonedDateTime(time.timeZone).toInstant().toString();
+  return time.kind === "range" ? time.from : time.at;
+}
+export function compareBusinessTime(a: BusinessTime, b: BusinessTime): number {
+  return Temporal.Instant.compare(businessTimeBoundary(a), businessTimeBoundary(b));
+}
+/** A calendar date has occurred only once that date starts in its source time zone. */
+export function isFutureBusinessTime(time: BusinessTime, at: string): boolean {
+  const instant = Temporal.Instant.from(at);
+  return time.kind === "date" ? time.date > instant.toZonedDateTimeISO(time.timeZone).toPlainDate().toString()
+    : Temporal.Instant.compare(time.kind === "range" ? time.through : time.at, instant) > 0;
 }
 
 export const eventStatuses = ["announced", "in_progress", "completed", "cancelled"] as const;
@@ -84,6 +114,7 @@ function validateEvent(event: z.infer<typeof eventObjectSchema>, context: z.Refi
   });
 }
 export const resetEventSchema = eventObjectSchema.superRefine(validateEvent);
+export const rawResetEventSchema = eventObjectSchema.extend({ updates: z.array(rawEventUpdateSchema).min(1) }).superRefine(validateEvent);
 const listEventSchema = resetEventSchema;
 export const sourceSchema = z.strictObject({
   id: identifier, type: z.enum(["official_social", "official_blog", "official_docs", "community", "other"]), name: localizedTextSchema,
@@ -119,12 +150,12 @@ export const overviewSchema = z.strictObject({
     context.addIssue({ code: "custom", path: ["platforms"], message: "Platforms must be unique" });
   }
 });
-const timeKey = (time: PublicTime) => Date.parse(time.split("/")[0]!);
 function validateEventOrder(events: Array<{ id: string; time: PublicTime }>, context: z.RefinementCtx, path: string) {
   if (new Set(events.map(event => event.id)).size !== events.length) context.addIssue({ code: "custom", path: [path], message: "Event IDs must be unique" });
   events.forEach((event, index) => {
     const prior = events[index - 1];
-    if (prior && (timeKey(prior.time) < timeKey(event.time) || timeKey(prior.time) === timeKey(event.time) && prior.id > event.id)) {
+    if (prior && publicTimeSchema.safeParse(prior.time).success && publicTimeSchema.safeParse(event.time).success
+      && (compareBusinessTime(prior.time, event.time) < 0 || compareBusinessTime(prior.time, event.time) === 0 && prior.id > event.id)) {
       context.addIssue({ code: "custom", path: [path, index], message: "Events must be in descending time order with ID ascending ties" });
     }
   });
@@ -147,6 +178,9 @@ export const resetSnapshotSchema = z.strictObject({
       if (event.scope[field].some(code => !codes.has(code))) context.addIssue({ code: "custom", path: ["events", index, "scope", field], message: "Unknown catalog code" });
     }
   });
+});
+export const rawResetSnapshotSchema = resetSnapshotSchema.safeExtend({
+  announcedResetTime: publicTimeSchema.nullable(), events: z.array(rawResetEventSchema),
 });
 export const eventListSchema = z.strictObject({
   list: z.array(listEventSchema),

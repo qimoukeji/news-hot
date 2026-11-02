@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -45,7 +46,7 @@ test("offline acceptance stores real source facts with no paid receipts and is r
   assert.equal(input.events.length, 1);
   assert.equal(input.actions.length, 1);
   assert.equal(snapshot.events[0]!.status, "completed");
-  assert.equal(snapshot.events[0]!.time, at);
+  assert.deepEqual(snapshot.events[0]!.time, bt(at));
   assert.equal((await sql`SELECT 1 FROM receipts`).length, 0);
   await applyOfflineRecognition(saved.id, response(), saved.version);
   assert.equal((await loadActionInput()).actions.length, 1);
@@ -117,7 +118,8 @@ test("a short paid-user label requires selected eligibility to remain in the act
   }
   const [event] = (await publicV2Snapshot()).events;
   assert.equal(event!.scope.note!.zh, "付费用户");
-  assert.match(event!.summary!.zh, /PT 晚上 8 点前注册的付费用户/);
+  assert.equal(event!.summary, null, "event overview is pending");
+  assert.match(event!.updates[0]!.summary!.zh, /PT 晚上 8 点前注册的付费用户/);
   assert.equal((await loadActionInput()).events.length, 1);
 }));
 
@@ -151,7 +153,7 @@ test("a completed reset-card grant uses verified usage instructions for weekly a
     const event = (await publicV2Snapshot()).events.find(event => event.updates.some(update => update.sources.some(source => source.postId === saved.id)))!;
     assert.equal(event.type, "reset_credit");
     assert.equal(event.status, "completed");
-    assert.equal(event.time, at);
+    assert.deepEqual(event.time, bt(at));
     assert.deepEqual(event.scope.quotaWindowCodes, [cycle]);
   }
 }));

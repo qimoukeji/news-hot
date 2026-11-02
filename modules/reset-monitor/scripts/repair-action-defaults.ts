@@ -13,7 +13,7 @@ export function planActionDefaults(input: ActionInput, prior?: ActionInput) {
   for (const event of after.events) {
     for (const { action, publishedAt } of sourcedActions(event, after)) {
       const oldDefault = priorDefaults.get(action.id);
-      if (action.time === null || action.action === "announce" && oldDefault !== undefined && action.time === oldDefault) {
+      if (action.time === null || action.action === "announce" && oldDefault !== undefined && (action.time?.kind === "instant" && action.time.at === oldDefault)) {
         action.time = defaultActionTime(action.action, oldDefault ?? publishedAt);
         actions.push(action.id);
       }
@@ -68,7 +68,7 @@ async function main() {
           await db`SELECT set_config('aihot.suppress_monitor_notifications','true',true)`;
           for (const id of planned.actions) {
             const row = planned.after.actions.find(action => action.id === id)!;
-            await db`UPDATE monitor_event_actions SET time=${row.time},updated_at=clock_timestamp() WHERE monitor_id=${definition.monitorId} AND id=${id}`;
+            await db`UPDATE monitor_event_actions SET time=${row.time === null ? null : db.json(row.time)},updated_at=clock_timestamp() WHERE monitor_id=${definition.monitorId} AND id=${id}`;
           }
           for (const id of affected) {
             const row = planned.after.events.find(event => event.id === id)!;

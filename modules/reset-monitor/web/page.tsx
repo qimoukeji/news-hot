@@ -3,10 +3,11 @@ import { useLoaderData } from "react-router";
 import { useState } from "react";
 import type { EventList, PlatformOverview } from "../public-v2.ts";
 import { SITE } from "@aihot/site";
+import { formatBusinessTime } from "../business-time.ts";
 import type { ResetMonitorPageData } from "./loaders.server.ts";
 import { pageMeta } from "@aihot/web/lib/seo";
 import { ResetCalendar } from "./components/ResetCalendar.tsx";
-import { eventDate, stamp, text } from "./components/format.ts";
+import { eventDate, text } from "./components/format.ts";
 import { EventActionRow, EventCardFrame } from "./components/EventCard.tsx";
 import { PhoneBar } from "@aihot/web/components/shell/PhoneBar";
 import type { Screen } from "@aihot/web/components/shell/screens";
@@ -69,14 +70,6 @@ function MonthEvents({ overview, events, selectedDate: initialDate, month, today
   </section>;
 }
 
-function overviewTime(value: string | null, dateOnly = false): string | null {
-  if (!value) return null;
-  return value.split("/").map(at => {
-    const day = eventDate(at);
-    const date = `${Number(day.slice(5, 7))}月${Number(day.slice(8, 10))}日`;
-    return dateOnly || at.length === 10 ? date : `${date} ${stamp(at).slice(11)}`;
-  }).join(" – ");
-}
 
 function ResetMonitorPage() {
   const profile = useMonitor();
@@ -92,17 +85,18 @@ function ResetMonitorPage() {
     <header className="pb-5 pt-3 lg:pt-1">
       <h1 data-page-title="" className="text-[24px] font-semibold leading-[1.3] text-ink">{title}</h1>
       <p className="mt-2 text-[13px] text-ink-3">关注 {accounts} 发布的消息，筛选重置信号，推送提醒，省得你反复刷推</p>
-      <p className="mt-1 text-[12px] text-ink-4">全部时间按北京时间显示 · UTC+8</p>
+      <p className="mt-1 text-[12px] text-ink-4">具体时刻按北京时间显示 · UTC+8，纯日期保留来源日期</p>
     </header>
     <section aria-label={timeLabel} className="rounded-sheet border border-line-strong bg-surface p-5 sm:p-6">
       <h2 className="text-[12px] font-medium text-ink-3">{timeLabel}</h2>
-      <p className="num mt-4 text-[36px] font-semibold leading-tight tracking-tight text-ink sm:text-[44px]">{overviewTime(displayTime, true) ?? "暂无预估"}</p>
+      <p className="num mt-4 break-words text-[30px] font-semibold leading-tight tracking-tight text-ink sm:text-[44px]">{displayTime ? formatBusinessTime(displayTime, "zh-CN", displayTime.kind === "date" ? displayTime.timeZone : "Asia/Shanghai") : "暂无预估"}</p>
+      {displayTime?.kind === "date" && displayTime.timeZone !== "Asia/Shanghai" && <p className="mt-2 break-words text-[12px] text-ink-4">日期所属时区：{displayTime.timeZone}</p>}
       <p className="mt-5 border-t border-line pt-3 text-[12px] leading-relaxed text-ink-4">公共重置事件与历史间隔不代表你的账户恢复时间。</p>
     </section>
     <dl aria-label="重置概览" className="mt-4 grid divide-y divide-line overflow-hidden rounded-sheet border border-line-strong bg-surface sm:grid-cols-3 sm:divide-x sm:divide-y-0">
       <div className="flex min-w-0 items-center gap-4 px-5 py-5 sm:px-6 sm:py-6">
         <IconCalendar size={22} className="shrink-0 text-ink-2" />
-        <div className="min-w-0"><dt className="text-[12px] text-ink-4">最近重置</dt><dd className="num mt-2 text-[18px] font-semibold text-ink">{overviewTime(overview.resetTime) ?? "暂无记录"}</dd></div>
+        <div className="min-w-0"><dt className="text-[12px] text-ink-4">最近重置</dt><dd className="num mt-2 text-[18px] font-semibold text-ink">{overview.resetTime ? formatBusinessTime(overview.resetTime) : "暂无记录"}</dd></div>
       </div>
       <div className="flex min-w-0 items-center gap-4 px-5 py-5 sm:px-6 sm:py-6">
         <IconChart size={22} className="shrink-0 text-ink-2" />

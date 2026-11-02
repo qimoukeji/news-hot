@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
@@ -40,11 +41,12 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId} co
     assert.deepEqual(list.rows.map(row => row.kind === "event" ? row.event.id : row.post.id), ["event", "unlinked", "unrelated", "second-event"]);
     const first = list.rows[0]!; assert.equal(first.kind, "event"); if (first.kind !== "event") return;
     assert.equal(first.latestAt, "2026-10-20T12:00:00.000Z", "late duplicate sources update group ordering");
-    assert.equal(first.event.title!.en, definition.product, "same IDs in other monitors stay isolated");
+    assert.equal(first.event.editorial.title!.en, definition.product, "the editor retains this monitor's saved text");
+    assert.match(first.event.title!.en!, new RegExp(definition.product), "the card uses this monitor's current overview");
     assert.equal(first.event.timeline.length, 2);
     const confirmation = first.event.timeline.find(a => a.action === "confirm")!;
     assert.equal(confirmation.publishedAt, "2026-10-01T12:00:00.000Z", "action time remains its earliest source");
-    assert.equal(confirmation.time, "2026-10-01T12:00:00.000Z", "adding a later source without a time does not replace the saved default");
+    assert.deepEqual(confirmation.time, bt("2026-10-01T12:00:00.000Z"), "adding a later source without a time does not replace the saved default");
     assert.deepEqual(confirmation.sources.map(s => s.id), ["first", "late-source"]);
     assert.equal(confirmation.sources[1]!.processingStatus, "failed");
     assert.equal(confirmation.sources[1]!.reviewReason, "需要核验来源");

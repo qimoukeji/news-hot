@@ -68,7 +68,11 @@ function plan(candidate, previous, applied, currentSha) {
   assert(applied.every(name => names.has(name)), 'Database contains migrations absent from candidate');
   const appliedNames = Array.from(new Set(applied)).sort();
   const pending = candidate.migrations.filter(row => !appliedNames.includes(row.name));
-  const state = { sha: candidate.sha, currentSha, manifestHash: hash(JSON.stringify(candidate)), applied: appliedNames, pending };
+  const needsBusinessTimeUpgrade = pending.some(row => row.path === 'modules/reset-monitor/migrations/0152_monitor_actions_drop_scalar_time.sql');
+  if (needsBusinessTimeUpgrade) {
+    assert(candidate.migrations.some(row => row.path === 'modules/reset-monitor/migrations/0146_monitor_actions_business_time.sql'), 'Business time upgrade requires the 0146 cutoff migration');
+  }
+  const state = { sha: candidate.sha, currentSha, manifestHash: hash(JSON.stringify(candidate)), applied: appliedNames, pending, needsBusinessTimeUpgrade };
   return Object.assign(state, { approvalDigest: hash(JSON.stringify(state)), needsMigration: pending.length > 0 });
 }
 module.exports = { hash, migrations, create, validate, verify, plan };

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, test } from "node:test";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
-import { createMonitorFixture, platforms, type Product } from "./fixtures/reset-monitor.ts";
+import { createMonitorFixture, platforms, instant, date, range, type Product } from "./fixtures/reset-monitor.ts";
 import { startWebServer, type WebServer } from "./web-server.ts";
 
 const fixture = createMonitorFixture();
@@ -51,7 +51,8 @@ async function stageNewEvent(page: Page, title: string) {
   await expect(form.getByLabel("动作", { exact: true }).locator('option[value="amend"]')).toBeDisabled();
   await form.getByLabel("动作标题（中文）", { exact: true }).fill("新一期额度活动预告");
   await form.getByLabel("动作摘要（中文）", { exact: true }).fill("当前帖子明确预告下一轮额度活动");
-  await form.getByLabel("明确业务时间", { exact: true }).fill("2026-10-30");
+  await form.getByLabel("明确业务时间", { exact: true }).selectOption("date");
+  await form.getByLabel("业务日期", { exact: true }).fill("2026-10-30");
   await form.getByRole("button", { name: "确定", exact: true }).click();
   await expect(form).toHaveCount(0);
 }
@@ -70,7 +71,9 @@ async function newConfirmation(page: Page, title: string) {
   const form = child(page, "新增动作并关联");
   await form.getByLabel("动作", { exact: true }).selectOption("confirm");
   await form.getByLabel("动作标题（中文）", { exact: true }).fill(title);
-  await form.getByLabel("明确业务时间", { exact: true }).fill("2026-10-23T08:00:00Z");
+  await form.getByLabel("明确业务时间", { exact: true }).selectOption("instant");
+  await form.getByLabel("业务时间时区", { exact: true }).selectOption("UTC");
+  await form.getByLabel("业务时刻", { exact: true }).fill("2026-10-23T08:00");
   return form;
 }
 async function stageRemove(page: Page, title: string) {
@@ -96,7 +99,7 @@ for (const product of platforms) for (const width of [1280, 390]) test(`${produc
     await page.route(`${web.origin}${product.api}/posts/post-3`, async route => {
       const response = await route.fetch(), detail = await response.json();
       detail.options.events = Array.from({ length: 12 }, (_, index) => ({ ...detail.options.events[0], id: `event-${index + 1}`, title: { zh: `分页事件 ${index + 1}` }, withdrawn: index === 0,
-        time: index === 11 ? null : index === 1 ? "2026-10-27/2026-10-28" : index === 2 ? "2026-10-26" : `2026-10-${28 - index}T06:00:00Z` })).reverse();
+        time: index === 11 ? null : index === 1 ? range("2026-10-27T00:00:00Z", "2026-10-28T00:00:00Z") : index === 2 ? date("2026-10-26") : instant(`2026-10-${28 - index}T06:00:00Z`) })).reverse();
       await route.fulfill({ response, json: detail });
     });
     const url = await open(page, product);
@@ -236,7 +239,8 @@ test("official evidence can correct a source-less confirmation without changing 
     await expect(picker.getByLabel("动作标题（中文）", { exact: true })).toHaveValue("已到预告时间");
     await picker.getByLabel("动作标题（中文）", { exact: true }).fill("官方确认额度已重置");
     await picker.getByLabel("动作摘要（中文）", { exact: true }).fill("官方帖子明确表示重置完成");
-    await picker.getByLabel("明确业务时间", { exact: true }).fill("2026-10-23T08:00:00Z");
+    await picker.getByLabel("业务时间时区", { exact: true }).selectOption("UTC");
+    await picker.getByLabel("业务时刻", { exact: true }).fill("2026-10-23T08:00");
     await picker.getByRole("button", { name: "确定", exact: true }).click();
     assert.equal(fixture.writes.length, 0);
     const body = await preview(page);

@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/standalone.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -5,7 +6,7 @@ import { buildAssociationCommands, type AssociationAddition } from "../web/assoc
 import type { ActionFact } from "../web/admin-types.ts";
 
 const fact = (title = "Official reset", action: ActionFact["action"] = "confirm"): ActionFact => ({
-  action, invalidatesEvent: false, title: { zh: title, en: title }, summary: { zh: "Current source fact" }, time: "2026-10-26T12:00:00Z",
+  action, invalidatesEvent: false, title: { zh: title, en: title }, summary: { zh: "Current source fact" }, time: bt("2026-10-26T12:00:00Z"),
 });
 
 test("an empty association draft sends no event, action, source or recognition changes", () => {

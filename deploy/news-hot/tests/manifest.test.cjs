@@ -89,3 +89,30 @@ test('approval binds commit, current release, migration SQL, and applied ledger'
   f.sql('0002_next.sql', 'SELECT 4;');
   assert.notEqual(original.approvalDigest, plan(f.manifest(newSha), previous, ['0001_base.sql'], oldSha).approvalDigest);
 });
+
+test('business time conversion is planned only before the exact scalar-column drop', t => {
+  const f = fixture(t);
+  const previous = f.manifest(oldSha);
+  const cutoff = '0146_monitor_actions_business_time.sql';
+  const drop = '0152_monitor_actions_drop_scalar_time.sql';
+  f.sql(cutoff, 'SELECT 1;', 'reset-monitor');
+  f.sql(drop, 'SELECT 2;', 'reset-monitor');
+  f.sql('0153_monitor_actions_rename_business_time.sql', 'SELECT 3;', 'reset-monitor');
+  const candidate = f.manifest(newSha);
+  assert.equal(plan(candidate, previous, [], oldSha).needsBusinessTimeUpgrade, true);
+  const partial = plan(candidate, previous, ['0001_base.sql', cutoff], oldSha);
+  assert.equal(partial.needsBusinessTimeUpgrade, true);
+  const converted = plan(candidate, previous, ['0001_base.sql', cutoff, drop], oldSha);
+  assert.equal(converted.needsBusinessTimeUpgrade, false);
+  assert.notEqual(partial.approvalDigest, converted.approvalDigest);
+});
+
+test('business time conversion requires its cutoff and ignores other modules with similar names', t => {
+  const f = fixture(t);
+  const previous = f.manifest(oldSha);
+  f.sql('0152_monitor_actions_drop_scalar_time.sql', 'SELECT 1;', 'other');
+  assert.equal(plan(f.manifest(newSha), previous, ['0001_base.sql'], oldSha).needsBusinessTimeUpgrade, false);
+  fs.rmSync(path.join(f.source, 'modules/other/migrations/0152_monitor_actions_drop_scalar_time.sql'));
+  f.sql('0152_monitor_actions_drop_scalar_time.sql', 'SELECT 1;', 'reset-monitor');
+  assert.throws(() => plan(f.manifest(newSha), previous, ['0001_base.sql'], oldSha), /requires the 0146 cutoff/);
+});

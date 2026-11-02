@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
@@ -5,7 +6,7 @@ import { sql, closeDb } from "@aihot/backend/db";
 import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
 import { inMonitor } from "../backend/context.ts";
 import { storeCollectedPost, sourcePost, writePostActions, saveAcceptedPost, loadActionInput } from "../backend/action-store.ts";
-import { initializeWebhookBaselines, captureWebhookEvent } from "../backend/webhook-events.ts";
+import { initializeWebhookBaselines, refreshWebhookBaseline } from "../backend/webhook-events.ts";
 import { properName } from "../backend/public-v2.ts";
 
 beforeEach(async () => {
@@ -21,7 +22,7 @@ for (const incomplete of [false, true]) test(`historical group establishes a not
     return (await sourcePost(id))!;
   }
   const first = await post("101", "2026-10-28T01:00:00Z");
-  await sql.begin(db => writePostActions(db, first, [{ eventId: "event", action: "announce", title: properName("Reset planned"), summary: null, time: "2026-10-28" }],
+  await sql.begin(db => writePostActions(db, first, [{ eventId: "event", action: "announce", title: properName("Reset planned"), summary: null, time: bt("2026-10-28") }],
     { events: [{ id: "event", type: "direct_reset", title: properName("Quota event"), summary: null, scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null } }] }));
   await initializeWebhookBaselines([codex]);
   if (incomplete) await sql`UPDATE monitor_event_records SET title='{"zh":"未完成翻译"}'::jsonb WHERE monitor_id='codex' AND id='event'`;
@@ -31,10 +32,10 @@ for (const incomplete of [false, true]) test(`historical group establishes a not
     actions: [{ eventId: "event", action: "confirm", title: properName("Reset completed"), summary: null, time: null }] });
   let [baseline] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key='webhook:event:event'`;
   assert.equal(baseline.value.revision, 0);
-  assert.equal(baseline.value.historicalPending, incomplete);
+  assert.equal(baseline.value.historicalPending, false, "a pending event overview does not hide accepted actions");
   if (incomplete) {
     await sql`UPDATE monitor_event_records SET title=${sql.json(properName("Translated quota event"))} WHERE monitor_id='codex' AND id='event'`;
-    await sql.begin(db => captureWebhookEvent(db, "event"));
+    await sql.begin(db => refreshWebhookBaseline(db, "event"));
     [baseline] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key='webhook:event:event'`;
     assert.equal(baseline.value.revision, 0);
     assert.equal(baseline.value.historicalPending, false);

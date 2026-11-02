@@ -1,10 +1,11 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/standalone.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
 import { projectPublicV2, properName, type PublicV2Input } from "../backend/public-v2.ts";
 import { parsePublicV2Query, paginatePublicV2, PublicV2QueryError } from "../backend/public-v2-list.ts";
-import { eventListSchema, overviewSchema, type ResetSnapshot, type ResetEvent } from "../public-v2.ts";
+import { compareBusinessTime, eventListSchema, overviewSchema, type ResetSnapshot, type ResetEvent } from "../public-v2.ts";
 
 const now = Date.parse("2026-10-15T09:00:00Z");
 function snapshot(): ResetSnapshot {
@@ -12,9 +13,9 @@ function snapshot(): ResetSnapshot {
   return projectPublicV2(input, codex, now);
 }
 function event(id: string, time: string): ResetEvent {
-  return { id, type: "direct_reset", status: "completed", time, publishedAt: "2026-10-01T00:00:00Z",
+  return { id, type: "direct_reset", status: "completed", time: bt(time), publishedAt: "2026-10-01T00:00:00Z",
     title: properName(id), summary: null, scope: { type: "all_users", note: properName("All users"), productCodes: [], planCodes: [], quotaWindowCodes: [] },
-    updates: [{ id: `${id}-update`, action: "confirm", invalidatesEvent: false, publishedAt: "2026-10-01T00:00:00Z", time, title: properName("Reset completed"), summary: properName("Reset completed"),
+    updates: [{ id: `${id}-update`, action: "confirm", invalidatesEvent: false, publishedAt: "2026-10-01T00:00:00Z", time: bt(time), title: properName("Reset completed"), summary: properName("Reset completed"),
       sources: [{ postId: "post-"+id, sourceId: "x-account:thsottiaux", url: `https://example.test/${id}` }] }] };
 }
 function query(params: Record<string, unknown> = {}, at = now) { return parsePublicV2Query(params, at); }
@@ -89,7 +90,7 @@ test("local days include their start and exclude the next midnight across both D
       ...repeated.map((at, i) => event(`inside-${i}`, at)), event("start", start),
       event("before", new Date(Date.parse(start) - 1).toISOString()), event("date", day),
       event("range", `${start}/${end}`)];
-    data.events.sort((a, b) => Date.parse(b.time.split("/")[0]!) - Date.parse(a.time.split("/")[0]!) || a.id.localeCompare(b.id));
+    data.events.sort((a, b) => compareBusinessTime(b.time, a.time) || a.id.localeCompare(b.id));
     const result = paginatePublicV2(data, query({ from: day, to: day, timeZone: "America/Los_Angeles" }));
     assert.equal(result.pagination.total, 6);
     assert.deepEqual(new Set(result.list.map(item => item.id)), new Set(["end", "inside-0", "inside-1", "start", "date", "range"]));

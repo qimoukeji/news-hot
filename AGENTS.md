@@ -28,7 +28,7 @@
 - 前端（`apps/web`）只通过 HTTP 读 `apps/api`，数据库、模型调用和密钥只在后端。
 - 所有公开出口都从 `packages/backend/src/publication/` 这一个读取层读，新增公开出口也一样。
 - 读者打开页面不触发模型调用；模型只在 worker 的任务里调用。
-- 本站任务队列由 `site/site.ts` 的 `DEPLOYMENT.queues` 白名单控制，允许三个平台的 X 采集 cron、各平台独立的多语言翻译 cron、独立的事件确认检查，以及订阅 sweep 和 deliver；其余队列仍停用，不将独立任务并入采集 tick。框架测试用显式测试配置恢复需要的队列，不根据 `NODE_ENV` 绕过站点限制。
+- 本站任务队列由 `site/site.ts` 的 `DEPLOYMENT.queues` 白名单控制，允许三个平台的 X 采集 cron、各平台独立的多语言翻译与事件概述 cron、独立的事件确认检查，以及订阅 sweep 和 deliver；其余队列仍停用，不将独立任务并入采集 tick。框架测试用显式测试配置恢复需要的队列，不根据 `NODE_ENV` 绕过站点限制。
 - 付费请求都经过回执（`providers/receipts.ts`）和预算熔断，不要绕开。
 - 安全阀只有设成 `true` 才打开。开发时默认关闭：`COLLECT_ENABLED`、`MODEL_CALLS_ENABLED`、`FEISHU_*_ENABLED`、`INDEXNOW_SUBMIT_ENABLED`。用户明确授权自动翻译后，可仅在开发 worker 进程开启 `MODEL_CALLS_ENABLED`，采集、识别、真实推送和 IndexNow 仍关闭，API 和页面读取不得触发模型。测试里推送一直关着，采集和模型调用只连本地假服务，不访问任何外部服务。
 - 信源默认只展示摘要和原文链接（`site_fulltext` 关）；只有来源明确允许时才打开全文。

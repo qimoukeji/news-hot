@@ -6,6 +6,7 @@ import { sql, closeDb } from '@aihot/backend/db';
 import { stopBoss } from '@aihot/backend/jobs/queue';
 import { upsertMaterial } from '@aihot/backend/content/materials';
 import { publishArticle } from '@aihot/backend/publication/publish';
+import { requestShutdown, shutdownTransport } from './process-shutdown.ts';
 
 const T = tag();
 const SOURCE = `test-translate-stop-${T}`;
@@ -24,7 +25,9 @@ function runTranslation() {
     import { translatePending } from '@aihot/backend/editorial/translate';
     import { shutdownSignal } from '@aihot/backend/jobs/queue';
     import { closeDb } from '@aihot/backend/db';
+    import { relayWindowsShutdown } from './tests/process-shutdown.ts';
     process.on('SIGTERM', () => { shutdownSignal.abort(); process.send({ stopped: true }); });
+    relayWindowsShutdown();
     try { process.send({ result: await translatePending({ limit: 1 }) }); }
     finally { await closeDb(); process.disconnect(); }
   `;
@@ -50,7 +53,7 @@ before(async () => {
 });
 after(async () => { await provider.close(); await stopBoss(); await closeDb(); });
 
-for (const misaligned of [false, true]) test(`SIGTERM finishes the sent ${misaligned ? 'misaligned' : 'normal'} batch and resumes from its receipt`, async () => {
+for (const misaligned of [false, true]) test(`${shutdownTransport} finishes the sent ${misaligned ? 'misaligned' : 'normal'} batch and resumes from its receipt`, async () => {
   active = { asked: gate(), hold: gate(), calls: 0, misaligned };
   const first = misaligned ? `First paragraph ${T}.` : `First paragraph ${T}. ${'English text '.repeat(170)}`;
   const second = misaligned ? `Second paragraph ${T}.` : `Second paragraph ${T}. ${'More English '.repeat(170)}`;
@@ -60,7 +63,7 @@ for (const misaligned of [false, true]) test(`SIGTERM finishes the sent ${misali
   await publishArticle(articleId, { releasedAt: new Date(Date.now() - 60_000) });
   const interrupted = runTranslation();
   await Promise.race([active.asked.promise, interrupted.done.then(() => assert.fail('translation ended before a request'))]);
-  interrupted.child.kill('SIGTERM');
+  requestShutdown(interrupted.child);
   await interrupted.stopped;
   active.hold.open();
   assert.deepEqual(await interrupted.done, { done: [], quotes: 0 });

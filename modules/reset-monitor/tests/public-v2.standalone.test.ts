@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/standalone.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -15,9 +16,9 @@ const now = Date.parse("2026-10-15T00:00:00Z"),
 
 test("action time preserves precision and defaults to source publication time", () => {
   for (const time of [null, "2026-10-09T01:25:00Z", "2026-10-09", "2026-10-09T01:00:00Z/2026-10-09T03:00:00Z"]) {
-    const input = fixture(); input.actions[0]!.time = time;
+    const input = fixture(); input.actions[0]!.time = bt(time);
     const update = read(input).events[0]!.updates[0]!;
-    assert.equal(update.time, time ?? at);
+    assert.deepEqual(update.time, bt(time ?? at));
     assert.equal(update.publishedAt, at);
     assert.equal(eventUpdateSchema.safeParse({ ...update, time: "not-a-business-time" }).success, false);
     assert.equal(eventUpdateSchema.safeParse({ ...update, time: null }).success, false);
@@ -37,8 +38,8 @@ test("scope keeps explicit eligibility notes and never expands unknown users", (
 test("initial confirmation completes without an announcement", () => {
   const snapshot = read();
   assert.equal(snapshot.events[0]!.status, "completed");
-  assert.equal(snapshot.resetTime, at);
-  assert.equal(snapshot.announcedResetTime, null);
+  assert.deepEqual(snapshot.resetTime, bt(at));
+  assert.deepEqual(snapshot.announcedResetTime, null);
   assert.equal(snapshot.statistics.resetsLast30Days, 1);
   assert.equal(snapshot.events[0]!.updates[0]!.id, "action-1");
 });
@@ -50,11 +51,11 @@ test("one post supports multiple actions on the same event", () => {
     id: "action-0",
     action: "announce",
     sequence: 1,
-    time: "2026-10-20T00:00:00Z",
+    time: bt("2026-10-20T00:00:00Z"),
   });
   const event = read(input).events[0]!;
   assert.equal(event.status, "completed");
-  assert.equal(event.time, at);
+  assert.deepEqual(event.time, bt(at));
   assert.deepEqual(
     event.updates.map((update) => update.id),
     ["action-0", "action-1"],
@@ -83,15 +84,15 @@ test("one action returns all original links without inflating statistics", () =>
 test("confirmation replaces planned timing and later progress cannot undo completion", () => {
   const input = fixture();
   input.actions[0]!.action = "announce";
-  input.actions[0]!.time = "2026-10-20T00:00:00Z";
-  assert.equal(read(input).announcedResetTime, "2026-10-20T00:00:00Z");
+  input.actions[0]!.time = bt("2026-10-20T00:00:00Z");
+  assert.deepEqual(read(input).announcedResetTime, bt("2026-10-20T00:00:00Z"));
   addAction(input, "c", "confirm", "2026-10-11T00:00:00Z");
   addAction(input, "p", "progress", "2026-10-12T00:00:00Z", {
-    time: "2026-10-21T00:00:00Z",
+    time: bt("2026-10-21T00:00:00Z"),
   });
   assert.equal(read(input).events[0]!.status, "completed");
-  assert.equal(read(input).resetTime, "2026-10-11T00:00:00.000Z");
-  assert.equal(read(input).announcedResetTime, null);
+  assert.deepEqual(read(input).resetTime, bt("2026-10-11T00:00:00.000Z"));
+  assert.deepEqual(read(input).announcedResetTime, null);
 });
 test("different progress and amendment facts stay separate", () => {
   const input = fixture();
@@ -139,7 +140,7 @@ test("bonus lifecycle uses shared completion and progress without clock changes"
   for (const [index, fact] of ["Claiming closed", "Credits expired", "Claiming reopened"].entries()) {
     addAction(input, `progress-${index}`, "progress", `2026-10-${11 + index}T00:00:00Z`, { title: properName(fact) });
     assert.equal(read(input).events[0]!.status, "completed");
-    assert.equal(read(input).resetTime, at);
+    assert.deepEqual(read(input).resetTime, bt(at));
   }
   assert.equal(
     projectPublicV2(input, codex, Date.parse("2030-01-01")).events[0]!.status,
@@ -149,13 +150,13 @@ test("bonus lifecycle uses shared completion and progress without clock changes"
 });
 test("actual dates and UTC intervals preserve their precision", () => {
   const input = fixture();
-  input.actions[0]!.time = "2026-10-09";
-  assert.equal(read(input).events[0]!.time, "2026-10-09");
-  input.actions[0]!.time = "2026-10-10T18:00:00+08:00";
-  assert.equal(read(input).events[0]!.time, "2026-10-10T10:00:00Z");
-  assert.equal(
-    normalizePublicTime("2026-10-10T18:00:00+08:00/2026-10-10T19:00:00+08:00"),
-    "2026-10-10T10:00:00Z/2026-10-10T11:00:00Z",
+  input.actions[0]!.time = bt("2026-10-09");
+  assert.deepEqual(read(input).events[0]!.time, bt("2026-10-09"));
+  input.actions[0]!.time = bt("2026-10-10T18:00:00+08:00");
+  assert.deepEqual(read(input).events[0]!.time, bt("2026-10-10T10:00:00Z"));
+  assert.deepEqual(
+    normalizePublicTime(bt("2026-10-10T18:00:00+08:00/2026-10-10T19:00:00+08:00")),
+    bt("2026-10-10T10:00:00Z/2026-10-10T11:00:00Z"),
   );
 });
 test("partial manual text never publishes old translations", () => {
@@ -166,7 +167,7 @@ test("partial manual text never publishes old translations", () => {
   assert.notEqual(event.title.zh, "人工标题");
   assert.equal(event.summary, null);
   input.events[0]!.title = properName("Translated title");
-  assert.equal(read(input).events[0]!.title.en, "Translated title");
+  assert.notEqual(read(input).events[0]!.title.en, "Translated title", "translated text still needs a matching overview version");
 });
 test("strict public schemas reject raw text, retired sources and incomplete languages", () => {
   const snapshot = read(),

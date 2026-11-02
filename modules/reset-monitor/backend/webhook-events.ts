@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { sql, type Db } from "@aihot/backend/db";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
 import { inMonitor, monitor, monitorId, type ResetMonitorBackendDefinition } from "./context.ts";
-import { loadPublicV2Input, projectPublicV2, type PublicV2Input, type PublicV2EventRow } from "./public-v2.ts";
+import { loadPublicV2Input, projectPublicV2, projectRawV2, type PublicV2Input, type PublicV2EventRow } from "./public-v2.ts";
 import { reduceEvent, translated } from "../actions.ts";
 import { webhookPayloadSchema, type WebhookPayload } from "../webhooks.ts";
 import { queueWebhookDelivery } from "./webhooks.ts";
@@ -19,10 +19,9 @@ interface Baseline {
 function readyEvent(row: PublicV2EventRow, input: PublicV2Input, now = Date.now()): WebhookPayload["event"] {
   if (row.withdrawn) return null;
   const reduced = reduceEvent(row, input);
-  if (!reduced || reduced.actions.some(({action}) => action.sources.length > 0 && (!translated(action.title) || action.summary && !translated(action.summary)))
-    || row.title && !translated(row.title) || row.summary && !translated(row.summary)) return null;
+  if (!reduced || reduced.actions.some(({ action }) => action.sources.length > 0 && (!translated(action.title) || action.summary && !translated(action.summary)))) return null;
   if (!scopeReadyForPublication(reduced.scope)) return null;
-  const event = projectPublicV2({ ...input, events: [row] }, monitor(), now).events[0];
+  const event = projectRawV2({ ...input, events: [row] }, monitor(), now).events[0];
   if (!event) return null;
   return event;
 }
@@ -98,7 +97,8 @@ export async function captureWebhookEvent(db: Db, id: string, savedInput?: Publi
   const revision = previous.revision + 1;
   const payload = webhookPayloadSchema.parse({ schemaVersion: 2, id: randomUUID(), occurredAt: new Date().toISOString(),
     platform: monitor().publicV2!.platform, eventId: id, revision,
-    action: withdrawn ? "withdrawn" : previous.withdrawn && previous.fingerprint ? "restored" : previous.fingerprint ? "updated" : "created", event });
+    action: withdrawn ? "withdrawn" : previous.withdrawn && previous.fingerprint ? "restored" : previous.fingerprint ? "updated" : "created",
+    event: event ? projectPublicV2({ ...input, events: [row] }, monitor(), now).events[0] : null });
   const subscribers = await db<{ id: string; generation: number }[]>`SELECT id,generation FROM monitor_webhook_subscriptions
     WHERE enabled AND enabled_at <= ${payload.occurredAt} AND ${payload.platform}=ANY(platforms) ORDER BY id FOR SHARE`;
   if (subscribers.length) {
@@ -112,6 +112,14 @@ export async function captureWebhookEvent(db: Db, id: string, savedInput?: Publi
     }
   }
   await saveBaseline(db, id, { revision, fingerprint, withdrawn, notified: previous.notified || subscribers.length > 0 });
+}
+
+/** Editorial-only changes advance the comparison baseline without another business notification. */
+export async function refreshWebhookBaseline(db: Db, id: string) {
+  const [previous] = await db`SELECT current_setting('aihot.suppress_monitor_notifications',true) AS value`;
+  await db`SELECT set_config('aihot.suppress_monitor_notifications','true',true)`;
+  try { await captureWebhookEvent(db, id); }
+  finally { await db`SELECT set_config('aihot.suppress_monitor_notifications',${previous?.value ?? "false"},true)`; }
 }
 
 /** Time changes publication without new posts; use the same per-monitor lock and fingerprints. */
@@ -138,10 +146,12 @@ async function persistConfirmations(db: Db, input: PublicV2Input, now: number, c
     const action = inferredConfirmation(event, input, now);
     if (!action) continue;
     const rows = await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources,created_at,updated_at)
-      VALUES(${monitorId()},${action.id},${action.event_id},${action.sequence},'confirm',false,${db.json(action.title)},${action.summary ? db.json(action.summary) : null},${action.time},'[]'::jsonb,${action.created_at},${action.updated_at}) ON CONFLICT(monitor_id,id) DO NOTHING`;
+      VALUES(${monitorId()},${action.id},${action.event_id},${action.sequence},'confirm',false,${db.json(action.title)},${action.summary ? db.json(action.summary) : null},${action.time === null ? null : db.json(action.time)},'[]'::jsonb,${action.created_at},${action.updated_at}) ON CONFLICT(monitor_id,id) DO NOTHING`;
     if (rows.count) {
       input.actions.push(action);
       await db`UPDATE monitor_event_records SET updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${event.id}`;
+      await db`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${`public_v2:pending:${event.id}`},'{"status":"pending"}'::jsonb)
+        ON CONFLICT(monitor_id,key) DO UPDATE SET value=EXCLUDED.value,updated_at=clock_timestamp()`;
     }
   }
 }

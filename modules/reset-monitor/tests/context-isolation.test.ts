@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import { stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
@@ -12,7 +13,7 @@ import { monitorPostDetail, monitorEventDetail, previewMonitorReview, previewMon
 import { loadActionInput, sourcePost, storeCollectedPost, validateActionSources, writePostActions } from "../backend/action-store.ts";
 import { properName, projectPublicV2 } from "../backend/public-v2.ts";
 import { exportPublicV2, previewPublicV2 } from "../backend/public-v2-review.ts";
-import { processPublicV2Pending } from "../backend/public-v2-generate.ts";
+import { translatePublicV2Pending as processPublicV2Pending } from "../backend/public-v2-generate.ts";
 
 const parentId = "900", sourceId = "1000";
 const parentAt = "2026-10-28T01:00:00Z", sourceAt = "2026-10-28T02:00:00Z";
@@ -37,7 +38,7 @@ async function seed(withEvent = false) {
   await sql`UPDATE monitor_source_posts SET title=${sql.json(properName("Business source"))},processing_status='processed' WHERE monitor_id='codex' AND id=${sourceId}`;
   await sql`UPDATE monitor_source_posts SET title='{"zh":"只有中文的上下文标题"}'::jsonb WHERE monitor_id='codex' AND id=${parentId}`;
   if (withEvent) await sql.begin(async db => writePostActions(db, (await sourcePost(sourceId, db))!,
-    [{ eventId: "isolation-event", action: "announce", title: properName("Reset announcement"), summary: null, time: sourceAt }],
+    [{ eventId: "isolation-event", action: "announce", title: properName("Reset announcement"), summary: null, time: bt(sourceAt) }],
     { events: [{ id: "isolation-event", type: "direct_reset" }] }));
 }
 

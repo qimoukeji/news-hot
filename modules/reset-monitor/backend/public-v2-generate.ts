@@ -7,10 +7,14 @@ import { BudgetExceededError, ReceiptBusyError, completeReceipt, rejectReceivedR
 import { Conflict } from "@aihot/backend/audit";
 import { shutdownSignal } from "@aihot/backend/lib/shutdown";
 import { monitor, monitorId, purpose } from "./context.ts";
-import { loadActionInput, rowVersion } from "./action-store.ts";
-import { translated, languages, type EditorialText, type ActionInput } from "../actions.ts";
+import { loadActionInput, lockActionRecords, rowVersion } from "./action-store.ts";
+import { translated, languages, reduceEvent, type EditorialText, type ActionInput } from "../actions.ts";
 import { actionTextSchema } from "./recognize.ts";
 import { enqueuePublicV2 } from "./public-v2-work.ts";
+import { processEventOverviews } from "./event-overview.ts";
+import { editorialStatus, saveEditorialState } from "./event-editorial.ts";
+import { refreshWebhookBaseline } from "./webhook-events.ts";
+import { scopeReadyForPublication } from "./scope-labels.ts";
 
 export const publicV2GenerationVersion = "reset-monitor-editorial-2026-10-28.5";
 export const generatedPublicV2Schema = z.strictObject({ title: actionTextSchema.nullable(), summary: actionTextSchema.nullable(), note: actionTextSchema.nullable() });
@@ -47,7 +51,7 @@ async function state(db: Db, key: string, value: unknown) {
 }
 
 /** Worker-only translation: the model receives editorial fields; originals, status and business time stay unchanged. */
-export async function processPublicV2Pending() {
+export async function translatePublicV2Pending() {
   if (!monitor().publicV2 || !config.modelCallsEnabled) return { enriched: 0 };
   const input = await loadActionInput();
   let enriched = 0, enrichmentPending = 0;
@@ -65,10 +69,20 @@ export async function processPublicV2Pending() {
       receiptId = response.receiptId;
       validateTranslations(source, response.data);
       await sql.begin(async db => {
+        if (work.kind === "action") await lockActionRecords(db, work.eventIds, [work.row.id], []);
         const columns = work.kind === "post" ? "id,author,published_at,url,text,quoted_post,reply_to,context_only,filtered_out,title,summary,source_receipt_id,model_receipt_id,processing_status,review_reason,created_at,updated_at"
           : work.kind === "action" ? "id,event_id,sequence,action,invalidates_event,title,summary,time,sources,created_at,updated_at" : "id,type,title,summary,scope,withdrawn,created_at,updated_at";
         const [latest] = await db`SELECT ${db.unsafe(columns)} FROM ${db(tables[work.kind])} WHERE monitor_id=${monitorId()} AND id=${work.row.id} FOR UPDATE`;
         if (!latest || rowVersion(latest) !== work.version) throw new Conflict("Editorial content changed while translating");
+        const before = work.kind !== "post" ? await loadActionInput(db) : null;
+        const beforeEvent = work.kind === "event" ? before!.events.find(row => row.id === work.row.id) : null;
+        const reducedBefore = beforeEvent ? reduceEvent(beforeEvent, before!) : null;
+        const publishedBefore = !!reducedBefore && !beforeEvent!.withdrawn && scopeReadyForPublication(reducedBefore.scope)
+          && reducedBefore.actions.every(({ action }) => !action.sources.length || translated(action.title) && (!action.summary || translated(action.summary)));
+        const bindings = before?.events.filter(row => work.eventIds.includes(row.id)).flatMap(row => {
+          const status = editorialStatus(row, before);
+          return status ? [{ id: row.id, status }] : [];
+        }) ?? [];
         if (work.kind !== "event") {
           await db`UPDATE ${db(tables[work.kind])} SET title=${response.data.title ? db.json(response.data.title) : null},summary=${response.data.summary ? db.json(response.data.summary) : null},updated_at=clock_timestamp()
             WHERE monitor_id=${monitorId()} AND id=${work.row.id}`;
@@ -79,7 +93,16 @@ export async function processPublicV2Pending() {
         }
         await completeReceipt(db, response.receiptId);
         await db`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${key}`;
-        await enqueuePublicV2(db, work.eventIds);
+        if (bindings.length) {
+          const fresh = await loadActionInput(db);
+          for (const binding of bindings) {
+            const event = fresh.events.find(row => row.id === binding.id)!;
+            const status = work.kind === "event" && translated(event.title) && (event.summary === null || translated(event.summary)) ? "ready" : binding.status;
+            await saveEditorialState(db, event, fresh, status);
+          }
+        }
+        if (publishedBefore) await refreshWebhookBaseline(db, work.row.id);
+        else await enqueuePublicV2(db, work.eventIds);
       });
       enriched++;
     } catch (error) {
@@ -101,4 +124,10 @@ export async function processPublicV2Pending() {
   }
   for (const event of input.events) await sql`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${`public_v2:pending:${event.id}`}`;
   return { enriched, ...(enrichmentPending ? { enrichmentPending } : {}) };
+}
+
+export async function processPublicV2Pending() {
+  const translated = await translatePublicV2Pending();
+  const { overviews } = await processEventOverviews();
+  return { ...translated, ...(overviews ? { overviews } : {}) };
 }

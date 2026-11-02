@@ -41,7 +41,8 @@ for (const product of platforms) test(`${product.product} creates an event first
     await card.getByRole("button", { name: "添加动作", exact: true }).click();
     dialog = page.getByRole("dialog", { name: "添加动作", exact: true });
     await dialog.getByLabel("动作", { exact: true }).selectOption("confirm");
-    await dialog.getByLabel("明确业务时间", { exact: true }).fill("2026-10-23");
+    await dialog.getByLabel("明确业务时间", { exact: true }).selectOption("date");
+    await dialog.getByLabel("业务日期", { exact: true }).fill("2026-10-23");
     await dialog.getByRole("button", { name: "预览影响", exact: true }).click();
     await dialog.getByRole("button", { name: "确认提交", exact: true }).click();
     await expect(dialog).toHaveCount(0);

@@ -198,9 +198,18 @@ export interface RequestNotices {
   feed: (req: FastifyRequest, feedPath: string) => FeedNotice | null;
 }
 
+/** A module's guarded destructive migration, checked before the batch and under its DDL lock (scripts/migrate.ts). */
+export interface ModuleMigrationCheck {
+  migration: string;
+  /** Read-only verification; throw to prevent any pending DDL or the guarded statement from committing. */
+  verify: (db: Pick<Db, "unsafe">) => Promise<void>;
+}
+
 export interface ServerModule {
   /** Its folder under modules/. */
   name: string;
+  /** Preflight checks owned by this module; the site list also supplies them to migration commands. */
+  migrationChecks?: readonly ModuleMigrationCheck[];
   /** Public projections, read only through publication/modules.ts by HTTP and Agent exits. */
   publications?: Record<string, (input: Record<string, unknown>) => Promise<unknown>>;
   /** Its HTTP routes, and hooks on the app such as what to flush when it closes, registered before the engine's v1 fallbacks (apps/api/src/app.ts). */

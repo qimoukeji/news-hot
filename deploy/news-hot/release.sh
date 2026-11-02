@@ -72,6 +72,13 @@ dc "$release" config --quiet
 dc "$current" exec -T db psql -X -U newshot -d newshot -At -v ON_ERROR_STOP=1 \
   -c 'SELECT name FROM schema_migrations ORDER BY name' > "$bundle/ledger.txt"
 node "$tool" plan "$bundle/release.json" "$current/release.json" "$bundle/ledger.txt" "$current_sha" > "$bundle/plan.json"
+needs_business_time_upgrade=$(get "$bundle/plan.json" needsBusinessTimeUpgrade)
+if [[ $needs_business_time_upgrade == true ]]; then
+  [[ -f $release/modules/reset-monitor/scripts/migrate-business-time.ts ]] || { echo 'Candidate lacks the business time conversion tool; running site unchanged' >&2; exit 1; }
+  # Check the loaded candidate image too, without importing application code or touching the database.
+  dc "$release" run --rm --no-deps --entrypoint node setup -e \
+    'require("node:fs").accessSync("modules/reset-monitor/scripts/migrate-business-time.ts")' >&2
+fi
 history_transition=false
 if [[ ! -f $current/scripts/cleanup-monitor-history.ts && -f $release/scripts/cleanup-monitor-history.ts ]]; then
   history_transition=true
@@ -132,6 +139,15 @@ if [[ $history_transition == true ]]; then cp "$bundle/history-plan.json" "$back
 if [[ $needs_migration == true ]]; then
   migration_started=true
   phase=migrating
+  if [[ $needs_business_time_upgrade == true ]]; then
+    dc "$release" run --rm --no-deps --entrypoint node setup scripts/migrate.ts --through 0146_monitor_actions_business_time.sql >&2
+    # The CLI creates its output directory itself; mount a new private parent directory.
+    mkdir "$backup/business-time"
+    dc "$release" run --rm --no-deps --user "$(id -u):$(id -g)" \
+      -v "$backup/newshot.dump:/run/newshot-backup.dump:ro" -v "$backup/business-time:/run/newshot-business-time" \
+      --entrypoint node setup modules/reset-monitor/scripts/migrate-business-time.ts \
+      --apply --worker-stopped --database-backup /run/newshot-backup.dump --output /run/newshot-business-time/apply >&2
+  fi
   dc "$release" run --rm --no-deps setup >&2
 else
   dc "$release" run --rm --no-deps --entrypoint node setup scripts/seed.ts >&2

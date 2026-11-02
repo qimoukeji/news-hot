@@ -5,11 +5,13 @@ import { sendJsonWithEtag, strictQuery } from "@aihot/api/http/respond";
 import type { ResetMonitorBackendDefinition } from "./backend/context.ts";
 import { overviewSchema, type PlatformOverview, type Overview } from "./public-v2.ts";
 import { overviewModule } from "./overview-module.ts";
+import { verifyBusinessTimeUpgrade } from "./scripts/business-time-upgrade.ts";
 
 /** Site composition owns the installed monitor list; the shared engine does not import its peers. */
 export function createOverviewServer(definitions: readonly ResetMonitorBackendDefinition[]) {
   return defineServerModule({
     name: overviewModule.name,
+    migrationChecks: [{ migration: "0152_monitor_actions_drop_scalar_time.sql", verify: verifyBusinessTimeUpgrade }],
     publications: {
       overview: async () => {
         const now = Date.now();
@@ -25,7 +27,7 @@ export function createOverviewServer(definitions: readonly ResetMonitorBackendDe
         const result = await modulePublication<Overview>(overviewModule.name, "overview");
         const { generatedAt: _generated, ...content } = result;
         return sendJsonWithEtag(req, reply, result, {
-          etagPrefix: "reset-actions-overview-v2.3", etagOf: content,
+          etagPrefix: "reset-actions-overview-v2.4", etagOf: content,
           cacheControl: "public, max-age=60, s-maxage=60, must-revalidate",
         });
       }));

@@ -1,3 +1,4 @@
+import { stableJson } from "@aihot/backend/lib/ids";
 import { z } from "zod";
 import { sql, type Db } from "@aihot/backend/db";
 import { audit, Conflict } from "@aihot/backend/audit";
@@ -5,7 +6,7 @@ import { monitorId, monitor, auditAction, auditSubject } from "./context.ts";
 import { actionDraftSchema, defaultActionTime, editorialTextSchema, editorialScopeSchema, reduceEvent, sourcedActions, currentUnsourcedConfirmation, type ActionInput, type ActionRow } from "../actions.ts";
 import { loadActionInput, rowVersion, validateActionFacts, validateScope, lockActionRecords, validateActionSources, auditPost } from "./action-store.ts";
 import { enqueuePublicV2 } from "./public-v2-work.ts";
-import { normalizePublicTime } from "../public-v2.ts";
+import { normalizePublicTime, isFutureBusinessTime } from "../public-v2.ts";
 import { postContext } from "./post-context.ts";
 const id = z.string().min(1);
 const eventCreate = z.strictObject({ localKey: id, type: z.enum(["direct_reset", "reset_credit", "bonus_credit"]), title: editorialTextSchema.nullable().optional(), summary: editorialTextSchema.nullable().optional(), scope: editorialScopeSchema.nullable().optional() });
@@ -61,7 +62,7 @@ async function detail(origin: Origin, savedInput?: ActionInput) {
   const event = origin.kind === "event" ? all.events.find(event => event.id === origin.id) : undefined;
   return { version: baseVersion(input, origin), ...(post ? { post, context: postContext(input.posts.find(row => row.id === post.id)!, input.posts) } : {}), ...(event ? { event } : {}),
     events: all.events.filter(event => related.events.includes(event.id)), actions: all.actions.filter(action => related.actions.includes(action.id)), posts: all.posts.filter(post => related.posts.includes(post.id)),
-    options: all, versions: Object.fromEntries(["events", "actions", "posts"].map(kind => [kind, Object.fromEntries(input[kind as keyof ActionInput].map(row => [row.id, rowVersion(row)]))])) };
+    options: all, versions: Object.fromEntries((["events", "actions", "posts"] as const).map(kind => [kind, Object.fromEntries(input[kind].map(row => [row.id, rowVersion(row)]))])) };
 }
 export const monitorPostDetail = (id: string) => detail({ kind: "post", id });
 export const monitorEventDetail = (id: string, input?: ActionInput) => detail({ kind: "event", id }, input);
@@ -160,15 +161,17 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
   }
   if (after.actions.some(action => !action.sources.length && (action.action !== "confirm" || !action.time))) throw invalid("只有填写明确生效时间的确认动作可以没有来源");
   for (const action of after.actions.filter(action => !action.sources.length)) {
-    const time = action.time!, today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
-    if (time.length === 10 ? time > today : Date.parse(time.split("/").at(-1)!) > Date.now()) throw invalid("实际生效时间不能在未来");
+    const previous = state.actions.find(row => row.id === action.id);
+    // Persisted inferred dates follow the Beijing confirmation boundary, independent of source zone.
+    if (previous && stableJson(previous.time) === stableJson(action.time)) continue;
+    if (isFutureBusinessTime(action.time!, new Date(Date.now()).toISOString())) throw invalid("实际生效时间不能在未来");
   }
   const planCorrections: string[] = [];
   for (const item of command.actions.update) {
     const prior = state.actions.find(action => action.id === item.id)!;
     const next = after.actions.find(action => action.id === item.id);
     const event = findEvent(prior.event_id);
-    if (!next || !["announce", "amend"].includes(prior.action) || prior.time === next.time
+    if (!next || !["announce", "amend"].includes(prior.action) || stableJson(prior.time) === stableJson(next.time)
       || !currentUnsourcedConfirmation(event, state) || !next.sources.length) continue;
     const revisionId = `plan-correction-${rowVersion({ identity, action: next.id, time: next.time })}`;
     const sequence = Math.max(0, ...after.actions.filter(action => action.event_id === event.id).map(action => action.sequence)) + 1;
@@ -251,8 +254,8 @@ async function submit(origin: Origin, value: unknown, actor: string) {
     for (const change of planned.actionChanges) {
       const next = change.after;
       if (!next) await db`DELETE FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND id=${change.actionId}`;
-      else if (!change.before) await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources) VALUES(${monitorId()},${next.id},${next.event_id},${next.sequence},${next.action},${next.invalidates_event},${db.json(next.title)},${next.summary ? db.json(next.summary) : null},${next.time},${db.json(next.sources)})`;
-      else await db`UPDATE monitor_event_actions SET sequence=${next.sequence},action=${next.action},invalidates_event=${next.invalidates_event},title=${db.json(next.title)},summary=${next.summary ? db.json(next.summary) : null},time=${next.time},sources=${db.json(next.sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${next.id}`;
+      else if (!change.before) await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources) VALUES(${monitorId()},${next.id},${next.event_id},${next.sequence},${next.action},${next.invalidates_event},${db.json(next.title)},${next.summary ? db.json(next.summary) : null},${next.time === null ? null : db.json(next.time)},${db.json(next.sources)})`;
+      else await db`UPDATE monitor_event_actions SET sequence=${next.sequence},action=${next.action},invalidates_event=${next.invalidates_event},title=${db.json(next.title)},summary=${next.summary ? db.json(next.summary) : null},time=${next.time === null ? null : db.json(next.time)},sources=${db.json(next.sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${next.id}`;
     }
     for (const action of planned.after.actions.filter(action => reordered.has(action.event_id))) await db`UPDATE monitor_event_actions SET sequence=${action.sequence} WHERE monitor_id=${monitorId()} AND id=${action.id}`;
     await validateActionSources(db, planned.after.actions.filter(action => planned.affected.includes(action.event_id)));

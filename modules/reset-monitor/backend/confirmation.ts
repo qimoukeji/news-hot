@@ -1,7 +1,7 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
 import { defaultActionTime, reduceEvent, type ActionInput, type ActionRow, type EventRow } from "../actions.ts";
-import { normalizePublicTime } from "../public-v2.ts";
+import { normalizePublicTime, type BusinessTime } from "../public-v2.ts";
 
 export const inferredConfirmationTitle = {
   en: "The announced time has arrived", zh: "已到预告时间", "zh-Hant": "已到預告時間",
@@ -22,8 +22,8 @@ export const inferredConfirmationSummary = {
 export function announcementBasis(event: EventRow, input: ActionInput) {
   const official = reduceEvent(event, { ...input, actions: input.actions.filter(action => action.sources.length) });
   if (!official) return null;
-  let plan: string | null = null;
-  const revisions: Array<{ id: string; action: string; time: string | null }> = [];
+  let plan: BusinessTime | null = null;
+  const revisions: Array<{ id: string; action: string; time: BusinessTime | null }> = [];
   for (const { action, publishedAt } of official.actions) {
     if (action.action === "announce" || action.invalidates_event || action.action === "amend" && action.time !== null) {
       revisions.push({ id: action.id, action: action.invalidates_event ? "cancel" : action.action, time: action.time });
@@ -35,9 +35,10 @@ export function announcementBasis(event: EventRow, input: ActionInput) {
   return { official, plan: plan ? normalizePublicTime(plan) : null, version: sha256(stableJson(revisions)) };
 }
 
-export function inferenceBoundary(time: string): number {
-  if (time.length === 10) return Temporal.PlainDate.from(time).add({ days: 1 }).toZonedDateTime("Asia/Shanghai").epochMilliseconds;
-  return Date.parse(time.split("/").at(-1)!);
+export function inferenceBoundary(time: BusinessTime): number {
+  if (time.kind === "date") return Temporal.PlainDate.from(time.date).toZonedDateTime({ timeZone: "Asia/Shanghai", plainTime: "18:00:00" }).epochMilliseconds;
+  const nanos = Temporal.Instant.from(time.kind === "range" ? time.through : time.at).epochNanoseconds;
+  return Number(nanos / 1_000_000n + (nanos % 1_000_000n > 0n ? 1n : 0n));
 }
 
 /** A minute task persists this action; reading a page never manufactures timeline nodes. */

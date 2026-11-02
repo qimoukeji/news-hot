@@ -2,10 +2,30 @@
 // constraint validation run separately so earlier DDL cannot hold a strong lock during a table scan.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { parseArgs } from "node:util";
+import { pathToFileURL } from "node:url";
 import type postgres from "postgres";
+import type { ModuleMigrationCheck, ServerModule } from "@aihot/backend/modules";
 import { FIRST_ONLINE_MIGRATION, migrationPlan, type MigrationPlan } from "./migration-safety.ts";
 
-export async function runMigrations(sql: postgres.Sql, root: string): Promise<number> {
+/** Read only the site's installed modules; an uninstalled module is never imported for its migrations. */
+export async function migrationChecks(root: string, files: ReadonlyMap<string, MigrationPlan>, supplied?: readonly ModuleMigrationCheck[]) {
+  const site = path.join(root, "site/modules/server.ts");
+  const checks: readonly ModuleMigrationCheck[] = supplied ?? (existsSync(site)
+    ? ((await import(pathToFileURL(site).href)).SERVER_MODULES as readonly ServerModule[]).flatMap(module => module.migrationChecks ?? [])
+    : []);
+  const byName = new Map<string, ModuleMigrationCheck>();
+  for (const check of checks) {
+    if (byName.has(check.migration)) throw new Error(`duplicate migration check: ${check.migration}`);
+    const plan = files.get(check.migration);
+    if (!plan) throw new Error(`migration check references unknown file: ${check.migration}`);
+    if (plan.kind !== "drop-column" && plan.kind !== "drop-table") throw new Error(`migration check requires a guarded drop-column or drop-table: ${check.migration}`);
+    byName.set(check.migration, check);
+  }
+  return byName;
+}
+
+export async function runMigrations(sql: postgres.Sql, root: string, options: { through?: string; checks?: readonly ModuleMigrationCheck[] } = {}): Promise<number> {
   const sqlFiles = (dir: string) => existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".sql")).map((name) => ({ name, file: path.join(dir, name) })) : [];
   const modules = path.join(root, "modules");
   const migrations = [
@@ -16,13 +36,16 @@ export async function runMigrations(sql: postgres.Sql, root: string): Promise<nu
     if (migrations[i + 1]?.name === migration.name) throw new Error(`two migrations are named ${migration.name}: ${migration.file} and ${migrations[i + 1].file}`);
   }
   // Validate the complete set before making any change; old files remain installable as history.
-  const prepared = migrations.map((migration) => {
+  const allPrepared = migrations.map((migration) => {
     const text = readFileSync(migration.file, "utf8");
     let plan: MigrationPlan = { kind: "transaction" };
     try { if (Number(migration.name.slice(0, 4)) >= FIRST_ONLINE_MIGRATION) plan = migrationPlan(text); }
     catch (error) { throw new Error(`${migration.name}: ${(error as Error).message}`, { cause: error }); }
     return { ...migration, text, plan };
   });
+  if (options.through && !allPrepared.some(migration => migration.name === options.through)) throw new Error(`unknown migration cutoff: ${options.through}`);
+  const prepared = allPrepared.filter(migration => !options.through || migration.name <= options.through);
+  const checks = await migrationChecks(root, new Map(allPrepared.map(migration => [migration.name, migration.plan])), options.checks);
   const session = await sql.reserve();
   try {
     await session`SET lock_timeout = '1s'`;
@@ -41,13 +64,18 @@ export async function runMigrations(sql: postgres.Sql, root: string): Promise<nu
         try { await assertEmpty(plan.table); }
         catch (error) { throw new Error(`migration ${name} preflight failed: ${(error as Error).message}`, { cause: error }); }
       }
+      const check = checks.get(name);
+      if (!applied.has(name) && check) {
+        try { await check.verify(session); }
+        catch (error) { throw new Error(`migration ${name} preflight failed: ${(error as Error).message}`, { cause: error }); }
+      }
     }
     let count = 0;
     for (const { name, text, plan } of prepared) {
       if (applied.has(name)) continue;
       const start = Date.now();
       try {
-        const metadataOnly = plan.kind === "transaction" || plan.kind === "primary-key" || plan.kind === "drop-table";
+        const metadataOnly = plan.kind === "transaction" || plan.kind === "primary-key" || plan.kind === "drop-table" || plan.kind === "drop-column";
         await session`SELECT set_config('lock_timeout', ${metadataOnly ? "1s" : "30s"}, false)`;
         await session`SELECT set_config('statement_timeout', ${metadataOnly ? "10s" : "30min"}, false)`;
         if (plan.kind === "index") {
@@ -67,6 +95,12 @@ export async function runMigrations(sql: postgres.Sql, root: string): Promise<nu
           await session`BEGIN`;
           try {
             let execute = true;
+            const check = checks.get(name);
+            if (check && (plan.kind === "drop-column" || plan.kind === "drop-table")) {
+              const [relation] = await session`SELECT to_regclass(${plan.table}) AS id`;
+              if (relation.id) await session.unsafe(`LOCK TABLE ${plan.table} IN ACCESS EXCLUSIVE MODE`);
+              await check.verify(session);
+            }
             if (plan.kind === "drop-table") {
               const [relation] = await session`SELECT to_regclass(${plan.table}) AS id`;
               execute = Boolean(relation.id);
@@ -129,8 +163,9 @@ export async function runMigrations(sql: postgres.Sql, root: string): Promise<nu
 }
 
 if (import.meta.main) {
+  const { values } = parseArgs({ options: { through: { type: "string" } } });
   const { REPO_ROOT } = await import("@aihot/backend/config");
   const { closeDb, sql } = await import("@aihot/backend/db");
-  try { await runMigrations(sql, REPO_ROOT); }
+  try { await runMigrations(sql, REPO_ROOT, { through: values.through }); }
   finally { await closeDb(); }
 }

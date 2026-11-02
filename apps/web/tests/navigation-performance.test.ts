@@ -74,7 +74,9 @@ before(async()=>{
   const started=await Promise.allSettled([
     startWebServer(api).then(w=>{web=w;origin=w.origin;}),
     chromium.launch({channel:'chromium'}).then(b=>{chrome=b;}),
-    webkit.launch().then(b=>{safari=b;}),
+    // Windows WebKit's software compositor crashes when a view transition restores a deep list.
+    // Use accelerated compositing there, keeping real transitions and the return-position assertions.
+    webkit.launch({ignoreDefaultArgs:process.platform==='win32'?['--disable-accelerated-compositing']:[]}).then(b=>{safari=b;}),
   ]);
   for(const result of started)if(result.status==='rejected')throw result.reason;
 });

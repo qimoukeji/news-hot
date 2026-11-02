@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
@@ -195,75 +196,75 @@ test("post filters accept four recognition states and reject retired aliases", a
 
 test("source-free confirmations use action review, retain identity and become official when a post arrives", async () => inMonitor(codex, async () => {
   await seed();
-  await sql`UPDATE monitor_event_actions SET action='announce',time='2026-10-01T13:00:00Z' WHERE monitor_id='codex'`;
+  await sql`UPDATE monitor_event_actions SET action='announce',time=${sql.json(bt("2026-10-01T13:00:00Z"))} WHERE monitor_id='codex'`;
   const posts = (await loadActionInput()).posts;
-  await review({ actions: { create: [{ localKey: "manual", eventId: "event", ...fields("confirm", "人工核实已生效"), time: "2026-10-01T14:00:00Z" }] } }, "event");
+  await review({ actions: { create: [{ localKey: "manual", eventId: "event", ...fields("confirm", "人工核实已生效"), time: bt("2026-10-01T14:00:00Z") }] } }, "event");
   let input = await loadActionInput();
   const manual = currentUnsourcedConfirmation(input.events[0]!, input)!;
   assert.ok(manual); assert.equal(input.actions.length, 2);
   assert.deepEqual(manual.sources, []); assert.deepEqual(input.posts, posts);
   assert.equal((await publicV2Snapshot()).events[0]!.updates.find(action => action.id === manual.id)!.sources.length, 0);
-  await review({ actions: { create: [{ localKey: "correction", eventId: "event", ...fields("confirm", "人工核实已生效（已更正）"), time: "2026-10-01T15:00:00Z" }] } }, "event");
+  await review({ actions: { create: [{ localKey: "correction", eventId: "event", ...fields("confirm", "人工核实已生效（已更正）"), time: bt("2026-10-01T15:00:00Z") }] } }, "event");
   input = await loadActionInput();
   assert.equal(input.actions.length, 2); assert.equal(currentUnsourcedConfirmation(input.events[0]!, input)!.id, manual.id);
-  await sql.begin(db => writePostActions(db, input.posts.find(post => post.id === "review")!, [{ eventId: "event", ...fields("confirm", "官方确认"), time: "2026-10-02T10:00:00Z" }]));
+  await sql.begin(db => writePostActions(db, input.posts.find(post => post.id === "review")!, [{ eventId: "event", ...fields("confirm", "官方确认"), time: bt("2026-10-02T10:00:00Z") }]));
   input = await loadActionInput();
   const upgraded = input.actions.find(action => action.id === manual.id)!;
   assert.equal(input.actions.length, 2); assert.equal(upgraded.sequence, manual.sequence);
-  assert.deepEqual(upgraded.sources, [{ postId: "review" }]); assert.equal(upgraded.time, "2026-10-02T10:00:00Z");
+  assert.deepEqual(upgraded.sources, [{ postId: "review" }]); assert.deepEqual(upgraded.time, bt("2026-10-02T10:00:00Z"));
   assert.equal(upgraded.title.zh, "官方确认"); assert.equal(currentUnsourcedConfirmation(input.events[0]!, input), null);
 }));
 
 test("source-free actions require confirmation and time; retired verification commands are rejected", async () => inMonitor(codex, async () => {
   await seed();
-  for (const action of [fields("confirm"), { ...fields("progress"), time: "2026-10-01" }]) {
+  for (const action of [fields("confirm"), { ...fields("progress"), time: bt("2026-10-01") }]) {
     const detail = (await monitorEventDetail("event"))!;
     await assert.rejects(previewMonitorEventReview("event", { version: detail.version, versions: detail.versions, reason: "test", actions: { create: [{ localKey: "invalid", eventId: "event", ...action }] } }), /明确生效时间/);
   }
   const detail = (await monitorEventDetail("event"))!;
   await assert.rejects(previewMonitorEventReview("event", { version: detail.version, reason: "test", verification: { outcome: "not_effective", time: null } }));
   for (const time of ["2099-01-01", "2099-01-01T00:00:00Z", "2026-10-01T00:00:00Z/2099-01-01T00:00:00Z"]) {
-    await assert.rejects(previewMonitorEventReview("event", { version: detail.version, versions: detail.versions, reason: "test", actions: { create: [{ localKey: "future", eventId: "event", ...fields("confirm"), time }] } }), /不能在未来/);
+    await assert.rejects(previewMonitorEventReview("event", { version: detail.version, versions: detail.versions, reason: "test", actions: { create: [{ localKey: "future", eventId: "event", ...fields("confirm"), time: bt(time) }] } }), /不能在未来/);
   }
 }));
 
 test("an event without initial actions accepts a timed source-free initial confirmation", async () => inMonitor(codex, async () => {
   await seed(); await sql`DELETE FROM monitor_event_actions`;
-  await review({ actions: { create: [{ localKey: "initial", eventId: "event", ...fields("confirm", "人工核实已生效"), time: "2026-10-01" }] } }, "event");
+  await review({ actions: { create: [{ localKey: "initial", eventId: "event", ...fields("confirm", "人工核实已生效"), time: bt("2026-10-01") }] } }, "event");
   const input = await loadActionInput();
   assert.equal(input.actions.length, 1); assert.deepEqual(input.actions[0]!.sources, []);
   assert.equal(reduceEvent(input.events[0]!, input)!.status, "completed");
-  assert.equal((await publicV2Snapshot()).events[0]!.time, "2026-10-01");
+  assert.deepEqual((await publicV2Snapshot()).events[0]!.time, bt("2026-10-01"));
 }));
 
 test("editing a plan time previews an explicit correction and supersedes an earlier source-free confirmation", async () => inMonitor(codex, async () => {
   await seed();
-  await sql`UPDATE monitor_event_actions SET action='announce',time='2026-10-01T13:00:00Z' WHERE monitor_id='codex'`;
-  await review({ actions: { create: [{ localKey: "manual", eventId: "event", ...fields("confirm", "人工核实已生效"), time: "2026-10-01T14:00:00Z" }] } }, "event");
+  await sql`UPDATE monitor_event_actions SET action='announce',time=${sql.json(bt("2026-10-01T13:00:00Z"))} WHERE monitor_id='codex'`;
+  await review({ actions: { create: [{ localKey: "manual", eventId: "event", ...fields("confirm", "人工核实已生效"), time: bt("2026-10-01T14:00:00Z") }] } }, "event");
   let input = await loadActionInput(); const confirmation = currentUnsourcedConfirmation(input.events[0]!, input)!, plan = input.actions.find(action => action.action === "announce")!;
   const editorial = await review({ actions: { update: [{ id: plan.id, ...fields("announce", "仅修正文案"), time: plan.time }] } }, "event");
   assert.equal(editorial.actionChanges.length, 1);
   input = await loadActionInput(); assert.equal(input.actions.length, 2); assert.equal(currentUnsourcedConfirmation(input.events[0]!, input)!.id, confirmation.id);
-  const preview = await review({ actions: { update: [{ id: plan.id, ...fields("announce", "计划时间修订"), time: "2026-10-29" }] } }, "event");
+  const preview = await review({ actions: { update: [{ id: plan.id, ...fields("announce", "计划时间修订"), time: bt("2026-10-29") }] } }, "event");
   assert.equal(preview.actionChanges.length, 2);
   input = await loadActionInput();
   assert.equal(input.actions.length, 3); assert.ok(input.actions.some(action => action.id === confirmation.id));
   assert.equal(currentUnsourcedConfirmation(input.events[0]!, input), null);
   assert.equal(reduceEvent(input.events[0]!, input)!.status, "announced");
-  assert.equal(reduceEvent(input.events[0]!, input)!.time, "2026-10-29");
+  assert.deepEqual(reduceEvent(input.events[0]!, input)!.time, bt("2026-10-29"));
 }));
 
 test("upgrading a source-free confirmation preserves official completion across subsequent progress", async () => inMonitor(codex, async () => {
   await seed();
-  await sql`UPDATE monitor_event_actions SET action='announce',time='2026-10-01T13:00:00Z' WHERE monitor_id='codex'`;
-  await review({ actions: { create: [{ localKey: "manual", eventId: "event", ...fields("confirm", "人工核实已生效"), time: "2026-10-01T14:00:00Z" }] } }, "event");
+  await sql`UPDATE monitor_event_actions SET action='announce',time=${sql.json(bt("2026-10-01T13:00:00Z"))} WHERE monitor_id='codex'`;
+  await review({ actions: { create: [{ localKey: "manual", eventId: "event", ...fields("confirm", "人工核实已生效"), time: bt("2026-10-01T14:00:00Z") }] } }, "event");
   let input = await loadActionInput(); const current = currentUnsourcedConfirmation(input.events[0]!, input)!;
   await review({ actions: { create: [{ localKey: "progress", eventId: "event", ...fields("progress") }] }, sources: { add: [{ actionKey: "progress", postId: "review" }] } }, "event");
   input = await loadActionInput(); assert.equal(reduceEvent(input.events[0]!, input)!.status, "in_progress");
   await addPost("official", "2026-10-03T12:00:00Z");
-  await sql.begin(async db => writePostActions(db, (await sourcePost("official", db))!, [{ id: current.id, eventId: "event", ...fields("confirm", "官方确认"), time: "2026-10-01T15:00:00Z" }]));
+  await sql.begin(async db => writePostActions(db, (await sourcePost("official", db))!, [{ id: current.id, eventId: "event", ...fields("confirm", "官方确认"), time: bt("2026-10-01T15:00:00Z") }]));
   input = await loadActionInput();
   assert.equal(input.actions.find(action => action.id === current.id)!.sequence, current.sequence);
   assert.equal(reduceEvent(input.events[0]!, input)!.status, "completed");
-  assert.equal(reduceEvent(input.events[0]!, input)!.confirmedTime, "2026-10-01T15:00:00Z");
+  assert.deepEqual(reduceEvent(input.events[0]!, input)!.confirmedTime, bt("2026-10-01T15:00:00Z"));
 }));

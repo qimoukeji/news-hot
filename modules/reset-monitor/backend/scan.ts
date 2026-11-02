@@ -1,3 +1,4 @@
+import { formatBusinessTime } from "../business-time.ts";
 import { randomUUID } from "node:crypto";
 import { config } from "@aihot/backend/config";
 import { sql, type Db } from "@aihot/backend/db";
@@ -55,7 +56,7 @@ export async function flushResetPushes(): Promise<number> {
       const card = {
         header: { title: { tag: "plain_text", content: update.title.zh ?? update.title.en }, template: update.invalidatesEvent ? "grey" : update.action === "confirm" ? "turquoise" : "orange" },
         elements: [
-          { tag: "div", text: { tag: "lark_md", content: [update.summary?.zh ?? update.summary?.en, `**事件时间**：${event.time}`,
+          { tag: "div", text: { tag: "lark_md", content: [update.summary?.zh ?? update.summary?.en, `**事件时间**：${formatBusinessTime(event.time)}`,
             `**影响范围**：${event.scope.note?.zh ?? event.scope.note?.en ?? "所有用户"}`,
             event.type === "bonus_credit" ? "活动可领取不表示个人已到账。" : null].filter(Boolean).join("\n") } },
           { tag: "action", actions: [

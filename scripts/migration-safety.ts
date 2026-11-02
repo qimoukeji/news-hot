@@ -1,6 +1,6 @@
 // A deliberately small online-migration vocabulary. Unknown SQL needs an explicit safety design, not an opt-out.
 export const FIRST_ONLINE_MIGRATION = 55;
-export type MigrationPlan = { kind: "transaction" | "validation" | "statistics" } | { kind: "index" | "primary-key"; index: string; table: string } | { kind: "drop-table"; table: string };
+export type MigrationPlan = { kind: "transaction" | "validation" | "statistics" } | { kind: "index" | "primary-key"; index: string; table: string } | { kind: "drop-table"; table: string } | { kind: "drop-column"; table: string; column: string };
 
 // Keep quoted values opaque, including their semicolons and comment markers. SQL bodies are not in
 // the accepted vocabulary; rejecting them also prevents hiding writes in DO or function definitions.
@@ -92,7 +92,12 @@ export function migrationPlan(text: string): MigrationPlan {
   if (!singleAction(tokens)) throw new Error("use one ALTER TABLE action per statement");
   const key = primaryKey.exec(sql);
   if (key) return { kind: "primary-key", index: key[2], table: key[1].replace(/ \. /g, ".") };
-  if (new RegExp(`^alter table ${RELATION} drop (?:column|constraint) if exists ${IDENT}$`, "i").test(sql)) return { kind: "transaction" };
+  const column = new RegExp(`^alter table (${RELATION}) drop column if exists (${IDENT})$`, "i").exec(sql);
+  if (column) return { kind: "drop-column", table: column[1].replace(/ \. /g, "."), column: column[2] };
+  if (new RegExp(`^alter table ${RELATION} drop constraint if exists ${IDENT}$`, "i").test(sql)) return { kind: "transaction" };
+  // A single column rename updates catalogs only; the runner applies the same short lock timeout
+  // as ADD/DROP COLUMN. Never combine it with type changes or additional ALTER actions.
+  if (new RegExp(`^alter table ${RELATION} rename column ${IDENT} to ${IDENT}$`, "i").test(sql)) return { kind: "transaction" };
   if (addColumn.test(sql)) {
     if (/\bnot null\b/i.test(words) && (!/\bdefault\b/i.test(words) || /\bdefault null\b/i.test(words))) throw new Error("NOT NULL on a new column requires a non-null constant default");
     return { kind: "transaction" };

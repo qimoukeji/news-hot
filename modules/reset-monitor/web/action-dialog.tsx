@@ -61,7 +61,7 @@ function ActionForm({ detail, actionId, base, onClose, onDone, onBusy, onReload 
     event.preventDefault();
     if (busy || conflict || !dirty) return;
     if (!removingLastSource && !postIds.length && fact.action !== "confirm") { setError("只有确认动作可以不关联帖子，其他动作必须选择至少一条来源帖子"); return; }
-    if (sourceLessConfirmation && !fact.time?.trim()) { setError("无关联帖子的确认必须填写明确生效时间"); return; }
+    if (sourceLessConfirmation && !fact.time) { setError("无关联帖子的确认必须填写明确生效时间"); return; }
     if (preview) {
       const result = await run("POST", base, { ...body, previewToken: preview.previewToken }, { label: "submit-action", revalidate: false, onError, success: "动作变更已提交" });
       if (result) onDone(); else { setPreview(null); setError("提交失败，请核对提示后重试。"); }

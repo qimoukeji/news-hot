@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -45,7 +46,7 @@ for (const definition of definitions) {
       answer.actions[0]!.timeExcerpt = timeExcerpt;
       await applyOfflineRecognition(saved.id, answer, saved.version);
       const input = await loadActionInput(), action = input.actions.find(action => action.sources.some(source => source.postId === saved.id));
-      assert.equal(action?.time, at);
+      assert.deepEqual(action?.time, bt(at));
       assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
     }
   }));
@@ -55,7 +56,7 @@ for (const definition of definitions) {
     const saved = await post(definition, text), answer = response(text);
     answer.actions[0]!.timeExcerpt = timeExcerpt;
     await applyOfflineRecognition(saved.id, answer, saved.version);
-    assert.equal((await loadActionInput()).actions[0]!.time, at);
+    assert.deepEqual((await loadActionInput()).actions[0]!.time, bt(at));
     assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
   }));
 
@@ -66,7 +67,7 @@ for (const definition of definitions) {
     assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
     assert.equal((await publicV2Snapshot()).events[0]!.status, "completed");
     const input = await loadActionInput();
-    assert.equal(input.actions[0]!.time, at);
+    assert.deepEqual(input.actions[0]!.time, bt(at));
     assert.equal(input.events[0]!.scope!.note!.en, "All users");
     assert.equal(input.events[0]!.scope!.note!.zh, "所有用户");
   }));
@@ -125,7 +126,8 @@ for (const definition of definitions) {
     assert.equal(event.scope.type, "paid_users");
     assert.deepEqual(event.scope.productCodes, []);
     assert.equal(event.scope.note!.zh, "付费用户");
-    assert.match(event.summary!.zh, /Unlisted Studio/);
+    assert.equal(event.summary, null, "event overview is pending");
+    assert.match(event.updates[0]!.summary!.zh, /Unlisted Studio/);
     assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
   }));
 }
@@ -137,12 +139,12 @@ test("relative forecasts keep interval precision; vague forecasts keep the actio
     answer.actions[0]!.timeExcerpt = expression;
     await applyOfflineRecognition(saved.id, answer, saved.version);
     const input = await loadActionInput(), action = input.actions.find(action => action.sources.some(source => source.postId === saved.id))!;
-    assert.equal(action.time, expected);
+    assert.deepEqual(action.time, bt(expected));
     assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
     const event = input.events.find(event => event.id === action.event_id)!;
-    const boundary = inferenceBoundary(expected);
+    const boundary = inferenceBoundary(bt(expected));
     assert.equal(inferredConfirmation(event, input, boundary - 1), null);
-    assert.equal(inferredConfirmation(event, input, boundary)!.time, expected);
+    assert.deepEqual(inferredConfirmation(event, input, boundary)!.time, bt(expected));
   }
 }));
 

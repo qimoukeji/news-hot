@@ -2,7 +2,21 @@
 
 ## 重置监控升级
 
-动作时间未明确或无法解析时，announce 保存最早有效来源发帖当天的北京时间日期，次日零点才自动完成；其他动作保存发帖时刻。不增加时间依据字段，保存的预告时间参与正常自动完成。公开 `updates.time` 非空。`scope.note` 保存 All users、Paid users 等简洁七语言用户标签，不追加 unknown 或产品标签，结构化范围代码和摘要中的实际限制保留。
+v2 保留所有时间字段名，将 `event.time`、`updates[].time`、`announcedResetTime`、`predictedResetTime` 和 `resetTime` 统一改为 BusinessTime 对象：`instant {at}`、`date {date,timeZone}`、`range {from,through}`、`deadline {at}`。`publishedAt`、`generatedAt` 继续使用 ISO 时间戳。调用方必须同步升级，旧标量和中文展示时间不再接受，不提供兼容模式。接口接入示例见 [v2 契约](reset-monitor-v2.md)。
+
+数据库最终列名仍为 `monitor_event_actions.time`，类型改为 JSONB。这是需要停写、备份与独立数据转换的升级，不能直接在有数据的旧库执行完整 `db:migrate`。工具和 SQL 的准备不授权实际 schema 修改、数据转换、真实模型调用、推送或部署，执行前须取得使用者的具体授权。
+
+1. 停止全部 API 写入、Worker、Webhook 投递和管理员操作。备份整个数据库，在独立副本上恢复并演练以下步骤；保留旧程序及其备份，切换完成前不要启动新旧任一写入实例。
+2. 只执行新增临时 JSONB 列的迁移：`npm run db:migrate -- --through 0146_monitor_actions_business_time.sql`。执行器遇到尚未完成转换的有数据旧库，会在整批清理前拒绝，而不是隐式丢弃旧时间。
+3. 预览转换：`node --env-file-if-exists=.env modules/reset-monitor/scripts/migrate-business-time.ts --output .data/local-preview/business-time-preview`。工具只读取数据库，将无原帖全文和凭据的记录快照写入新目录，从写出的副本验证转换和公开投影；任何异常记录都会中止。输出目录必须不存在，避免覆盖备份。
+4. 核对预览及完整备份副本后，经授权使用新的输出目录执行：`node --env-file-if-exists=.env modules/reset-monitor/scripts/migrate-business-time.ts --output .data/local-preview/business-time-apply --apply --worker-stopped --database-backup <完整custom格式备份文件>`。每次执行前，工具复用完整备份校验：检查 custom 格式、全部业务表和数据清单，并实际恢复到新临时测试库；校验失败不写目标数据。执行环境须有 `pg_restore`，恢复验证账号须有建库权限，验证临时库在结束后删除。目标账号无需为演练增加权限：可在进程环境中设置独立验证连接（例如 `BUSINESS_TIME_VERIFY_DATABASE_URL`），附加 `--verification-database-env BUSINESS_TIME_VERIFY_DATABASE_URL`；参数只传变量名，连接和密码不放命令行，也不修改 `.env`。验证连接只用于创建、恢复和删除临时库，表清单核对与迁移始终使用目标连接。默认每批 200 条，`--batch-size` 可设置 1–1000。历史时间戳转为 `instant`，日期按已有行为转为 `date` 加 `Asia/Shanghai`，区间转为 `range`；原先丢失的来源时区和截止语义不猜测、不重新识别。业务记录时间戳、事件/动作/来源 ID 不变。部分回填后中断，可在仍停写时换一个新输出目录重复执行，已正确回填的记录按同值保留，冲突中止。
+5. 转换工具最后核验全部记录，同事务升级原本有效的概述事实绑定、同版本失败翻译状态及 Webhook 指纹，写入与动作快照绑定的完成记录。过期概述不会恢复，既有失败版本不会因格式变化重新调用模型。旧契约 `pending`、`sending`、`failed` 投递改为 `cancelled`，已发送记录保留审计，历史通知不补发；过期队列作业即使运行也不能重新投递这些记录。
+6. 确认工具完成后执行 `npm run db:migrate`：`0147–0150` 分别安装和验证 JSONB 形状及来源约束，`0151` 删除旧来源约束，`0152` 删除旧 text 列，`0153` 将临时列重命名为 `time`。执行器在清理前及持锁执行删除前再次核验逐行转换和完成摘要；任一记录变动都会拒绝清理。新装空库可以直接执行完整迁移。迁移不改历史 SQL，不执行整表类型重写。
+7. 切换新程序，检查 v2、公开页、后台选择器和本地 smoke，再按原有授权恢复业务任务。保留完整数据库备份及预览/执行目录。切换失败时停写，将完整备份恢复到独立数据库，用旧程序连接恢复库核验后再切回；不尝试从已删除的旧列回退，也不把新代码连接到标量时间数据库。
+
+自动发布脚本按完整迁移路径识别待执行的 `0152`，在发布计划中输出 `needsBusinessTimeUpgrade` 并纳入审批摘要；缺少 `0146` 或转换工具时在停服前拒绝。批准后停止写入并备份，依次执行截止到 `0146` 的迁移、转换 CLI、完整 setup。转换只读挂载完整 dump，使用宿主 UID/GID 和私有输出目录，结果与备份一同保留。开始迁移后失败保持停服并记录 blocked-release，不让旧程序连接已转换的库。已完成转换的库和普通迁移沿用原发布流程。发布计划及脚本就绪不代表授权实际迁移或部署。
+
+纯日期预告仍在该日期北京时间 18:00 自动确认；日期所属时区保留供展示，程序边界不补成官方承诺的精确时刻。未明确或无法解析时间时，announce 保存最早有效来源发帖当天的北京时间日期，其他动作保存发帖时刻。公开 `updates.time` 非空。`scope.note` 保留简洁七语言用户标签，结构化范围代码和摘要中的实际限制不变。现有分钟 Worker 的概述生成仍经过模型安全阀、预算和回执；仅生成概述不另发业务通知。
 
 已有数据先运行 `node --env-file-if-exists=.env modules/reset-monitor/scripts/repair-action-defaults.ts --output .data/local-preview/action-defaults-preview` 预览；经授权后换一个新输出目录并加 `--apply`。工具先保存不含帖子原文的备份，在备份副本上验证，再按相关记录加锁写入、审计并同步通知基线，不补发历史通知。不修改明确时间；空时间没有有效来源或存在自定义 unknown 范围说明时停止，交人工核对。此修正不新增数据库列或修改历史 SQL；执行过的目录保留用于核验和恢复。已执行过旧的发帖时刻补齐时，增加 `--prior-backup <上次实际修正的输出目录>`：仅更正该备份能证明原本缺时间、当前仍为上次默认值的预告，不凭时间相同猜测，也不改明确业务时间。
 

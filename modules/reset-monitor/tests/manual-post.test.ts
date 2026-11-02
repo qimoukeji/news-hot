@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { beforeEach, after, test } from "node:test";
@@ -69,7 +70,7 @@ test("duplicate X variants, collected records, and normalized links conflict wit
 
 test("post editing preserves source identity, original evidence, recognition state and action relationships", async () => inMonitor(codex, async () => {
   const post = await createMonitorPost(body(), "manual-admin");
-  await sql.begin(async db => writePostActions(db, (await sourcePost(post.id, db))!, [{ eventId: "event", action: "confirm", title: properName("Official confirmation"), summary: null, time: at }], { events: [{ id: "event", type: "direct_reset" }] }));
+  await sql.begin(async db => writePostActions(db, (await sourcePost(post.id, db))!, [{ eventId: "event", action: "confirm", title: properName("Official confirmation"), summary: null, time: bt(at) }], { events: [{ id: "event", type: "direct_reset" }] }));
   await sql`UPDATE monitor_source_posts SET processing_status='failed',review_reason='Keep the failure reason',filtered_out=true,quoted_post=${sql.json({ id: "quote", author: "other", relation: "quote", text: "Private quoted source", publishedAt: at, url: "https://example.test/quote" })} WHERE monitor_id='codex' AND id=${post.id}`;
   const input = await loadActionInput(), before = (await sourcePost(post.id))!;
   const after = await updateMonitorPost(post.id, { version: before.version, patch: { title: { zh: "更正标题" }, summary: null } }, "manual-editor");

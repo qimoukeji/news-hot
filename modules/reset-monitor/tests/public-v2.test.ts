@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import { listEvents } from "./admin-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
@@ -36,7 +37,7 @@ import {
   applyPublicV2,
 } from "../backend/public-v2-review.ts";
 import { properName, publicV2Snapshot } from "../backend/public-v2.ts";
-import { eventListSchema, overviewSchema } from "../public-v2.ts";
+import { compareBusinessTime, eventListSchema, overviewSchema } from "../public-v2.ts";
 const definitions = [codex, claude, grok],
   sourceAt = "2026-10-01T12:00:00Z";
 after(async () => {
@@ -64,7 +65,7 @@ beforeEach(async () => {
             action: "announce",
             title: properName("Planned reset"),
             summary: null,
-            time: "2026-10-02T00:00:00Z",
+            time: bt("2026-10-02T00:00:00Z"),
           },
         ], { events: [{ id: "event", type: "direct_reset" }] });
       });
@@ -81,7 +82,7 @@ test("all platforms expose action updates through v2 only and support ETag", asy
       assert.equal(response.statusCode, 200, response.body);
       const body = eventListSchema.parse(response.json());
       assert.equal(body.list[0]!.updates[0]!.action, "announce");
-      assert.equal(body.list[0]!.updates[0]!.time, "2026-10-02T00:00:00Z");
+      assert.deepEqual(body.list[0]!.updates[0]!.time, bt("2026-10-02T00:00:00Z"));
       assert.equal(Date.parse(body.list[0]!.updates[0]!.publishedAt), Date.parse(sourceAt));
       assert.equal(body.list[0]!.updates[0]!.sources[0]!.postId, "post");
       assert.notEqual(body.list[0]!.updates[0]!.id, "post");
@@ -123,8 +124,8 @@ test("same post can append a confirmation with explicit source commands", async 
   const preview = (await previewMonitorReview("post", draft))!;
   await submitMonitorReview("post", { ...draft, previewToken: preview.previewToken }, "reviewer");
   const snapshot = await publicV2Snapshot();
-  assert.equal(snapshot.events[0]!.status, "completed"); assert.equal(Date.parse(snapshot.resetTime!), Date.parse(sourceAt));
-  assert.equal(snapshot.announcedResetTime, null); assert.equal(snapshot.events[0]!.updates.length, 2);
+  assert.equal(snapshot.events[0]!.status, "completed"); assert.deepEqual(snapshot.resetTime, bt(new Date(sourceAt).toISOString()));
+  assert.deepEqual(snapshot.announcedResetTime, null); assert.equal(snapshot.events[0]!.updates.length, 2);
   const input = await loadActionInput(); assert.equal(input.posts[0]!.processing_status, "processed");
   const serialized = JSON.stringify(snapshot);
   for (const field of ['"text":', '"quoted_post":', '"originalText":', '"recognition":', '"context":', '"raw":']) assert.equal(serialized.includes(field), false);
@@ -136,7 +137,7 @@ test("HTTP overview retains confirmations beside a new plan and recomputes cance
   const now = Date.now(), time = (days: number) => new Date(now + days * 86_400_000).toISOString();
   const add = async (id: string, type: "direct_reset" | "reset_credit" | "bonus_credit", days: number, action: "announce" | "confirm" = "confirm") => inMonitor(codex, async () => {
     await sql`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,processing_status) VALUES('codex',${id},${codex.authors[0]!.handle},${time(Math.min(days, 0))},${`https://example.test/${id}`},'processed')`;
-    await sql.begin(async db => writePostActions(db, (await sourcePost(id, db))!, [{ eventId: id, action, time: time(days), title: properName(id), summary: null }], { events: [{ id, type }] }));
+    await sql.begin(async db => writePostActions(db, (await sourcePost(id, db))!, [{ eventId: id, action, time: bt(time(days)), title: properName(id), summary: null }], { events: [{ id, type }] }));
   });
   await add("reset-history", "direct_reset", -9);
   await add("card-history", "reset_credit", -6);
@@ -145,17 +146,18 @@ test("HTTP overview retains confirmations beside a new plan and recomputes cance
   const app = await buildApp();
   try {
     const before = await app.inject("/api/v2/overview"), platform = overviewSchema.parse(before.json()).platforms.find(row => row.platform === "codex")!;
-    assert.equal(platform.announcedResetTime, time(1));
-    assert.equal(platform.resetTime, time(-3));
+    assert.deepEqual(platform.announcedResetTime, bt(time(1)));
+    assert.deepEqual(platform.resetTime, bt(time(-3)));
     assert.deepEqual(platform.statistics.typicalInterval, { value: 3, unit: "day", sampleCount: 2 });
-    assert.equal(platform.predictedResetTime, time(0));
-    await inMonitor(codex, async () => sql.begin(async db => writePostActions(db, (await sourcePost("bonus-history", db))!, [{ eventId: "bonus-history", action: "amend", invalidatesEvent: true, time: time(0), title: properName("Campaign cancelled"), summary: null }])));
+    assert.equal(platform.predictedResetTime!.kind, "instant");
+    assert.equal(compareBusinessTime(platform.predictedResetTime!, bt(time(0))), 0);
+    await inMonitor(codex, async () => sql.begin(async db => writePostActions(db, (await sourcePost("bonus-history", db))!, [{ eventId: "bonus-history", action: "amend", invalidatesEvent: true, time: bt(time(0)), title: properName("Campaign cancelled"), summary: null }])));
     const after = await app.inject({ url: "/api/v2/overview", headers: { "if-none-match": before.headers.etag! } });
     assert.equal(after.statusCode, 200);
     assert.notEqual(after.headers.etag, before.headers.etag);
     const changed = overviewSchema.parse(after.json()).platforms.find(row => row.platform === "codex")!;
-    assert.equal(changed.resetTime, time(-6));
-    assert.equal(changed.announcedResetTime, time(1));
+    assert.deepEqual(changed.resetTime, bt(time(-6)));
+    assert.deepEqual(changed.announcedResetTime, bt(time(1)));
     assert.equal(changed.statistics.bonusesLast30Days, 0);
     assert.deepEqual(changed.statistics.typicalInterval, { value: 3, unit: "day", sampleCount: 1 });
     const snapshot = await inMonitor(codex, () => publicV2Snapshot());
@@ -170,7 +172,7 @@ test("removing the final source deletes its action and invalidates publication",
   await submitMonitorReview("post", { ...draft, previewToken: preview.previewToken }, "reviewer");
   assert.deepEqual((await publicV2Snapshot()).events, []);
   const event = (await listEvents()).events[0]!;
-  assert.equal(event.status, null); assert.equal(event.time, null);
+  assert.equal(event.status, null); assert.deepEqual(event.time, null);
   await assert.rejects(setWithdrawn("event", { version: event.version, reason: "恢复", withdrawn: false }, "reviewer"), /有效/);
 }));
 test("review requires preview, reason and current related versions", async () => inMonitor(codex, async () => {
@@ -187,7 +189,7 @@ test("display edits cannot write status or time and partial translations stay pr
     const event = (await listEvents()).events[0]!;
     for (const patch of [
       { status: "completed" },
-      { time: sourceAt },
+      { time: bt(sourceAt) },
       { confirmedAt: sourceAt },
       { schedule: null },
     ])
@@ -209,7 +211,7 @@ test("display edits cannot write status or time and partial translations stay pr
     );
     const snapshot = await publicV2Snapshot();
     assert.equal(snapshot.events[0]!.status, "announced");
-    assert.equal(snapshot.events[0]!.time, "2026-10-02T00:00:00Z");
+    assert.deepEqual(snapshot.events[0]!.time, bt("2026-10-02T00:00:00Z"));
     assert.equal(snapshot.events[0]!.summary, null);
     assert.notEqual(snapshot.events[0]!.title.zh, "人工标题");
   }));
@@ -224,7 +226,7 @@ test("compatible event types can be previewed and changed without rewriting thei
     assert.equal(preview.before.status, "completed");
     assert.equal(preview.after.type, "bonus_credit");
     assert.equal(preview.after.status, "completed");
-    assert.equal(preview.after.time, preview.before.time);
+    assert.deepEqual(preview.after.time, preview.before.time);
     assert.equal((await loadActionInput()).events[0]!.type, "direct_reset");
     await updateMonitorEvent("event", { ...edit, previewToken: preview.previewToken }, "reviewer");
     const after = await loadActionInput();
@@ -495,7 +497,7 @@ test("admin counts use valid relationships while translations withhold public up
   const second = (await listMonitorPosts({ q: "keep visible", filter: "failed" })).rows[0]!;
   assert.equal(second.id, "second"); assert.equal(second.actionCount, 1); assert.equal(second.reviewReason, "Keep visible review reason");
   const detail = (await monitorEventDetail("event"))!, raw = (await loadActionInput()).events[0]!;
-  assert.equal(detail.event!.status, "announced"); assert.equal(detail.event!.time, event.time);
+  assert.equal(detail.event!.status, "announced"); assert.deepEqual(detail.event!.time, event.time);
   assert.equal(detail.event!.withdrawn, false); assert.equal(detail.event!.version, rowVersion(raw));
   assert.equal(detail.event!.actionCount, 2); assert.equal(detail.event!.sourcePostCount, 2);
   assert.equal(detail.options.posts.find(post => post.id === "second")!.reviewReason, "Keep visible review reason");

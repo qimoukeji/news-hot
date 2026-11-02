@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import { stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { beforeEach, after, test } from "node:test";
@@ -12,7 +13,7 @@ import { inMonitor } from "../backend/context.ts";
 import { createMonitorEvent, listMonitorEntries } from "../backend/admin.ts";
 import { monitorEventDetail, previewMonitorEventReview, submitMonitorEventReview } from "../backend/manual-review.ts";
 import { publicV2Snapshot, properName } from "../backend/public-v2.ts";
-import { processPublicV2Pending } from "../backend/public-v2-generate.ts";
+import { translatePublicV2Pending as processPublicV2Pending } from "../backend/public-v2-generate.ts";
 import { sweepConfirmationResults } from "../backend/webhook-events.ts";
 import { createSubscription } from "../backend/webhooks.ts";
 import { webhookPayloadSchema } from "../webhooks.ts";
@@ -29,7 +30,7 @@ async function subscribe(platform: "codex" | "claude-code" | "grok") {
 }
 async function confirm(id: string) {
   const detail = (await monitorEventDetail(id))!;
-  const body = { version: detail.version, versions: detail.versions, actions: { create: [{ localKey: "confirmation", eventId: id, action: "confirm", title: properName("人工核实已生效"), summary: null, time: "2026-10-26T08:00:00Z" }] } };
+  const body = { version: detail.version, versions: detail.versions, actions: { create: [{ localKey: "confirmation", eventId: id, action: "confirm", title: properName("人工核实已生效"), summary: null, time: bt("2026-10-26T08:00:00Z") }] } };
   const preview = (await previewMonitorEventReview(id, body))!;
   assert.equal((await sql`SELECT id FROM monitor_webhook_notifications`).length, 0);
   await submitMonitorEventReview(id, { ...body, previewToken: preview.previewToken }, "test-admin");

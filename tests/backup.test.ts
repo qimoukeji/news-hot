@@ -6,7 +6,7 @@ import { tag } from "./setup.ts";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, beforeEach, test } from "node:test";
@@ -14,7 +14,7 @@ import { promisify } from "node:util";
 import sharp from "sharp";
 import { config } from "@aihot/backend/config";
 import { closeDb, sql } from "@aihot/backend/db";
-import { runBackup } from "@aihot/backend/operations/backup";
+import { packBackupFiles, runBackup } from "@aihot/backend/operations/backup";
 import { submitFeedback } from "@aihot/backend/operations/feedback";
 
 const run = promisify(execFile);
@@ -153,57 +153,42 @@ for (const dirs of [[], ["uploads", "feedback-screenshots"]]) {
   });
 }
 
-test("an unreadable upload directory cannot become a successful empty backup", async () => {
+test("a non-directory upload path cannot become a successful empty backup", async () => {
   assert.equal((await runBackup(NOW)).uploaded, true);
   const shipped = objects.size;
   const [last] = await sql`SELECT value FROM settings WHERE key = 'backup.last'`;
-  await symlink("uploads", path.join(config.dataDir, "uploads")); // ELOOP, without depending on root/permission behavior
-  await assert.rejects(runBackup(new Date("2026-11-01T04:01:00Z")), /ELOOP/);
+  await writeFile(path.join(config.dataDir, "uploads"), "not a directory");
+  await assert.rejects(runBackup(new Date("2026-11-01T04:01:00Z")), /backup uploads path is not a directory/);
   assert.equal(objects.size, shipped, "do not send an empty archive as a replacement for unreadable files");
   const [after] = await sql`SELECT value FROM settings WHERE key = 'backup.last'`;
   assert.deepEqual(after, last, "last successful backup remains accurate");
 });
 
-async function withPackingFailures(failures: number, action: (count: () => Promise<number>) => Promise<void>) {
-  const bin = path.join(config.dataDir, "test-bin");
-  await mkdir(bin);
-  const countFile = path.join(bin, "count");
-  const realTar = (await run("sh", ["-c", "command -v tar"])).stdout.trim();
-  assert.ok(path.isAbsolute(realTar));
-  // Only this process's command lookup changes: restoring and the successful attempts run the real tar.
-  await writeFile(path.join(bin, "tar"), `#!/bin/sh
-n=0
-if [ -f "$BACKUP_TEST_COUNT" ]; then n=$(cat "$BACKUP_TEST_COUNT"); fi
-n=$((n+1))
-printf '%s' "$n" > "$BACKUP_TEST_COUNT"
-if [ "$n" -le "$BACKUP_TEST_FAILURES" ]; then echo 'fictional packing failure' >&2; exit 2; fi
-exec "$BACKUP_TEST_TAR" "$@"
-`, { mode: 0o755 });
-  const replacement = { PATH: `${bin}:${process.env.PATH}`, BACKUP_TEST_COUNT: countFile, BACKUP_TEST_FAILURES: String(failures), BACKUP_TEST_TAR: realTar };
-  const previous = Object.fromEntries(Object.keys(replacement).map(key => [key, process.env[key]]));
-  Object.assign(process.env, replacement);
-  try { await action(async () => Number(await readFile(countFile, "utf8"))); }
-  finally {
-    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-  }
+function packingFailures(failures: number) {
+  let attempts = 0;
+  const pack: typeof packBackupFiles = async (...args) => {
+    attempts++;
+    if (attempts <= failures) throw Object.assign(new Error("Command failed: tar -czf archive"), { stderr: "fictional packing failure\n" });
+    // A successful retry still produces a real archive that the restore assertions unpack.
+    await packBackupFiles(...args);
+  };
+  return { pack, count: () => attempts };
 }
 
 test("packing retries once and a successful retry preserves the screenshot", async () => {
   await save("feedback-screenshots/retry.png");
-  await withPackingFailures(1, async count => {
-    assert.equal((await runBackup(NOW)).uploaded, true);
-    assert.equal(await count(), 2);
-  });
+  const packing = packingFailures(1);
+  assert.equal((await runBackup(NOW, packing.pack)).uploaded, true);
+  assert.equal(packing.count(), 2);
   const { data } = await extractSavedFiles();
   assert.deepEqual(await readFile(path.join(data, "feedback-screenshots/retry.png")), PNG);
 });
 
 test("persistent packing failure still sends the database and reports incomplete backup", async () => {
   await save("feedback-screenshots/failure.png");
-  await withPackingFailures(2, async count => {
-    await assert.rejects(runBackup(NOW), /database backed up, but the file archive failed: fictional packing failure/);
-    assert.equal(await count(), 2);
-  });
+  const packing = packingFailures(2);
+  await assert.rejects(runBackup(NOW, packing.pack), /database backed up, but the file archive failed: fictional packing failure/);
+  assert.equal(packing.count(), 2);
   assert.equal(objects.size, 3);
   assert.ok([...objects.keys()].every(key => key.endsWith(".dump")));
   const [row] = await sql`SELECT value FROM settings WHERE key = 'backup.last'`;

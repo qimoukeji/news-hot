@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { beforeEach, after, test } from "node:test";
@@ -31,7 +32,7 @@ for (const definition of definitions) test(`${definition.monitorId}: post creati
   const event = await createMonitorEvent({ type: "direct_reset", title: properName("Event for manual source") }, "test-admin");
   const detail = (await monitorEventDetail(event.id))!;
   const body = { version: detail.version, versions: detail.versions,
-    actions: { create: [{ localKey: "initial", eventId: event.id, action: "announce", title: properName("Explicit future announcement"), summary: null, time: "2099-01-01" }] },
+    actions: { create: [{ localKey: "initial", eventId: event.id, action: "announce", title: properName("Explicit future announcement"), summary: null, time: bt("2099-01-01") }] },
     sources: { add: [{ actionKey: "initial", postId: post.id }] } };
   const preview = (await previewMonitorEventReview(event.id, body))!;
   await submitMonitorEventReview(event.id, { ...body, previewToken: preview.previewToken }, "test-admin");

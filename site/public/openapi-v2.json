@@ -25,7 +25,7 @@
     "/api/v2/codex-resets": {
       "get": {
         "summary": "codex events with accepted actions and all source links",
-        "description": "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed saved plans, including announcement defaults to the Beijing publication date; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
+        "description": "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Each event has its own current overview. All business times are structured objects: instant {at}, date {date,timeZone}, range {from,through}, or deadline {at}. Instant timestamps use UTC and date precision is preserved. Publication timestamps remain ISO strings. Dates are never padded with an assumed clock time. Individual quota status remains subject to the account display.",
         "parameters": [
           {
             "name": "from",
@@ -99,7 +99,7 @@
     "/api/v2/claude-resets": {
       "get": {
         "summary": "claude events with accepted actions and all source links",
-        "description": "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed saved plans, including announcement defaults to the Beijing publication date; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
+        "description": "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Each event has its own current overview. All business times are structured objects: instant {at}, date {date,timeZone}, range {from,through}, or deadline {at}. Instant timestamps use UTC and date precision is preserved. Publication timestamps remain ISO strings. Dates are never padded with an assumed clock time. Individual quota status remains subject to the account display.",
         "parameters": [
           {
             "name": "from",
@@ -173,7 +173,7 @@
     "/api/v2/grok-resets": {
       "get": {
         "summary": "grok events with accepted actions and all source links",
-        "description": "All event types share announce, confirm, progress and amend actions. Updates include persisted confirmations with empty sources, labeled as inferred or manually verified in their titles/summaries. Other actions require at least one source. A minute task creates confirmations for elapsed saved plans, including announcement defaults to the Beijing publication date; dates wait for the end of the Beijing day and intervals for their end. Reads do not create actions. Later official evidence updates the same confirmation ID, sources, title, summary and actual time. No confirmation metadata or manual rejection flow is exposed. Each event counts once; dates and intervals do not form precise interval samples.",
+        "description": "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Each event has its own current overview. All business times are structured objects: instant {at}, date {date,timeZone}, range {from,through}, or deadline {at}. Instant timestamps use UTC and date precision is preserved. Publication timestamps remain ISO strings. Dates are never padded with an assumed clock time. Individual quota status remains subject to the account display.",
         "parameters": [
           {
             "name": "from",
@@ -441,19 +441,126 @@
                   ]
                 },
                 "time": {
-                  "anyOf": [
+                  "oneOf": [
                     {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "instant"
+                        },
+                        "at": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            {
+                              "pattern": "^(?!.*\\.\\d{10})"
+                            }
+                          ],
+                          "format": "date-time",
+                          "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "at"
+                      ],
+                      "additionalProperties": false
                     },
                     {
-                      "type": "string",
-                      "format": "date",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "date"
+                        },
+                        "date": {
+                          "type": "string",
+                          "format": "date",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                        },
+                        "timeZone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "date",
+                        "timeZone"
+                      ],
+                      "additionalProperties": false
                     },
                     {
-                      "type": "string"
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "range"
+                        },
+                        "from": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            {
+                              "pattern": "^(?!.*\\.\\d{10})"
+                            }
+                          ],
+                          "format": "date-time",
+                          "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                        },
+                        "through": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            {
+                              "pattern": "^(?!.*\\.\\d{10})"
+                            }
+                          ],
+                          "format": "date-time",
+                          "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "from",
+                        "through"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "const": "deadline"
+                        },
+                        "at": {
+                          "type": "string",
+                          "allOf": [
+                            {
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            },
+                            {
+                              "pattern": "^(?!.*\\.\\d{10})"
+                            }
+                          ],
+                          "format": "date-time",
+                          "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "at"
+                      ],
+                      "additionalProperties": false
                     }
                   ]
                 },
@@ -474,24 +581,6 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                          },
-                          "time": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "format": "date-time",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                              },
-                              {
-                                "type": "string",
-                                "format": "date",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
-                              },
-                              {
-                                "type": "string"
-                              }
-                            ],
-                            "description": "Saved action time. When unresolved, announce defaults to the earliest source's Beijing calendar date and completes only after that day ends; other actions default to source publication time."
                           },
                           "title": {
                             "type": "object",
@@ -600,6 +689,130 @@
                               }
                             ]
                           },
+                          "time": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "instant"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "date"
+                                  },
+                                  "date": {
+                                    "type": "string",
+                                    "format": "date",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                                  },
+                                  "timeZone": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "\\S"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "date",
+                                  "timeZone"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "range"
+                                  },
+                                  "from": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  },
+                                  "through": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "from",
+                                  "through"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "deadline"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
                           "action": {
                             "type": "string",
                             "const": "confirm"
@@ -641,9 +854,9 @@
                         "required": [
                           "id",
                           "publishedAt",
-                          "time",
                           "title",
                           "summary",
+                          "time",
                           "action",
                           "invalidatesEvent",
                           "sources"
@@ -662,24 +875,6 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                          },
-                          "time": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "format": "date-time",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                              },
-                              {
-                                "type": "string",
-                                "format": "date",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
-                              },
-                              {
-                                "type": "string"
-                              }
-                            ],
-                            "description": "Saved action time. When unresolved, announce defaults to the earliest source's Beijing calendar date and completes only after that day ends; other actions default to source publication time."
                           },
                           "title": {
                             "type": "object",
@@ -785,6 +980,130 @@
                               },
                               {
                                 "type": "null"
+                              }
+                            ]
+                          },
+                          "time": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "instant"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "date"
+                                  },
+                                  "date": {
+                                    "type": "string",
+                                    "format": "date",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                                  },
+                                  "timeZone": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "\\S"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "date",
+                                  "timeZone"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "range"
+                                  },
+                                  "from": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  },
+                                  "through": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "from",
+                                  "through"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "deadline"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "at"
+                                ],
+                                "additionalProperties": false
                               }
                             ]
                           },
@@ -833,9 +1152,9 @@
                         "required": [
                           "id",
                           "publishedAt",
-                          "time",
                           "title",
                           "summary",
+                          "time",
                           "action",
                           "invalidatesEvent",
                           "sources"
@@ -854,24 +1173,6 @@
                             "type": "string",
                             "format": "date-time",
                             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                          },
-                          "time": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "format": "date-time",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                              },
-                              {
-                                "type": "string",
-                                "format": "date",
-                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
-                              },
-                              {
-                                "type": "string"
-                              }
-                            ],
-                            "description": "Saved action time. When unresolved, announce defaults to the earliest source's Beijing calendar date and completes only after that day ends; other actions default to source publication time."
                           },
                           "title": {
                             "type": "object",
@@ -980,6 +1281,130 @@
                               }
                             ]
                           },
+                          "time": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "instant"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "date"
+                                  },
+                                  "date": {
+                                    "type": "string",
+                                    "format": "date",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                                  },
+                                  "timeZone": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "\\S"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "date",
+                                  "timeZone"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "range"
+                                  },
+                                  "from": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  },
+                                  "through": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "from",
+                                  "through"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "deadline"
+                                  },
+                                  "at": {
+                                    "type": "string",
+                                    "allOf": [
+                                      {
+                                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                      },
+                                      {
+                                        "pattern": "^(?!.*\\.\\d{10})"
+                                      }
+                                    ],
+                                    "format": "date-time",
+                                    "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
                           "action": {
                             "type": "string",
                             "const": "amend"
@@ -1021,9 +1446,9 @@
                         "required": [
                           "id",
                           "publishedAt",
-                          "time",
                           "title",
                           "summary",
+                          "time",
                           "action",
                           "invalidatesEvent",
                           "sources"
@@ -1615,19 +2040,126 @@
                 "predictedResetTime": {
                   "anyOf": [
                     {
-                      "anyOf": [
+                      "oneOf": [
                         {
-                          "type": "string",
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "instant"
+                            },
+                            "at": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "at"
+                          ],
+                          "additionalProperties": false
                         },
                         {
-                          "type": "string",
-                          "format": "date",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "date"
+                            },
+                            "date": {
+                              "type": "string",
+                              "format": "date",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                            },
+                            "timeZone": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "date",
+                            "timeZone"
+                          ],
+                          "additionalProperties": false
                         },
                         {
-                          "type": "string"
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "range"
+                            },
+                            "from": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            },
+                            "through": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "from",
+                            "through"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "deadline"
+                            },
+                            "at": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "at"
+                          ],
+                          "additionalProperties": false
                         }
                       ]
                     },
@@ -1639,19 +2171,126 @@
                 "announcedResetTime": {
                   "anyOf": [
                     {
-                      "anyOf": [
+                      "oneOf": [
                         {
-                          "type": "string",
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "instant"
+                            },
+                            "at": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "at"
+                          ],
+                          "additionalProperties": false
                         },
                         {
-                          "type": "string",
-                          "format": "date",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "date"
+                            },
+                            "date": {
+                              "type": "string",
+                              "format": "date",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                            },
+                            "timeZone": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "date",
+                            "timeZone"
+                          ],
+                          "additionalProperties": false
                         },
                         {
-                          "type": "string"
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "range"
+                            },
+                            "from": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            },
+                            "through": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "from",
+                            "through"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "deadline"
+                            },
+                            "at": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "at"
+                          ],
+                          "additionalProperties": false
                         }
                       ]
                     },
@@ -1663,19 +2302,126 @@
                 "resetTime": {
                   "anyOf": [
                     {
-                      "anyOf": [
+                      "oneOf": [
                         {
-                          "type": "string",
-                          "format": "date-time",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "instant"
+                            },
+                            "at": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "at"
+                          ],
+                          "additionalProperties": false
                         },
                         {
-                          "type": "string",
-                          "format": "date",
-                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "date"
+                            },
+                            "date": {
+                              "type": "string",
+                              "format": "date",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                            },
+                            "timeZone": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "date",
+                            "timeZone"
+                          ],
+                          "additionalProperties": false
                         },
                         {
-                          "type": "string"
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "range"
+                            },
+                            "from": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            },
+                            "through": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "from",
+                            "through"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "deadline"
+                            },
+                            "at": {
+                              "type": "string",
+                              "allOf": [
+                                {
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                },
+                                {
+                                  "pattern": "^(?!.*\\.\\d{10})"
+                                }
+                              ],
+                              "format": "date-time",
+                              "description": "Offset timestamp with at most nine fractional-second digits; public instants are normalized to UTC."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "at"
+                          ],
+                          "additionalProperties": false
                         }
                       ]
                     },

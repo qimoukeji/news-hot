@@ -1,3 +1,4 @@
+import { bt } from "./business-time-fixture.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { closeDb } from "@aihot/backend/db";
@@ -52,7 +53,7 @@ test("new source and relevant fact changes invalidate a reviewed fingerprint, un
   assert.notEqual(threadRepairPlan(changed, options).fingerprint, original);
   const unrelated = fixture(); unrelated.posts[1]!.updated_at = "2026-10-29T02:00:00Z";
   assert.equal(threadRepairPlan(unrelated, options).fingerprint, original);
-  const action = fixture(); action.actions[0]!.time = "2026-10-28";
+  const action = fixture(); action.actions[0]!.time = bt("2026-10-28");
   assert.notEqual(threadRepairPlan(action, options).fingerprint, original);
 });
 test("an unconfigured author cannot be restored as an official target", () => {

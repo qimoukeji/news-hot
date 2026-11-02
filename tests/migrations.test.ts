@@ -24,6 +24,52 @@ function fixture(files: Record<string, string>) {
   return root;
 }
 
+test("module migration checks run before the batch and again under the exact table lock", async () => {
+  await db`CREATE TABLE migration_checked_drop (id integer, obsolete text)`;
+  const name = "9080_module_checked_drop.sql";
+  const root = fixture({ [`database/migrations/${name}`]: "ALTER TABLE migration_checked_drop DROP COLUMN IF EXISTS obsolete;" });
+  const locks: boolean[] = [];
+  const checks = [{ migration: name, verify: async (connection: Pick<postgres.Sql, "unsafe">) => {
+    const [row] = await connection.unsafe<{ locked: boolean }[]>("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND relation='migration_checked_drop'::regclass AND mode='AccessExclusiveLock' AND granted) AS locked");
+    locks.push(row!.locked);
+  } }];
+  assert.equal(await runMigrations(db, root, { checks }), 1);
+  assert.deepEqual(locks, [false, true]);
+  assert.equal((await db`SELECT 1 FROM pg_attribute WHERE attrelid='migration_checked_drop'::regclass AND attname='obsolete' AND NOT attisdropped`).length, 0);
+});
+
+test("a failed module preflight leaves the entire pending batch and its data unchanged", async () => {
+  await db`CREATE TABLE migration_checked_preflight (obsolete text)`;
+  await db`INSERT INTO migration_checked_preflight VALUES ('keep')`;
+  const name = "9082_module_preflight_drop.sql";
+  const root = fixture({
+    "database/migrations/9081_module_before_drop.sql": "CREATE TABLE migration_checked_untouched (id integer);",
+    [`database/migrations/${name}`]: "ALTER TABLE migration_checked_preflight DROP COLUMN IF EXISTS obsolete;",
+  });
+  await assert.rejects(runMigrations(db, root, { checks: [{ migration: name, verify: async () => { throw new Error("conversion incomplete"); } }] }), /preflight failed: conversion incomplete/);
+  assert.equal((await db`SELECT to_regclass('migration_checked_untouched') AS name`)[0].name, null);
+  assert.deepEqual([...await db`SELECT obsolete FROM migration_checked_preflight`], [{ obsolete: "keep" }]);
+  assert.equal((await db`SELECT 1 FROM schema_migrations WHERE name IN ('9081_module_before_drop.sql','9082_module_preflight_drop.sql')`).length, 0);
+});
+
+test("a module check that fails after acquiring its lock rolls back DDL and bookkeeping", async () => {
+  await db`CREATE TABLE migration_checked_execution (obsolete text)`;
+  await db`INSERT INTO migration_checked_execution VALUES ('keep')`;
+  const name = "9083_module_execution_drop.sql";
+  const root = fixture({ [`database/migrations/${name}`]: "ALTER TABLE migration_checked_execution DROP COLUMN IF EXISTS obsolete;" });
+  let calls = 0;
+  const checks = [{ migration: name, verify: async (connection: Pick<postgres.Sql, "unsafe">) => {
+    if (++calls === 1) return;
+    const [row] = await connection.unsafe<{ locked: boolean }[]>("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND relation='migration_checked_execution'::regclass AND mode='AccessExclusiveLock' AND granted) AS locked");
+    assert.equal(row!.locked, true);
+    throw new Error("conversion changed before execution");
+  } }];
+  await assert.rejects(runMigrations(db, root, { checks }), /migration 9083_module_execution_drop.sql failed.*conversion changed before execution/s);
+  assert.equal(calls, 2);
+  assert.deepEqual([...await db`SELECT obsolete FROM migration_checked_execution`], [{ obsolete: "keep" }]);
+  assert.equal((await db`SELECT 1 FROM schema_migrations WHERE name=${name}`).length, 0);
+});
+
 test("fresh installations contain current monitor tables without retired tables", async () => {
   for (const name of ["monitor_event_posts", "monitor_posts", "monitor_events"]) {
     assert.equal((await db`SELECT to_regclass(${name}) AS name`)[0].name, null, name);
@@ -31,6 +77,41 @@ test("fresh installations contain current monitor tables without retired tables"
   for (const name of ["monitor_source_posts", "monitor_event_records", "monitor_event_actions"]) {
     assert.equal((await db`SELECT to_regclass(${name})::text AS name`)[0].name, name);
   }
+  const columns = await db`SELECT attname,atttypid::regtype::text AS type FROM pg_attribute
+    WHERE attrelid='monitor_event_actions'::regclass AND attnum>0 AND NOT attisdropped AND attname IN ('time','business_time')`;
+  assert.deepEqual([...columns], [{ attname: "time", type: "jsonb" }]);
+});
+
+test("a filename cutoff stops before a rename and the remaining metadata migration resumes", async () => {
+  const root = fixture({
+    "database/migrations/9070_cutoff_prepare.sql": "CREATE TABLE migration_time_cutoff (business_time jsonb);",
+    "database/migrations/9071_cutoff_rename.sql": "ALTER TABLE migration_time_cutoff RENAME COLUMN business_time TO time;",
+  });
+  await assert.rejects(runMigrations(db, root, { through: "9070_missing.sql" }), /unknown migration cutoff/);
+  assert.equal((await db`SELECT to_regclass('migration_time_cutoff') AS name`)[0].name, null);
+  assert.equal(await runMigrations(db, root, { through: "9070_cutoff_prepare.sql" }), 1);
+  await db`INSERT INTO migration_time_cutoff(business_time) VALUES ('{"kind":"date","date":"2026-11-02","timeZone":"Asia/Shanghai"}')`;
+  assert.equal((await db`SELECT 1 FROM schema_migrations WHERE name='9071_cutoff_rename.sql'`).length, 0);
+  assert.equal(await runMigrations(db, root), 1);
+  assert.equal((await db`SELECT time->>'kind' AS kind FROM migration_time_cutoff`)[0].kind, "date");
+  assert.equal(await runMigrations(db, root), 0);
+});
+
+test("column renaming uses bounded metadata locks and never records a blocked rename", async () => {
+  await db`CREATE TABLE migration_rename_locked (business_time jsonb)`;
+  const root = fixture({ "database/migrations/9072_locked_rename.sql": "ALTER TABLE migration_rename_locked RENAME COLUMN business_time TO time;" });
+  let release!: () => void, acquired!: () => void;
+  const ready = new Promise<void>(resolve => { acquired = resolve; });
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const blocker = other.begin(async tx => { await tx`LOCK TABLE migration_rename_locked IN ACCESS SHARE MODE`; acquired(); await hold; });
+  await ready;
+  const start = Date.now();
+  try {
+    await assert.rejects(runMigrations(db, root), /9072_locked_rename.*lock timeout/s);
+    assert.ok(Date.now() - start < 5000, "rename waits use the short metadata lock budget");
+    assert.equal((await db`SELECT 1 FROM schema_migrations WHERE name='9072_locked_rename.sql'`).length, 0);
+  } finally { release(); await blocker; }
+  assert.equal(await runMigrations(db, root), 1);
 });
 
 test("retired table cleanup preserves current records and audit and resumes idempotently", async () => {

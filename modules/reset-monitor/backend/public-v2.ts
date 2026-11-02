@@ -4,7 +4,11 @@ import { beijingDate, addDays } from "@aihot/contracts/time";
 import { monitor, type ResetMonitorBackendDefinition } from "./context.ts";
 import {
   resetSnapshotSchema,
-  eventUpdateSchema,
+  rawResetSnapshotSchema,
+  rawEventUpdateSchema,
+  businessTimeBoundary,
+  compareBusinessTime,
+  normalizePublicTime,
   type ResetSnapshot,
   type ResetEvent,
   type EventTime,
@@ -22,6 +26,8 @@ import {
 } from "../actions.ts";
 import { loadActionInput } from "./action-store.ts";
 import { completeStandardScopeLabel, defaultScopeLabel, scopeReadyForPublication } from "./scope-labels.ts";
+import { editorialReady } from "./event-editorial.ts";
+import { accountStatusSummary, quotaStatusTitle, cleanEventText } from "../public-text.ts";
 export type PublicV2Input = ActionInput;
 export type PublicV2EventRow = EventRow;
 export type PublicV2PostRow = SourcePostRow;
@@ -197,28 +203,14 @@ export function publicV2ActionTitle(
   ) as ResetEvent["title"];
 }
 
-export function timeBoundary(time: EventTime | PublicTime): string | null {
-  if (typeof time === "string")
-    return /^\d{4}-\d{2}-\d{2}$/.test(time)
-      ? `${time}T00:00:00Z`
-      : time.split("/")[0]!;
-  if (time.kind === "unknown") return null;
-  if (time.kind === "date")
-    return Temporal.PlainDate.from(time.date)
-      .toZonedDateTime(time.timeZone)
-      .toInstant()
-      .toString();
-  return time.kind === "range" ? time.from : time.at;
+export function timeBoundary(time: EventTime): string | null {
+  return time.kind === "unknown" ? null : businessTimeBoundary(time);
 }
 function exactTime(event: { time: PublicTime }): number | null {
-  return /^\d{4}-\d{2}-\d{2}T/.test(event.time) && !event.time.includes("/")
-    ? Date.parse(event.time)
-    : null;
+  return event.time.kind === "instant" ? Date.parse(event.time.at) : null;
 }
-function eventDate(event: { time: PublicTime }): string | null {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(event.time)) return event.time;
-  const at = timeBoundary(event.time);
-  return at ? beijingDate(Date.parse(at)) : null;
+function eventDate(event: { time: PublicTime }): string {
+  return event.time.kind === "date" ? event.time.date : beijingDate(businessTimeBoundary(event.time));
 }
 function medianInterval(events: Array<{ time: PublicTime }>) {
   const times = events
@@ -245,10 +237,11 @@ function medianInterval(events: Array<{ time: PublicTime }>) {
 function predictedTime(time: PublicTime | null, interval: number | null, today: string): PublicTime | null {
   if (time === null || interval === null) return null;
   const milliseconds = Math.round(interval * 86_400_000);
-  const prediction = time.length === 10
-    ? Temporal.PlainDate.from(time).toPlainDateTime().add({ milliseconds }).toPlainDate().toString()
-    : time.split("/").map(at => new Date(Date.parse(at) + milliseconds).toISOString()).join("/");
-  return eventDate({ time: prediction })! < today ? today : prediction;
+  const shift = (at: string) => Temporal.Instant.from(at).add({ milliseconds }).toString();
+  const prediction: PublicTime = time.kind === "date"
+    ? { ...time, date: Temporal.PlainDate.from(time.date).toPlainDateTime().add({ milliseconds }).toPlainDate().toString() }
+    : time.kind === "range" ? { ...time, from: shift(time.from), through: shift(time.through) } : { ...time, at: shift(time.at) };
+  return eventDate({ time: prediction }) < today ? { kind: "date", date: today, timeZone: "Asia/Shanghai" } : prediction;
 }
 
 export function publicV2Sources(
@@ -263,7 +256,7 @@ export function publicV2Sources(
 }
 
 /** Every public outlet uses the same action reducer. Reads never invoke a model. */
-export function projectPublicV2(
+export function projectRawV2(
   input: ActionInput,
   definition: ResetMonitorBackendDefinition,
   now = Date.now(),
@@ -285,12 +278,12 @@ export function projectPublicV2(
       const scope = publicV2Scope(reduced.scope);
       facts.set(row.id, reduced);
       const updates = actions
-        .map(({ action, posts, publishedAt }) => eventUpdateSchema.parse({
+        .map(({ action, posts, publishedAt }) => rawEventUpdateSchema.parse({
           id: action.id,
           action: action.action,
           invalidatesEvent: action.invalidates_event,
           publishedAt,
-          time: action.time ?? defaultActionTime(action.action, publishedAt),
+          time: normalizePublicTime(action.time ?? defaultActionTime(action.action, publishedAt)),
           title: action.sources.length === 0 ? { ...publicV2ActionTitle(definition.product, row.type, action.action), ...action.title } : translated(action.title)
             ? action.title
             : publicV2ActionTitle(definition.product, row.type, action.action),
@@ -328,13 +321,13 @@ export function projectPublicV2(
     })
     .sort(
       (a, b) =>
-        Date.parse(timeBoundary(b.time)!) - Date.parse(timeBoundary(a.time)!) ||
+        compareBusinessTime(b.time, a.time) ||
         byId(a, b),
     );
   const completed = events.flatMap(event => {
     const time = facts.get(event.id)!.confirmedTime;
     return event.status === "completed" && time !== null ? [{ id: event.id, type: event.type, time }] : [];
-  }).sort((a, b) => Date.parse(timeBoundary(b.time)!) - Date.parse(timeBoundary(a.time)!) || byId(a, b));
+  }).sort((a, b) => compareBusinessTime(b.time, a.time) || byId(a, b));
   const resetTime = completed[0]?.time ?? null;
   const latest = events.find(event => event.status !== "cancelled");
   const today = beijingDate(now),
@@ -352,7 +345,7 @@ export function projectPublicV2(
       return at !== null && at >= now - 90 * 86_400_000 && at <= now;
     }),
   );
-  return resetSnapshotSchema.parse({
+  return rawResetSnapshotSchema.parse({
     schemaVersion: 2,
     platform: config.platform,
     generatedAt: new Date(now).toISOString(),
@@ -368,6 +361,32 @@ export function projectPublicV2(
       cardsLast30Days: count("reset_credit"),
       bonusesLast30Days: count("bonus_credit"),
     },
+  });
+}
+
+/** Clean public editorial text without changing business-time precision. */
+function publishEvent(event: ResetEvent, product: string): ResetEvent {
+  const cleaned = cleanEventText(event, publicV2Title(product, event.type, event.status), update => publicV2ActionTitle(product, event.type, update.action));
+  const unsourced = event.status === "completed" && event.updates.some(update => update.action === "confirm")
+    && !event.updates.some(update => update.action === "confirm" && update.sources.length > 0);
+  const title = !unsourced ? cleaned.title
+    : Object.fromEntries(languages.map(language => [language, `${product}: ${quotaStatusTitle[language]}`])) as ResetEvent["title"];
+  return { ...cleaned, title, summary: unsourced ? accountStatusSummary : cleaned.summary,
+    updates: cleaned.updates };
+}
+
+export function projectPublicV2(input: ActionInput, definition: ResetMonitorBackendDefinition, now = Date.now()): ResetSnapshot {
+  const snapshot = projectRawV2(input, definition, now);
+  return resetSnapshotSchema.parse({ ...snapshot,
+    announcedResetTime: snapshot.announcedResetTime,
+    events: snapshot.events.map(event => {
+      const row = input.events.find(row => row.id === event.id)!;
+      const ready = editorialReady(row, input);
+      return publishEvent({ ...event,
+        title: ready && translated(row.title) ? row.title : publicV2Title(definition.product, row.type, event.status),
+        summary: ready && translated(row.summary) ? row.summary : null,
+      }, definition.product);
+    }),
   });
 }
 

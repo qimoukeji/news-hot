@@ -52,3 +52,15 @@ test("a complete archive must restore its schema dependencies and temporary data
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("an explicit restore connection is honored and never falls back to the source server", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "monitor-backup-destination-"));
+  const file = path.join(dir, "complete.dump"), before = [...await verifierDatabases()];
+  try {
+    dump(file);
+    await assert.rejects(verifyActionBackup(file, "postgres://unreachable@127.0.0.1:1/postgres"), /ECONNREFUSED/);
+    assert.deepEqual([...await verifierDatabases()], before);
+    await verifyActionBackup(file, process.env.DATABASE_URL!);
+    assert.deepEqual([...await verifierDatabases()], before);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
