@@ -12,4 +12,3 @@ export function formatBusinessTime(value: BusinessTime | null | undefined, local
   }
   return instant(value.at);
 }
-

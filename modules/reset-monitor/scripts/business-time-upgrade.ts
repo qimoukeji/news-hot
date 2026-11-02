@@ -102,4 +102,3 @@ export async function verifyBusinessTimeUpgrade(db: Pick<postgres.Sql, "unsafe">
     if (state?.value.complete !== true || state.value.digest !== timeUpgradeDigest(rows)) throw new Error(`Monitor ${monitor} has no matching completed upgrade. ${guidance}`);
   }
 }
-
