@@ -191,13 +191,23 @@ for (const relation of ["reply", "quote"] as const) test(`pending numbered ${rel
   assert.equal(model.hits(), hits); assert.deepEqual((await loadActionInput()).actions, saved.actions);
 }));
 
-for (const mode of ["wrong-final-target", "review-final-round"] as const) test(`a dual-action source cannot bypass ${mode} protection`, async () => inMonitor(codex, async () => {
+function assertIndependentReview(before: ActionInput, after: ActionInput, postId: string, kinds: string[]) {
+  const known = new Set(before.events.map(event => event.id));
+  assert.deepEqual(after.events.filter(event => known.has(event.id)), [...before.events]);
+  assert.deepEqual(after.actions.filter(action => known.has(action.event_id)), [...before.actions]);
+  const saved = after.actions.filter(action => !known.has(action.event_id));
+  assert.deepEqual(saved.map(action => action.action).sort(), [...kinds].sort());
+  assert.equal(new Set(saved.map(action => action.event_id)).size, kinds.length);
+  assert.ok(saved.every(action => action.sources.length === 1 && action.sources[0]!.postId === postId));
+  assert.equal(after.posts.find(post => post.id === postId)!.processing_status, "needs_attention");
+}
+
+for (const mode of ["wrong-final-target", "review-final-round"] as const) test(`a ${mode} response preserves the confirmation independently of both existing rounds`, async () => inMonitor(codex, async () => {
   await acceptOriginal(); await seed([firstRound]); await processPending();
   const before = await loadActionInput(); answerMode = mode;
   await seed([secondRound], "reply"); await processPending();
   const after = await loadActionInput();
-  assert.deepEqual(after.events, before.events); assert.deepEqual(after.actions, before.actions);
-  assert.equal((await sourcePost(secondRound.id))!.processing_status, "needs_attention");
+  assertIndependentReview(before, after, secondRound.id, ["confirm"]);
 }));
 
 test("two pending rounds attached to the same numbered source remain genuinely ambiguous", async () => inMonitor(codex, async () => {
@@ -208,8 +218,7 @@ test("two pending rounds attached to the same numbered source remain genuinely a
   const before = await loadActionInput();
   await seed([secondRound], "quote"); await processPending();
   const after = await loadActionInput();
-  assert.deepEqual(after.events, before.events); assert.deepEqual(after.actions, before.actions);
-  assert.equal((await sourcePost(secondRound.id))!.processing_status, "needs_attention");
+  assertIndependentReview(before, after, secondRound.id, ["confirm"]);
 }));
 
 test("a remaining round does not borrow the previous round's audience, schedule or author default product", async () => inMonitor({
@@ -245,19 +254,17 @@ test("competing same-author campaigns keep numbered banked updates under review 
   assert.equal(model.hits(), hits);
 }));
 
-test("a reviewed first-round confirmation cannot independently create the remaining round", async () => inMonitor(codex, async () => {
+test("a reviewed first-round result retains both proposed actions without changing the known campaign", async () => inMonitor(codex, async () => {
   await acceptOriginal();
   const initial = await loadActionInput();
   answerMode = "review-first-round";
   await seed([firstRound]);
   await processPending();
   const saved = await loadActionInput();
-  assert.deepEqual(saved.events, initial.events);
-  assert.deepEqual(saved.actions, initial.actions);
-  assert.equal((await sourcePost(firstRound.id))!.processing_status, "needs_attention");
+  assertIndependentReview(initial, saved, firstRound.id, ["confirm", "announce"]);
 }));
 
-for (const target of ["nonexistent", "withdrawn"] as const) test(`a ${target} first-round target cannot create an orphaned second round`, async () => inMonitor(codex, async () => {
+for (const target of ["nonexistent", "withdrawn"] as const) test(`a ${target} first-round target does not prevent saving both actions separately for correction`, async () => inMonitor(codex, async () => {
   const first = await acceptOriginal();
   forcedFirstEventId = target === "nonexistent" ? "missing-campaign-event" : first.event.id;
   if (target === "withdrawn") await sql`UPDATE monitor_event_records SET withdrawn=true,updated_at=clock_timestamp() WHERE monitor_id='codex' AND id=${first.event.id}`;
@@ -265,12 +272,10 @@ for (const target of ["nonexistent", "withdrawn"] as const) test(`a ${target} fi
   await seed([firstRound]);
   await processPending();
   const saved = await loadActionInput();
-  assert.deepEqual(saved.events, initial.events);
-  assert.deepEqual(saved.actions, initial.actions);
-  assert.equal((await sourcePost(firstRound.id))!.processing_status, "needs_attention");
+  assertIndependentReview(initial, saved, firstRound.id, ["confirm", "announce"]);
 }));
 
-test("a completed final round rejects an extra announcement while retaining its supported confirmation", async () => inMonitor(codex, async () => {
+test("a completed final round retains an extra model announcement separately for review", async () => inMonitor(codex, async () => {
   await acceptOriginal();
   await seed([firstRound]);
   await processPending();
@@ -280,12 +285,13 @@ test("a completed final round rejects an extra announcement while retaining its 
   await seed([secondRound]);
   await processPending();
   const saved = await loadActionInput();
-  assert.equal(saved.events.length, 2, "Banked 2/2 cannot announce a third round");
-  assert.equal(saved.actions.length, 4);
-  assert.equal(saved.actions.filter(action => action.action === "announce").length, 2);
-  assert.deepEqual(saved.actions.filter(action => action.sources.some(source => source.postId === secondRound.id)).map(action => ({ action: action.action, event: action.event_id })), [
-    { action: "confirm", event: second.id },
-  ]);
+  assert.equal(saved.events.length, 3); assert.equal(saved.actions.length, 5);
+  const fromFinal = saved.actions.filter(action => action.sources.some(source => source.postId === secondRound.id));
+  assert.deepEqual(fromFinal.map(action => action.action).sort(), ["announce", "confirm"]);
+  assert.equal(fromFinal.find(action => action.action === "confirm")!.event_id, second.id);
+  const extra = fromFinal.find(action => action.action === "announce")!;
+  assert.equal(extra.time, null);
+  assert.ok(!before.events.some(event => event.id === extra.event_id));
   assert.equal(reduceEvent(saved.events.find(event => event.id === second.id)!, saved)!.status, "completed");
   assert.equal((await sourcePost(secondRound.id))!.processing_status, "needs_attention", "the unsupported proposal remains visible for review");
 }));

@@ -30,6 +30,127 @@ async function review(commands: Record<string, unknown>, origin: "post" | "event
   await (origin === "post" ? submitMonitorReview("review", { ...body, previewToken: preview.previewToken }, "reviewer") : submitMonitorEventReview("event", { ...body, previewToken: preview.previewToken }, "reviewer"));
   return preview;
 }
+
+for (const action of ["progress", "amend"] as const) test(`correcting the only confirmation to ${action} keeps the event public and preserves its identity`, async () => inMonitor(codex, async () => {
+  await seed();
+  await sql`UPDATE monitor_source_posts SET processing_status='needs_attention',review_reason='动作需要修订' WHERE id='first'`;
+  const before = await loadActionInput(), original = before.actions[0]!;
+  const preview = await review({ actions: { update: [{ id: original.id, ...fields(action) }] } }, "event");
+  assert.equal(preview.changes[0]!.before!.status, "completed");
+  assert.equal(preview.changes[0]!.after!.status, "in_progress");
+  const after = await loadActionInput();
+  assert.equal(after.actions.length, 1); assert.equal(after.actions[0]!.id, original.id);
+  assert.deepEqual(after.actions[0]!.sources, original.sources);
+  assert.deepEqual(after.posts, before.posts);
+  assert.ok(after.standaloneFollowupIds!.has(original.id));
+  const snapshot = await publicV2Snapshot();
+  assert.equal(snapshot.events.length, 1); assert.equal(snapshot.events[0]!.status, "in_progress");
+  assert.equal(snapshot.events[0]!.updates[0]!.id, original.id);
+  await review({ sources: { remove: [{ actionId: original.id, postId: "first" }] } }, "event");
+  assert.equal((await loadActionInput()).standaloneFollowupIds!.has(original.id), false);
+  assert.equal((await publicV2Snapshot()).events.length, 0);
+}));
+
+async function targetEvent(type: "direct_reset" | "bonus_credit" = "direct_reset") {
+  await addPost("target", "2026-10-03T12:00:00Z");
+  await sql.begin(async db => writePostActions(db, (await sourcePost("target", db))!, [
+    { eventId: "target-event", ...fields("announce"), time: bt("2026-10-05") },
+    { eventId: "target-event", ...fields("progress") },
+  ], { events: [{ id: "target-event", type, title: properName("Target event") }] }));
+}
+
+test("moving an action previews both events and preserves the action, sources and receipt associations", async () => inMonitor(codex, async () => {
+  await seed(); await targetEvent();
+  const before = await loadActionInput(), original = before.actions.find(action => action.event_id === "event")!;
+  const target = before.actions.filter(action => action.event_id === "target-event");
+  const preview = await review({ actions: { update: [{ id: original.id, eventId: "target-event", ...fields("confirm", "Moved confirmation"), time: original.time }] } }, "event");
+  assert.equal(preview.changes.length, 2);
+  assert.equal(preview.changes.find(change => change.eventId === "event")!.after!.status, null);
+  assert.equal(preview.changes.find(change => change.eventId === "target-event")!.after!.status, "completed");
+  assert.equal(preview.actionChanges.length, 1); assert.equal(preview.sourceChanges.length, 0);
+  assert.equal(preview.actionChanges[0]!.before!.event_id, "event");
+  assert.equal(preview.actionChanges[0]!.after!.event_id, "target-event");
+  const after = await loadActionInput(), moved = after.actions.find(action => action.id === original.id)!;
+  assert.equal(moved.event_id, "target-event"); assert.equal(moved.sequence, 3);
+  assert.deepEqual(moved.created_at, original.created_at); assert.deepEqual(moved.sources, original.sources);
+  assert.deepEqual(after.posts, before.posts);
+  assert.deepEqual(after.actions.filter(action => target.some(prior => prior.id === action.id)), target);
+  assert.equal(after.events.length, 2);
+  const snapshot = await publicV2Snapshot();
+  assert.equal(snapshot.events.length, 1); assert.equal(snapshot.events[0]!.id, "target-event");
+  assert.ok(snapshot.events[0]!.updates.some(action => action.id === original.id));
+  const audits = JSON.stringify(await sql`SELECT before,after FROM audit_log`);
+  assert.ok(audits.includes('"event_id":"event"')); assert.ok(audits.includes('"event_id":"target-event"'));
+}));
+
+test("moving and correcting an action to an independent progress keeps the target publicly visible", async () => inMonitor(codex, async () => {
+  await seed();
+  await sql`INSERT INTO monitor_event_records(monitor_id,id,type,created_at) VALUES('codex','empty','direct_reset','2026-10-01T12:00:00Z')`;
+  const original = (await loadActionInput()).actions[0]!;
+  const preview = await review({ actions: { update: [{ id: original.id, eventId: "empty", ...fields("progress") }] } }, "event");
+  assert.equal(preview.changes.find(change => change.eventId === "empty")!.after!.status, "in_progress");
+  const after = await loadActionInput();
+  assert.equal(after.actions[0]!.id, original.id); assert.equal(after.actions[0]!.event_id, "empty");
+  assert.equal((await publicV2Snapshot()).events[0]!.status, "in_progress");
+}));
+
+test("moving an initial action keeps remaining sourced progress visible on the original event", async () => inMonitor(codex, async () => {
+  await seed(); await targetEvent();
+  await review({ actions: { create: [{ localKey: "remaining", eventId: "event", ...fields("progress") }] },
+    sources: { add: [{ actionKey: "remaining", postId: "review" }] } }, "event");
+  const before = await loadActionInput(), original = before.actions.find(action => action.event_id === "event" && action.action === "confirm")!;
+  const remaining = before.actions.find(action => action.event_id === "event" && action.action === "progress")!;
+  const preview = await review({ actions: { update: [{ id: original.id, eventId: "target-event", ...fields("confirm"), time: original.time }] } }, "event");
+  assert.equal(preview.changes.find(change => change.eventId === "event")!.after!.status, "in_progress");
+  const after = await loadActionInput();
+  assert.deepEqual(after.actions.find(action => action.id === remaining.id), remaining);
+  assert.ok(after.standaloneFollowupIds!.has(remaining.id));
+  assert.equal((await publicV2Snapshot()).events.length, 2);
+}));
+
+test("moving actions rejects missing, withdrawn or different-kind target events", async () => inMonitor(codex, async () => {
+  await seed(); await targetEvent("bonus_credit");
+  const original = (await loadActionInput()).actions.find(action => action.event_id === "event")!;
+  for (const [target, expected] of [["missing", /不存在于当前监控/], ["target-event", /同类型/]] as const) {
+    const detail = (await monitorEventDetail("event"))!;
+    await assert.rejects(previewMonitorEventReview("event", { version: detail.version, versions: detail.versions,
+      actions: { update: [{ id: original.id, eventId: target, ...fields("confirm") }] } }), expected);
+  }
+  await sql`UPDATE monitor_event_records SET type='direct_reset',withdrawn=true WHERE id='target-event'`;
+  const detail = (await monitorEventDetail("event"))!;
+  await assert.rejects(previewMonitorEventReview("event", { version: detail.version, versions: detail.versions,
+    actions: { update: [{ id: original.id, eventId: "target-event", ...fields("confirm") }] } }), /已撤回/);
+  assert.equal((await loadActionInput()).actions.find(action => action.id === original.id)!.event_id, "event");
+}));
+
+test("a move refuses stale target facts and never applies an obsolete preview", async () => inMonitor(codex, async () => {
+  await seed(); await targetEvent();
+  const detail = (await monitorEventDetail("event"))!, original = detail.actions[0]!;
+  const body = { version: detail.version, versions: detail.versions,
+    actions: { update: [{ id: original.id, eventId: "target-event", ...fields("confirm") }] } };
+  const preview = (await previewMonitorEventReview("event", body))!;
+  await sql`UPDATE monitor_event_actions SET title=${sql.json(properName("Concurrent correction"))} WHERE event_id='target-event' AND action='progress'`;
+  await assert.rejects(submitMonitorEventReview("event", { ...body, previewToken: preview.previewToken }, "reviewer"), /已变化/);
+  assert.equal((await loadActionInput()).actions.find(action => action.id === original.id)!.event_id, "event");
+}));
+test("simultaneous moves append actions without sequence collisions or changing untouched facts", async () => inMonitor(codex, async () => {
+  await seed(); await targetEvent();
+  const before = await loadActionInput(), confirmation = before.actions.find(action => action.event_id === "event")!;
+  const plan = before.actions.find(action => action.event_id === "target-event" && action.action === "announce")!;
+  const progress = before.actions.find(action => action.event_id === "target-event" && action.action === "progress")!;
+  await review({ actions: { update: [
+    { id: confirmation.id, eventId: "target-event", ...fields("confirm"), time: confirmation.time },
+    { id: plan.id, eventId: "event", ...fields("announce"), time: plan.time },
+  ] } }, "event");
+  const after = await loadActionInput();
+  assert.equal(after.actions.length, before.actions.length);
+  assert.equal(after.actions.find(action => action.id === confirmation.id)!.sequence, 3);
+  assert.equal(after.actions.find(action => action.id === plan.id)!.sequence, 1);
+  assert.deepEqual(after.actions.find(action => action.id === progress.id), progress);
+  assert.equal(reduceEvent(after.events.find(event => event.id === "event")!, after)!.status, "announced");
+  assert.equal(reduceEvent(after.events.find(event => event.id === "target-event")!, after)!.status, "completed");
+}));
+
 test("post editorial updates do not manufacture event bindings and audits omit original text", async () => inMonitor(codex, async () => {
   await seed(); const detail = (await monitorPostDetail("review"))!;
   assert.equal(detail.post!.text, "Private body review"); assert.equal(detail.post!.quotedPost!.text, "Private quote");

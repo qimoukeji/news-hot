@@ -71,7 +71,7 @@ export interface TimeResolution {
 }
 
 type SourceTimeContext = {
-  activityAnchor: string; postText: string; activityText: string; deadline: boolean; past?: boolean;
+  activityAnchor: string; postText: string; activityText: string; deadline: boolean; past?: boolean; sameYear?: boolean;
 };
 type ResolvedTime = Omit<TimeResolution, "field" | "postId" | "excerpt">;
 
@@ -90,8 +90,10 @@ function resolveSingleSourceTime(expression: string, context: SourceTimeContext)
     const day = Number(iso?.[3] ?? named![2]);
     let year = explicitYear ? Number(explicitYear) : anchor.year;
     // Select the next matching calendar date from the original activity, never from now or a reminder.
-    if (!explicitYear && context.past && (month > anchor.month || month === anchor.month && day > anchor.day)) year--;
-    else if (!explicitYear && !context.past && (month < anchor.month || month === anchor.month && day < anchor.day)) year++;
+    if (!explicitYear && !context.sameYear) {
+      if (context.past && (month > anchor.month || month === anchor.month && day > anchor.day)) year--;
+      else if (!context.past && (month < anchor.month || month === anchor.month && day < anchor.day)) year++;
+    }
     const date = Temporal.PlainDate.from({ year, month, day }, { overflow: "reject" });
     const remainder = expression.slice(match.index + match[0].length);
     const clock = /^\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(remainder);
@@ -172,13 +174,103 @@ export function resolveSourceTime(expression: string, context: SourceTimeContext
   return options.sort((a, b) => a.duration - b.duration)[0]?.result ?? null;
 }
 
+const relativeTime = /\b(?:(in|within|over)\s+(?:the\s+)?(?:(next)\s+)?|(next)\s+)(?:(\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?(minutes?|hours?|days?)\b/i;
+const dayOrClock = /\b(?:today|tomorrow|yesterday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|EOD|end\s+of\s+(?:the\s+)?day|noon|midnight|\d{1,2}:\d{2}(?:\s*[ap]m)?|\d{1,2}\s*[ap]m)\b/i;
+const calendarTime = new RegExp(`\\b(?:${isoTimestampPattern}|${datePattern})(?!\\d)`, "i");
+const timeClauses = (text: string) => text
+  .replace(/\b(?:https?:\/\/|www\.)\S+/gi, " ")
+  .replace(new RegExp(`\\b(${monthPattern})\\.(?=\\s+\\d)`, "gi"), "$1 ")
+  .split(/[!?。！？;；\n]|\.(?=\s|$)/);
+
+function firstRelativeTime(text: string, date: RegExpExecArray | null) {
+  const relative = relativeTime.exec(text);
+  return relative && (!date || relative.index < date.index) ? relative : null;
+}
+
+function selectedTime(text: string) {
+  const date = calendarTime.exec(text);
+  return firstRelativeTime(text, date) ?? date ?? dayOrClock.exec(text);
+}
+
+function usageAt(before: string, after: string): boolean {
+  if (/^\s*(?:即|将|將)?(?:发放|發放|下发|下發|生效)/.test(after)) return false;
+  if (/^\s*(?:(?:之前|以前|前)\s*(?:可|须|須|需|必须|必須)?\s*(?:使用|兑换|兌換|领取|領取)|(?:即|将|將)?(?:到期|过期|過期)|(?:is|was)\s+the\s+(?:(?:claim|redemption|usage|expiry)\s+deadline|last\s+day\s+to\s+(?:use|redeem|claim))\b)/i.test(after)) return true;
+  // The governing fact can change within a sentence: "issued on X, good through Y",
+  // or "users who use the product, resets start on X". A schedule needs its own subject.
+  const cues = /(?<usage>\b(?:use|used|using|redeem(?:ed|ing)?|redemption|claim(?:s|ed|ing)?|expir(?:e[sd]?|ing|y|ation)|(?:usable|redeemable|claimable|valid|available|good)\s+(?:only\s+)?(?:until|through|before|by))\b|使用|兑换|兌換|领取|領取|到期|过期|過期|有效期|(?:可用|有效)\s*(?:至|到))|\b(?:issu(?:e[sd]?|ing|ance)|giv(?:e[sn]?|ing)|gave|grant(?:s|ed|ing)?|distribut(?:e[sd]?|ing|ion)|deliver(?:s|ed|ing|y)?|credit(?:ed|ing)|arriv(?:e[sd]?|ing)|lands?|landed|(?:now\s+)?available|reset\s+(?:usage|quotas?|limits?))\b|(?:^|[,，]\s*)(?:the\s+)?(?:resets?|reset\s+credits?)\s+(?:starts?|begins?)\b|发放|發放|下发|下發|生效/gi;
+  const cue = [...before.matchAll(cues)].at(-1);
+  if (!cue?.groups?.usage) return false;
+  // "Issued for use on Fable on X" still dates the issuance.
+  if (/^(?:use|redemption)$/i.test(cue[0]) && /\bfor\s+$/i.test(before.slice(0, cue.index)))
+    return /\b(?:by|before|until|through)\s*$/i.test(before);
+  return true;
+}
+
+/** True when the selected source time describes use, claiming, or expiry rather than delivery. */
+export function isUsageTime(excerpt: string, postText: string): boolean {
+  for (const quote of timeClauses(excerpt)) {
+    const time = selectedTime(quote);
+    if (!time) continue;
+    // Match the selected quote, including any wording that distinguishes repeated dates.
+    // The separator tolerates the same typography differences as quotedInPost.
+    const words = (value: string) => value.normalize("NFKC").match(/[\p{L}\p{N}]+/gu)?.join("[^\\p{L}\\p{N}]+") ?? "";
+    const prefix = words(quote.slice(0, time.index));
+    const value = words(time[0]);
+    const suffix = words(quote.slice(time.index + time[0].length));
+    const pattern = new RegExp(`(?<![a-z0-9])(${prefix ? prefix + "[^\\p{L}\\p{N}]+" : ""})${value}(?![a-z0-9])${suffix ? "(?=[^\\p{L}\\p{N}]+" + suffix + "(?![a-z0-9]))" : ""}`, "giu");
+    const matches = timeClauses(postText).flatMap(clause => {
+      clause = clause.normalize("NFKC");
+      return [...clause.matchAll(pattern)].map(match => usageAt(clause.slice(0, match.index + match[1]!.length), clause.slice(match.index + match[0].length)));
+    });
+    // A date shared by a delivery and a deadline is not evidence of a deadline on its own.
+    return matches.length ? matches.every(Boolean) : usageAt(quote.slice(0, time.index), quote.slice(time.index + time[0].length));
+  }
+  return false;
+}
+
+const quotaObject = /\b(?:resets?|credits?|quotas?|rewards?)\b|重置卡|额度|額度/i;
+const issuanceVerb = "(?:issue|grant|give|distribute|deliver|credit|receive)";
+const issuedVerb = "(?:issued|granted|given|distributed|delivered|credited|received)";
+const issuingVerb = "(?:issuing|granting|giving|distributing|delivering|crediting|receiving)";
+const issuanceObject = "\\b(?!\\s+(?:(?:an?|the|more|new)\\s+)*(?:updates?|statements?|instructions?|announcements?|details|notices?)\\b)";
+const futureIssuance = new RegExp(`(?:\\b(?:will|plans?\\s+to)\\s+|(?:\\b(?:is|are)|['’](?:s|re))\\s+(?:going|scheduled|set)\\s+to\\s+|['’]ll\\s+)(?:soon\\s+)?(?:${issuanceVerb}|be\\s+(?:${issuedVerb}|${issuingVerb}))${issuanceObject}|(?:将|將|定于|定於)[^，,]{0,40}(?:发放|發放|下发|下發)`, "i");
+const ongoingIssuance = new RegExp(`(?:\\b(?:is|are|am)|['’](?:s|re|m))\\s+(?:${issuingVerb}|being\\s+${issuedVerb})${issuanceObject}`, "i");
+const completedIssuance = new RegExp(`\\b(?:(?:we|they|I)(?:['’]ve|\\s+have)?\\s+(?:(?:already|just)\\s+)?(?:${issuedVerb}|gave)|(?:was|were|(?:has|have)\\s+(?:(?:already|just)\\s+)?been)\\s+(?:(?:already|just)\\s+)?${issuedVerb}|already\\s+available)\\b|已(?:经|經)?\\s*(?:发放|發放|下发|下發)`, "i");
+
+/** Check a verified action excerpt without a model time quote. The post anchors dates on ongoing issuance. */
+export function hasExplicitFutureIssuance(actionExcerpt: string, post?: PublicV2PostRow): boolean {
+  if (/[?？]|^\s*(?:if\b|unless\b|如果|除非)/i.test(actionExcerpt)) return false;
+  const clauses = timeClauses(actionExcerpt);
+  if (clauses.some(clause => completedIssuance.test(clause))) return false;
+  return clauses.some(clause => {
+    if (!quotaObject.test(clause)
+      || /\b(?:if|unless|maybe|perhaps|might|could|would|not|never)\b|(?:won|isn|aren)['’]t|如果|除非|可能|不(?:会|會|再)|尚未/i.test(clause)) return false;
+    if (futureIssuance.test(clause)) return true;
+    const date = calendarTime.exec(clause);
+    if (!post || !date) return false;
+    const before = clause.slice(0, date.index);
+    const issuing = ongoingIssuance.exec(before);
+    if (!issuing || !/\bon\s*$/i.test(before)
+      || /\b(?:who|whose|when|once|after|before|to\s+use|for\s+use)\b/i.test(before.slice(issuing.index + issuing[0].length))
+      || usageAt(before, clause.slice(date.index + date[0].length))) return false;
+    const published = new Date(post.published_at);
+    if (!Number.isFinite(published.getTime())) return false;
+    const activityAnchor = published.toISOString();
+    // This is evidence of a future plan only if the date is ahead without rolling the year forward.
+    const resolved = resolveSourceTime(clause.slice(date.index),
+      { activityAnchor, postText: post.text, activityText: clause, deadline: false, sameYear: true });
+    return resolved !== null && resolved.time.kind !== "unknown" && isFutureBusinessTime(resolved.time, activityAnchor);
+  });
+}
+
 /** Event expressions are kept apart from redemption and expiry wording. */
 export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, announcement: boolean, activityText: string, activityAnchor?: string, occurredLifecycle = false): EventTime {
-  if (!occurredLifecycle && /\b(?:claims?|redeem|expire|expiry|valid until)\b/i.test(excerpt)) return { kind: "unknown" };
+  if (!occurredLifecycle && isUsageTime(excerpt, post.text)) return { kind: "unknown" };
   const literal = excerpt.trim();
   excerpt = namedClock(excerpt);
   const anchor = new Date(post.published_at).toISOString();
-  const relative = /\b(?:(in|within|over)\s+(?:the\s+)?(?:(next)\s+)?|(next)\s+)(?:(\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+)?(minutes?|hours?|days?)\b/i.exec(excerpt);
+  const date = calendarTime.exec(excerpt);
+  const relative = firstRelativeTime(excerpt, date);
   if (relative && !/\b(?:about|around|roughly|approximately|or so)\b|~/i.test(excerpt)) {
     const unit = relative[5]!.toLowerCase();
     const words: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
@@ -194,7 +286,7 @@ export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, a
   if (/\b(?:about|around|roughly|approximately)\b|~/i.test(excerpt)) return { kind: "unknown" };
   const occurrences = literal ? [...post.text.matchAll(new RegExp(literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"))] : [];
   // A model may quote only the clock. Recover a deadline marker only from its unique literal occurrence.
-  const deadline = /\b(?:by|before|until)\b/i.test(excerpt) || occurrences.length === 1
+  const deadline = /\b(?:by|before|until)\b/i.test(date ? excerpt.slice(0, date.index) : excerpt) || occurrences.length === 1
     && /\b(?:by|before|until)\s*$/i.test(post.text.slice(0, occurrences[0]!.index));
   const context = { activityAnchor: anchor, postText: post.text, activityText, deadline, past: !announcement };
   if (new RegExp(datePattern, "i").test(excerpt)) {
@@ -247,13 +339,12 @@ export function resolveActionTime(action: Pick<ActionDraft, "action" | "invalida
   const publishedAt = new Date(post.published_at).toISOString();
   const fallback = { time: defaultActionTime(action.action, post.published_at), issue: null };
   if (!action.timeExcerpt || !quotedInPost(action.timeExcerpt, post.text)) return fallback;
+  if ((action.action === "announce" || action.action === "confirm") && isUsageTime(action.timeExcerpt, post.text)) return fallback;
   const occurred = action.invalidatesEvent || action.action === "progress" || action.action === "confirm";
   const resolved = resolveEventExpression(action.timeExcerpt, post,
     action.action === "announce" || action.action === "amend" && !action.invalidatesEvent, post.text, occurred ? activityAnchor : undefined, occurred);
   if (resolved.kind === "unknown") return fallback;
-  if (occurred) {
-    const future = isFutureBusinessTime(resolved, publishedAt);
-    if (future) return resolved.kind === "deadline" ? fallback : { ...fallback, issue: "活动结果时间尚未发生" };
-  }
+  if (occurred && isFutureBusinessTime(resolved, publishedAt))
+    return resolved.kind === "deadline" ? fallback : { ...fallback, issue: "活动结果时间尚未发生" };
   return { time: serializeEventTime(resolved), issue: null };
 }

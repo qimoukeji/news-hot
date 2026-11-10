@@ -4,6 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import { startWebServer, type WebServer } from "./web-server.ts";
 import { createMonitorFixture, platforms, instant, date } from "./fixtures/reset-monitor.ts";
+import type { AdminReviewDetail } from "../../../modules/reset-monitor/web/admin-types.ts";
 
 const fixture = createMonitorFixture();
 let web: WebServer;
@@ -35,6 +36,7 @@ for (const product of platforms) test(`${product.product} creates a confirmation
     await page.goto(url);
     await expect(page.getByRole("button", { name: "核实结果", exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "添加动作", exact: true }).click();
+    await expect(dialog(page).getByLabel("所属事件", { exact: true })).toHaveCount(0);
     await expect(dialog(page).getByLabel("复核理由（必填，写入审计）")).toHaveCount(0);
     await expect(dialog(page).getByText("三类事件使用相同动作；取消请选修订并勾选事件失效。", { exact: true })).toHaveCount(0);
     await expect(dialog(page).getByText("没有明确依据留空；支持日期、带时区时间或时间区间。", { exact: true })).toHaveCount(0);
@@ -83,6 +85,7 @@ for (const product of platforms) test(`${product.product} edits a source-less co
     await dialog(page).getByLabel("动作摘要（中文）").fill("人工核对生效情况");
      await preview(page);
     assert.equal(fixture.writes[0]!.body.actions.update[0].id, "confirm-action");
+    assert.equal("eventId" in fixture.writes[0]!.body.actions.update[0], false);
     assert.deepEqual(fixture.writes[0]!.body.sources, { add: [], remove: [] });
     await addSources(page, "官方帖子摘要");
     await dialog(page).getByLabel("动作标题（中文）").fill("额度活动状态确认");
@@ -169,6 +172,55 @@ for (const product of platforms) test(`${product.product} edits a shared action 
     assert.deepEqual(fixture.writes.at(-1)!.body.orders, []);
     assert.deepEqual(fixture.writes.at(-1)!.body.events.update, []);
   } finally { await page.close(); }
+});
+
+test("editing only the owning event previews both events and keeps the action ID and sources", async () => {
+  fixture.writes.length = 0;
+  const page = await browser.newPage();
+  const product = platforms[0];
+  try {
+    await page.goto(`${web.origin}${product.admin}`);
+    const before: AdminReviewDetail = await (await page.request.get(`${web.origin}${product.api}/events/event-1/review`)).json();
+    const original = before.actions.find(action => action.id === "confirm-action")!;
+    await page.route(`**${product.api}/events/event-1/review`, async route => {
+      if (route.request().method() !== "GET") return route.continue();
+      const response = await route.fetch(), detail: AdminReviewDetail = await response.json();
+      const target = detail.options.events.find(event => event.id === "event-2")!;
+      detail.options.events.push({ ...target, id: "withdrawn-event", withdrawn: true, title: { zh: "已撤回的候选事件" } }, { ...target, id: "different-kind", type: "bonus_credit", title: { zh: "其他类型事件" } });
+      await route.fulfill({ response, json: detail });
+    });
+    await page.getByRole("button", { name: "编辑动作：额度活动状态确认", exact: true }).click();
+    const select = dialog(page).getByLabel("所属事件", { exact: true });
+    await expect(select).toHaveValue("event-1");
+    await expect(select.locator("option")).toHaveText(["Codex 官方活动 · 已完成（当前所属）", "另一期额度活动 · 已完成"]);
+    await expect(dialog(page).getByRole("button", { name: "预览影响", exact: true })).toBeDisabled();
+    await select.selectOption("event-2");
+    await expect(source(page)).toBeVisible();
+    await expect(source(page, "另一条官方报道")).toBeVisible();
+    await preview(page);
+    await expect(dialog(page).getByLabel("动作事实变化")).toContainText("所属事件：Codex 官方活动 → 另一期额度活动");
+    await expect(dialog(page).getByLabel("事件状态与时间变化").getByRole("listitem")).toHaveCount(2);
+    await select.selectOption("event-1");
+    await expect(dialog(page).getByLabel("变更预览")).toHaveCount(0);
+    await expect(dialog(page).getByRole("button", { name: "预览影响", exact: true })).toBeDisabled();
+    await select.selectOption("event-2");
+    await preview(page);
+    const { action, invalidatesEvent, title, summary, time } = original;
+    const command = fixture.writes.at(-1)!.body;
+    assert.deepEqual(command.actions, { create: [], update: [{ id: original.id, action, invalidatesEvent, title, summary, time, eventId: "event-2" }] });
+    assert.deepEqual(command.sources, { add: [], remove: [] });
+    assert.deepEqual(command.events, { create: [], update: [] });
+    assert.deepEqual(command.orders, []);
+    await dialog(page).getByRole("button", { name: "确认提交", exact: true }).click();
+    await expect(dialog(page)).toHaveCount(0);
+    assert.deepEqual(fixture.writes.at(-1)!.body, { ...command, previewToken: "preview-token" });
+    const after: AdminReviewDetail = await (await page.request.get(`${web.origin}${product.api}/events/event-1/review`)).json();
+    assert.equal(after.actions.some(action => action.id === original.id), false);
+    const moved = after.options.actions.find(action => action.id === original.id)!;
+    assert.deepEqual(moved, { ...original, eventId: "event-2", sequence: 2 });
+    assert.deepEqual(moved.sources, original.sources);
+    assert.equal(fixture.state.processingStatus, "needs_attention");
+  } finally { fixture.associationActions.delete(product.platform); await page.close(); }
 });
 
 test("source-only editing, preview invalidation, last-source removal, and cancellation stay explicit", async () => {
@@ -286,6 +338,8 @@ test("events without initial actions only offer announce or confirm; withdrawn e
     await page.getByRole("button", { name: "编辑动作：额度活动预告" }).click();
     await expect(source(page).getByRole("button", { name: /^移除来源/ })).toBeEnabled();
     await expect(dialog(page).getByRole("button", { name: "添加关联帖子", exact: true })).toBeDisabled();
+    await expect(dialog(page).getByLabel("所属事件", { exact: true })).toHaveValue("event-1");
+    await expect(dialog(page).getByLabel("所属事件", { exact: true }).locator("option")).toHaveText(["Codex 官方活动 · 已撤回（当前所属）"]);
   } finally { fixture.state.noActions = false; fixture.state.withdrawn = false; await page.close(); }
 });
 

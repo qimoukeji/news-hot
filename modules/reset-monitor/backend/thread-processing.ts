@@ -39,7 +39,7 @@ export async function relevantFacts(group: ThreadGroup, saved: ActionInput): Pro
   });
   const context = [...new Map([...group.context, ...evidence].filter(post => !targetIds.has(post.id)).map(post => [post.id, post])).values()]
     .sort((a, b) => new Date(a.published_at).getTime() - new Date(b.published_at).getTime() || a.id.localeCompare(b.id));
-  return { events, context, baseline: { posts: saved.posts, events: saved.events.filter(event => ids.has(event.id)), actions: saved.actions.filter(action => ids.has(action.event_id)) } };
+  return { events, context, baseline: { ...saved, events: saved.events.filter(event => ids.has(event.id)), actions: saved.actions.filter(action => ids.has(action.event_id)) } };
 }
 
 /** Pending work stores revisions only. Originals remain exclusively in the source-post records. */
@@ -102,7 +102,9 @@ export async function processPending(limit = Infinity): Promise<{ processed: num
       recognition = await recognizeThread(input, key.slice("recognition:pending:".length));
       if (!recognition.reused) result.modelCalls++;
       await applyRecognitionGroup(group.targets, group.context, baseline, recognition);
-      result.groups++; result.processed += group.targets.length;
+      result.groups++; result.processed += recognition.posts.length;
+      result.failed += recognition.failedPostIds?.length ?? 0;
+      if (recognition.repairedFormat || recognition.failedPostIds?.length) result.schemaFailures++;
       const latest = await loadActionInput();
       result.reviewed += latest.posts.filter(post => group.targets.some(target => target.id === post.id) && post.processing_status === "needs_attention").length;
       await removeWork(key);
@@ -123,21 +125,9 @@ export async function processPending(limit = Infinity): Promise<{ processed: num
         await sql.begin(async db => {
           const detail = error.validationIssues.map(issue => `${issue.path} (${issue.code})`).join("；");
           const reason = `模型响应未通过识别组结构校验${detail ? `：${detail}` : ""}`;
-          for (const post of group.targets) await markPostReview(post.id, reason, rowVersion(post), error.receiptId ?? undefined, db);
+          for (const post of group.targets) if (await markPostFailure(post.id, rowVersion(post), error.receiptId ?? undefined, db, reason)) result.failed++;
           if (error.receiptId !== null) await rejectReceivedResponse(error.receiptId, `Monitor thread recognition validation failed${detail ? `: ${detail}` : ""}`, db);
         });
-        result.processed += group.targets.length; result.reviewed += group.targets.length;
-        await removeWork(key); return;
-      }
-      if (recognition && error && typeof error === "object" && "statusCode" in error && error.statusCode === 400) {
-        await sql.begin(async db => {
-          for (const post of group.targets) {
-            const content = recognition!.posts.find(result => result.postId === post.id);
-            await markPostReview(post.id, "识别组动作未通过事实或关联校验", rowVersion(post), recognition!.receiptId, db, content);
-          }
-          await rejectReceivedResponse(recognition!.receiptId, "Monitor thread action validation failed", db);
-        });
-        result.processed += group.targets.length; result.reviewed += group.targets.length;
         await removeWork(key); return;
       }
       if (recognition) throw error; // Database failure: reuse the received answer and exact work revisions.

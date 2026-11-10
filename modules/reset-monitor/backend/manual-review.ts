@@ -4,7 +4,7 @@ import { sql, type Db } from "@aihot/backend/db";
 import { audit, Conflict } from "@aihot/backend/audit";
 import { monitorId, monitor, auditAction, auditSubject } from "./context.ts";
 import { actionDraftSchema, defaultActionTime, editorialTextSchema, editorialScopeSchema, reduceEvent, sourcedActions, currentUnsourcedConfirmation, type ActionInput, type ActionRow } from "../actions.ts";
-import { loadActionInput, rowVersion, validateActionFacts, validateScope, lockActionRecords, validateActionSources, auditPost } from "./action-store.ts";
+import { loadActionInput, rowVersion, validateActionFacts, validateScope, lockActionRecords, validateActionSources, auditPost, saveStandaloneFollowups, removeStandaloneFollowups } from "./action-store.ts";
 import { enqueuePublicV2 } from "./public-v2-work.ts";
 import { normalizePublicTime, isFutureBusinessTime } from "../public-v2.ts";
 import { postContext } from "./post-context.ts";
@@ -20,7 +20,7 @@ const commandsSchema = z.strictObject({
   keepPost: z.literal(true).optional(),
   version: id, versions: versionsSchema.optional(), reason: z.string().trim().min(1).optional(), previewToken: z.string().optional(),
   events: z.strictObject({ create: z.array(eventCreate).max(100).default([]), update: z.array(z.strictObject({ id, scope: editorialScopeSchema.nullable() })).max(100).default([]) }).default({ create: [], update: [] }),
-  actions: z.strictObject({ create: z.array(actionCreate).max(100).default([]), update: z.array(actionFields.extend({ id })).max(100).default([]) }).default({ create: [], update: [] }),
+  actions: z.strictObject({ create: z.array(actionCreate).max(100).default([]), update: z.array(actionFields.extend({ id, eventId: id.optional() })).max(100).default([]) }).default({ create: [], update: [] }),
   sources: z.strictObject({ add: z.array(sourceAdd).max(200).default([]), remove: z.array(z.strictObject({ actionId: id, postId: id })).max(200).default([]) }).default({ add: [], remove: [] }),
   orders: z.array(z.strictObject({ eventId: id, actionIds: z.array(id).max(200) })).max(100).default([]),
   post: z.strictObject({ title: editorialTextSchema.optional(), summary: editorialTextSchema.nullable().optional() }).optional(),
@@ -93,6 +93,7 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
   const affected = new Set<string>(command.events.update.map(item => item.id));
   const explicitPostIds = new Set<string>(origin.kind === "post" ? [origin.id] : []);
   for (const item of command.actions.create) affected.add(eventRef(item));
+  for (const item of command.actions.update) if (item.eventId) affected.add(item.eventId);
   for (const item of [...command.actions.update.map(item => ({ actionId: item.id })), ...command.sources.add, ...command.sources.remove]) {
     const target = actionRef(item), existing = state.actions.find(action => action.id === target);
     if (existing) affected.add(existing.event_id);
@@ -135,7 +136,13 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
     after.actions.push({ action: draft.action, title: draft.title, summary: draft.summary, time: draft.time, id: actionKeys.get(item.localKey)!, event_id: event.id, invalidates_event: item.invalidatesEvent ?? false, sequence, sources: plannedSources, created_at: createdAt, updated_at: createdAt });
   }
   for (const item of command.actions.update) {
-    const action = findAction(item.id), event = findEvent(action.event_id);
+    const action = findAction(item.id), event = findEvent(item.eventId ?? action.event_id);
+    if (event.id !== action.event_id) {
+      if (event.withdrawn) throw invalid("已撤回事件不能移入动作");
+      if (event.type !== findEvent(action.event_id).type) throw invalid("动作只能移入同类型事件");
+      action.sequence = Math.max(0, ...after.actions.filter(row => row.event_id === event.id).map(row => row.sequence)) + 1;
+      action.event_id = event.id;
+    }
     validateActionFacts({ ...item, eventId: event.id });
     Object.assign(action, { action: item.action, invalidates_event: item.invalidatesEvent ?? false, title: item.title, summary: item.summary, time: item.time ? normalizePublicTime(item.time) : null });
   }
@@ -154,6 +161,22 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
   const lastSourceRemovals = after.actions.filter(action => !action.sources.length && state.actions.some(prior => prior.id === action.id && prior.sources.length > 0)).map(action => ({ actionId: action.id, eventId: action.event_id, message: "最后一条来源移除后删除动作，请核对事件当前影响范围" }));
   const deleted = new Set(lastSourceRemovals.map(action => action.actionId));
   after.actions = after.actions.filter(action => !deleted.has(action.id));
+  const standaloneFollowupIds = new Set(after.standaloneFollowupIds);
+  for (const id of deleted) standaloneFollowupIds.delete(id);
+  for (const item of command.actions.update) {
+    const prior = state.actions.find(action => action.id === item.id)!, next = after.actions.find(action => action.id === item.id);
+    if (next?.sources.length && ["progress", "amend"].includes(next.action)
+      && (["announce", "confirm"].includes(prior.action) || prior.event_id !== next.event_id)) standaloneFollowupIds.add(next.id);
+  }
+  after.standaloneFollowupIds = standaloneFollowupIds;
+  for (const item of command.actions.update) {
+    const prior = state.actions.find(action => action.id === item.id)!, next = after.actions.find(action => action.id === item.id);
+    if (!next || next.event_id === prior.event_id) continue;
+    const event = findEvent(prior.event_id);
+    if (!reduceEvent(event, state) || reduceEvent(event, after)) continue;
+    const remaining = sourcedActions(event, after)[0];
+    if (remaining?.posts.length && ["progress", "amend"].includes(remaining.action.action)) standaloneFollowupIds.add(remaining.action.id);
+  }
   for (const action of after.actions) if (affected.has(action.event_id) && action.action !== "announce" && action.time === null && action.sources.length) {
     const dates = action.sources.map(source => after.posts.find(post => post.id === source.postId))
       .filter(post => post && !post.context_only).map(post => new Date(post!.published_at).toISOString()).sort();
@@ -168,7 +191,7 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
     const prior = state.actions.find(action => action.id === item.id)!;
     const next = after.actions.find(action => action.id === item.id);
     const event = findEvent(prior.event_id);
-    if (!next || prior.action !== "announce" || next.action !== "announce" || stableJson(prior.time) === stableJson(next.time)
+    if (!next || prior.event_id !== next.event_id || prior.action !== "announce" || next.action !== "announce" || stableJson(prior.time) === stableJson(next.time)
       || !currentUnsourcedConfirmation(event, state) || !next.sources.length) continue;
     const revisionId = `plan-correction-${rowVersion({ identity, action: next.id, time: next.time })}`;
     const sequence = Math.max(0, ...after.actions.filter(action => action.event_id === event.id).map(action => action.sequence)) + 1;
@@ -243,7 +266,9 @@ async function submit(origin: Origin, value: unknown, actor: string) {
         await db`UPDATE monitor_event_records SET scope=${next.scope ? db.json(next.scope) : null},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${eventId}`;
       }
     }
-    const reordered = new Set([...planned.command.orders.map(order => order.eventId), ...planned.actionChanges.filter(change => !change.before && change.after).map(change => change.eventId)]);
+    const moved = planned.actionChanges.filter(change => change.before && change.after && change.before.event_id !== change.after.event_id);
+    const reordered = new Set([...planned.command.orders.map(order => order.eventId), ...planned.actionChanges.filter(change => !change.before && change.after).map(change => change.eventId),
+      ...moved.flatMap(change => [change.before!.event_id, change.after!.event_id])]);
     for (const eventId of reordered) {
       const maximum = Math.max(0, ...state.actions.filter(action => action.event_id === eventId).map(action => action.sequence), ...planned.after.actions.filter(action => action.event_id === eventId).map(action => action.sequence));
       await db`UPDATE monitor_event_actions SET sequence=sequence+${maximum + 1} WHERE monitor_id=${monitorId()} AND event_id=${eventId}`;
@@ -252,8 +277,10 @@ async function submit(origin: Origin, value: unknown, actor: string) {
       const next = change.after;
       if (!next) await db`DELETE FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND id=${change.actionId}`;
       else if (!change.before) await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources) VALUES(${monitorId()},${next.id},${next.event_id},${next.sequence},${next.action},${next.invalidates_event},${db.json(next.title)},${next.summary ? db.json(next.summary) : null},${next.time === null ? null : db.json(next.time)},${db.json(next.sources)})`;
-      else await db`UPDATE monitor_event_actions SET sequence=${next.sequence},action=${next.action},invalidates_event=${next.invalidates_event},title=${db.json(next.title)},summary=${next.summary ? db.json(next.summary) : null},time=${next.time === null ? null : db.json(next.time)},sources=${db.json(next.sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${next.id}`;
+      else await db`UPDATE monitor_event_actions SET event_id=${next.event_id},sequence=${next.sequence},action=${next.action},invalidates_event=${next.invalidates_event},title=${db.json(next.title)},summary=${next.summary ? db.json(next.summary) : null},time=${next.time === null ? null : db.json(next.time)},sources=${db.json(next.sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${next.id}`;
     }
+    await removeStandaloneFollowups(db, planned.actionChanges.filter(change => !change.after).map(change => change.actionId));
+    await saveStandaloneFollowups(db, [...planned.after.standaloneFollowupIds!].filter(id => !state.standaloneFollowupIds?.has(id)));
     for (const action of planned.after.actions.filter(action => reordered.has(action.event_id))) await db`UPDATE monitor_event_actions SET sequence=${action.sequence} WHERE monitor_id=${monitorId()} AND id=${action.id}`;
     await validateActionSources(db, planned.after.actions.filter(action => planned.affected.includes(action.event_id)));
     for (const post of planned.after.posts) if (state.posts.find(before => before.id === post.id)?.filtered_out !== post.filtered_out) {

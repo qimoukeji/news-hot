@@ -1,5 +1,5 @@
 import { bt } from "./business-time-fixture.ts";
-import { stub, gate } from "../../../tests/setup.ts";
+import { stub, gate, Reply } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
 import { sql, closeDb } from "@aihot/backend/db";
@@ -30,6 +30,9 @@ const model = await stub(async (_hit, request) => {
   if (!("status" in input)) {
     const fill = (text: Record<string, string> | null) => text ? { ...properName(Object.values(text)[0]!), ...text } : null;
     return { choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ title: fill(input.title), summary: fill(input.summary), note: fill(input.note) }) } }] };
+  }
+  if (body.response_format?.type === "json_object" && !body.messages.some((message: { content: string }) => /json/i.test(message.content))) {
+    return new Reply(400, { error: { message: "JSON mode requires the word json in the prompt" } });
   }
   return { choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
     title: properName(invalid ? "人工核实已生效" : `Whole activity: ${input.status}`),
@@ -77,6 +80,17 @@ test("minute worker generates independent overviews once per facts version and u
   assert.equal((await publicV2Snapshot()).events[0]!.title.en, "Whole activity: completed");
   assert.equal(inputs[1].actions.length, 2); assert.equal("text" in inputs[1].actions[0], false);
   assert.equal((await processEventOverviews()).overviews, 0);
+}));
+
+test("an unknown scope's fallback audience label is not sent as an official eligibility fact", async () => inMonitor(codex, async () => {
+  await seed("confirm");
+  const scope = { type: "unknown", productCodes: [], planCodes: ["pro"], quotaWindowCodes: [], note: properName("All users") };
+  await sql`UPDATE monitor_event_records SET scope=${sql.json(scope)} WHERE monitor_id='codex' AND id='event'`;
+  await sql`UPDATE monitor_event_actions SET summary=${sql.json(properName("Pro users and Team users receive reset credits."))} WHERE monitor_id='codex' AND event_id='event'`;
+  assert.equal((await processEventOverviews()).overviews, 1);
+  assert.equal(inputs[0].scope.type, "unknown"); assert.equal(inputs[0].scope.note, null);
+  assert.match(inputs[0].actions[0].summary.en, /Pro users and Team users/);
+  assert.deepEqual((await loadActionInput()).events[0]!.scope, scope, "model input filtering does not change the saved scope");
 }));
 
 test("concurrent action changes discard the old model response", async () => inMonitor(codex, async () => {

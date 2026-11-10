@@ -26,12 +26,15 @@ test("target identity and required content remain strict after normalization", (
   }
 });
 
-test("the paid thread prompt supplies one complete parseable thread contract", () => inMonitor(codex, () => {
+test("the paid thread prompt supplies the complete schema with strict post and action boundaries", () => inMonitor(codex, () => {
   const prompt = threadRecognitionPrompt();
-  const example = prompt.split("Exact JSON structure (example values only):\n")[1]!.split("\nReturn no extra keys.")[0]!;
-  const shape = JSON.parse(example);
-  assert.equal(threadOutputSchema(["target-post-id"]).safeParse(shape).success, true);
-  assert.equal("scope" in shape.posts[0], false);
-  assert.ok(shape.posts[0].actions[0].scope);
+  const shape = JSON.parse(prompt.split("Required JSON Schema (field types, enum values and required keys are authoritative):\n")[1]!.split("\nReturn no extra keys.")[0]!);
+  const post = shape.properties.posts.items;
+  assert.equal(shape.additionalProperties, false);
+  assert.equal(post.additionalProperties, false);
+  assert.equal(post.required.includes("postId"), true);
+  assert.equal(post.required.includes("reviewReason"), true);
+  assert.equal("scope" in post.properties, false);
+  assert.ok(post.properties.actions.items.properties.scope);
   assert.doesNotMatch(prompt, /eventScope|single-post result shape above/);
 }));

@@ -94,6 +94,7 @@ export interface ActionInput {
   posts: SourcePostRow[];
   actions: ActionRow[];
   editorials?: Record<string, { version: string; status: string; recordVersion?: string }>;
+  standaloneFollowupIds?: ReadonlySet<string>;
 }
 export const languages = [
   "en",
@@ -168,10 +169,10 @@ export function withoutPostOriginal<T extends { text?: unknown; quoted_post?: un
 export function reduceEvent(event: EventRow, input: ActionInput) {
   const actions = sourcedActions(event, input);
   const initial = actions.find(
-    ({ action }) => action.action === "announce" || action.action === "confirm",
+    ({ action }) => action.action === "announce" || action.action === "confirm" || input.standaloneFollowupIds?.has(action.id),
   );
   if (!initial) return null;
-  let status: ResetEvent["status"] = "announced";
+  let status: ResetEvent["status"] = initial.action.action === "amend" ? "in_progress" : "announced";
   let time: BusinessTime | null = null;
   let announcedTime: BusinessTime | null = null;
   let confirmedTime: BusinessTime | null = null;

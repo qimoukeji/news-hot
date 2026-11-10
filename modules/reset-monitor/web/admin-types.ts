@@ -23,7 +23,7 @@ export type AdminEventDetail = Omit<AdminReviewDetail, "event"> & { event: Admin
 export type ReviewCommands = {
   keepPost?: true;
   events: { create: Array<{ localKey: string; type: EventKind; title?: LocalizedText; summary?: LocalizedText | null; scope?: Scope }>; update: Array<{ id: string; scope: Scope }> };
-  actions: { create: Array<ActionFact & { localKey: string; eventId?: string; eventKey?: string }>; update: Array<ActionFact & { id: string }> };
+  actions: { create: Array<ActionFact & { localKey: string; eventId?: string; eventKey?: string }>; update: Array<ActionFact & { id: string; eventId?: string }> };
   sources: { add: Array<{ actionId?: string; actionKey?: string; postId: string }>; remove: Array<{ actionId: string; postId: string }> };
   orders: Array<{ eventId: string; actionIds: string[] }>;
 };
@@ -31,7 +31,7 @@ export type ReviewPreview = {
   previewToken: string;
   postChange?: { before: { processingStatus: ProcessingStatus; reviewReason: string | null; filteredOut: boolean }; after: { processingStatus: ProcessingStatus; reviewReason: string | null; filteredOut: boolean } } | null;
   changes: Array<{ eventId: string; before: { status: EventStatus | null; time: BusinessTime | null; title?: LocalizedText | null } | null; after: { status: EventStatus | null; time: BusinessTime | null; title?: LocalizedText | null } | null }>;
-  actionChanges: Array<{ actionId: string; eventId: string; before: ActionFact | null; after: ActionFact | null }>;
+  actionChanges: Array<{ actionId: string; eventId: string; before: (ActionFact & { event_id?: string }) | null; after: (ActionFact & { event_id?: string }) | null }>;
   sourceChanges: Array<{ actionId: string; eventId: string; before: string[]; after: string[] }>;
   orderChanges: Array<{ eventId: string; before: string[]; after: string[] }>;
   lastSourceRemovals: Array<{ actionId: string; eventId: string; message: string }>;

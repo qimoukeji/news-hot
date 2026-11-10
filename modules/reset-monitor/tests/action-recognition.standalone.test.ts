@@ -1,7 +1,7 @@
 import "../../../tests/standalone.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { actionRecognitionSchema, recognitionPrompt, type Proposition } from "../backend/recognize.ts";
+import { actionRecognitionSchema, recognitionPrompt, threadRecognitionPrompt, threadOutputSchema, type Proposition } from "../backend/recognize.ts";
 import { inMonitor } from "../backend/context.ts";
 import { quotedInPost } from "../backend/assemble.ts";
 import { resolveEventExpression } from "../backend/public-v2-time.ts";
@@ -20,6 +20,41 @@ const response = () => ({ relevant: true, needsReview: false, title: localized("
 const proposition = (excerpt: string, kind: Proposition["kind"] = "direct_reset"): Proposition => ({ kind, kindExplicit: true, action: "confirm",
   real: true, role: "action", eventId: null, excerpt, timeExcerpt: null,
   scope: { audienceSource: null, plans: null, audienceZh: null, productsZh: null } });
+
+test("thread output removes only the observed JSON-mode metadata and keeps plan arrays strict", () => {
+  const ids = ["101", "102", "103", "104", "105"];
+  const value = { type: "json_object", posts: ids.map(postId => ({ postId, ...response(), reviewReason: null })) };
+  for (const post of value.posts.slice(0, -1)) Object.assign(post, { relevant: false, actions: [] });
+  const plans = ["Plan A", "Plan B"];
+  Object.assign(value.posts[4]!.actions[0]!.rawScope, { plans });
+  const parsed = threadOutputSchema(ids).parse(value);
+  assert.deepEqual(parsed.posts[4]!.actions[0]!.rawScope.plans, plans);
+  assert.equal("type" in parsed, false);
+  assert.equal(parsed.posts.filter(post => !post.relevant).length, 4);
+  for (const type of ["array", null, { format: "json_object" }]) {
+    assert.equal(threadOutputSchema(ids).safeParse({ ...value, type }).success, false);
+  }
+  assert.equal(threadOutputSchema(ids).safeParse({ ...value, extra: "unexpected" }).success, false);
+  const malformed = structuredClone(value);
+  Object.assign(malformed.posts[4]!.actions[0]!.rawScope, { plans: "Plan A, Plan B" });
+  const invalid = threadOutputSchema(ids).safeParse(malformed);
+  assert.equal(invalid.success, false);
+  if (!invalid.success) assert.deepEqual(invalid.error.issues[0]!.path, ["posts", 4, "actions", 0, "rawScope", "plans"]);
+  assert.equal(threadOutputSchema(ids).safeParse({ ...value, posts: value.posts.slice(1) }).success, false);
+  assert.equal(threadOutputSchema(ids).safeParse({ ...value, posts: [...value.posts.slice(1), value.posts[1]] }).success, false);
+});
+
+test("recognition instructions distinguish banked issuance, present usability and redemption deadlines", () => inMonitor(claude, () => {
+  const prompt = threadRecognitionPrompt();
+  assert.match(prompt, /plans=\["Plan A","Plan B"\]/);
+  assert.match(prompt, /plans \(array of literal plan-name strings or null\)/);
+  assert.match(prompt, /present issuance combined with explicit present usability supports confirm/);
+  assert.match(prompt, /Use them anytime by March 8 belongs in the summary, with timeExcerpt=null/);
+  assert.match(prompt, /root has exactly one key, posts/);
+  const schema = JSON.parse(prompt.split("Required JSON Schema (field types, enum values and required keys are authoritative):\n")[1]!.split("\nReturn no extra keys.")[0]!);
+  assert.deepEqual(schema.properties.posts.items.properties.actions.items.properties.scope.properties.type.enum, ["all_users", "paid_users", "selected_users", "unknown"]);
+  assert.deepEqual(schema.properties.posts.items.properties.actions.items.properties.rawScope.properties.plans.anyOf[0].type, "array");
+}));
 
 test("recognition requires all seven languages and accepts multiple actions for a local event", () => {
   const value = response();

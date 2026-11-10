@@ -27,6 +27,13 @@ export type {
   ActionRow,
 } from "../actions.ts";
 export const rowVersion = (row: unknown) => sha256(stableJson(row));
+const standaloneFollowupPrefix = "recognition:standalone-followup:";
+export async function saveStandaloneFollowups(db: Db, ids: Iterable<string>) {
+  for (const id of ids) await db`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${standaloneFollowupPrefix + id},'true'::jsonb) ON CONFLICT(monitor_id,key) DO NOTHING`;
+}
+export async function removeStandaloneFollowups(db: Db, ids: string[]) {
+  if (ids.length) await db`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=ANY(${ids.map(id => standaloneFollowupPrefix + id)}::text[])`;
+}
 const invalid = (message: string) =>
   Object.assign(new Error(message), { statusCode: 400 });
 
@@ -41,7 +48,9 @@ export async function loadActionInput(db: Db = sql): Promise<ActionInput> {
     ActionRow[]
   >`SELECT id,event_id,sequence,action,invalidates_event,title,summary,time,sources,created_at,updated_at FROM monitor_event_actions WHERE monitor_id=${monitorId()} ORDER BY id`;
   const states = await db<{ key: string; value: NonNullable<ActionInput["editorials"]>[string] }[]>`SELECT key,value FROM monitor_state WHERE monitor_id=${monitorId()} AND key LIKE 'public_v2:overview:%'`;
-  return { events, posts, actions, editorials: Object.fromEntries(states.map(row => [row.key.slice("public_v2:overview:".length), row.value])) };
+  const standalone = await db<{ key: string }[]>`SELECT key FROM monitor_state WHERE monitor_id=${monitorId()} AND starts_with(key,${standaloneFollowupPrefix})`;
+  return { events, posts, actions, editorials: Object.fromEntries(states.map(row => [row.key.slice("public_v2:overview:".length), row.value])),
+    standaloneFollowupIds: new Set(standalone.map(row => row.key.slice(standaloneFollowupPrefix.length))) };
 }
 
 export async function storeCollectedPost(
@@ -118,10 +127,10 @@ export async function markPostReview(id: string, reason: string, expectedVersion
   };
   return db === sql ? sql.begin(save) : save(db);
 }
-export async function markPostFailure(id: string, expectedVersion: string, receiptId?: number, db: Db = sql) {
+export async function markPostFailure(id: string, expectedVersion: string, receiptId?: number, db: Db = sql, reason = "处理失败，等待人工处理") {
   const save = async (tx: Db) => {
     if (!await pendingPostVersion(id, expectedVersion, tx)) return false;
-    await tx`UPDATE monitor_source_posts SET processing_status='failed',filtered_out=false,review_reason='处理失败，等待人工处理',model_receipt_id=coalesce(${receiptId ?? null},model_receipt_id),updated_at=clock_timestamp()
+    await tx`UPDATE monitor_source_posts SET processing_status='failed',filtered_out=false,review_reason=${reason.slice(0, 1000)},model_receipt_id=coalesce(${receiptId ?? null},model_receipt_id),updated_at=clock_timestamp()
       WHERE monitor_id=${monitorId()} AND id=${id} AND processing_status='pending'`;
     return true;
   };
@@ -166,6 +175,7 @@ export interface ActionWriteOptions {
   replace?: boolean;
   editExisting?: boolean;
   newActionIds?: readonly (string | undefined)[];
+  standaloneFollowups?: ReadonlySet<string>;
 }
 export async function lockActionRecords(db: Db, eventIds: Iterable<string>, actionIds: Iterable<string>, postIds: Iterable<string>) {
   const ordered = (ids: Iterable<string>) => [...new Set(ids)].sort();
@@ -200,7 +210,8 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
     if (change.scope) validateScope(change.scope);
     const [event] = await db<EventRow[]>`SELECT id,type,title,summary,scope,withdrawn,created_at,updated_at FROM monitor_event_records WHERE monitor_id=${monitorId()} AND id=${change.id}`;
     if (!event) {
-      if (!change.type || !monitor().eventKinds.includes(change.type) || !normalized.some(action => action.eventId === change.id && ["announce", "confirm"].includes(action.action)))
+      const startsEvent = normalized.some(action => action.eventId === change.id && ["announce", "confirm"].includes(action.action));
+      if (!change.type || !monitor().eventKinds.includes(change.type) || (!startsEvent && !options.standaloneFollowups?.has(change.id)))
         throw invalid("新事件必须由有类型的预告或确认动作创建");
       const initial = normalized.find(action => action.eventId === change.id)!;
       await db`INSERT INTO monitor_event_records(monitor_id,id,type,title,summary,scope,created_at)
@@ -247,10 +258,16 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
       const id = options.newActionIds?.[index] ?? randomUUID();
       await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources)
         VALUES(${monitorId()},${id},${event.id},${max!.sequence},${draft.action},${draft.invalidatesEvent ?? false},${db.json(draft.title)},${draft.summary ? db.json(draft.summary) : null},${time === null ? null : db.json(time)},${db.json(sources)})`;
+      if (max!.sequence === 1 && options.standaloneFollowups?.has(event.id)) {
+        await saveStandaloneFollowups(db, [id]);
+      }
     }
   }
   const removedIds = previous.map(action => action.id);
-  if (removedIds.length) await db`DELETE FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND id=ANY(${removedIds}::text[]) AND sources='[]'::jsonb`;
+  if (removedIds.length) {
+    const deleted = await db<{ id: string }[]>`DELETE FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND id=ANY(${removedIds}::text[]) AND sources='[]'::jsonb RETURNING id`;
+    await removeStandaloneFollowups(db, deleted.map(action => action.id));
+  }
   const actions = await db<ActionRow[]>`SELECT id,action,time,sources FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND event_id=ANY(${eventIds}::text[])`;
   await validateActionSources(db, actions);
   if (normalized.length) await db`UPDATE monitor_source_posts SET filtered_out=false,updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${post.id} AND filtered_out`;
@@ -269,6 +286,7 @@ export async function saveAcceptedPost(
     expectedVersion: string;
     filteredOut?: boolean;
     reviewReason?: string | null;
+    standaloneFollowups?: ReadonlySet<string>;
   },
   db?: Db,
 ) {
@@ -278,7 +296,7 @@ export async function saveAcceptedPost(
       SourcePostRow[]
     >`SELECT id,author,published_at,url,text,quoted_post,reply_to,context_only,filtered_out,title,summary,source_receipt_id,model_receipt_id,processing_status,review_reason,created_at,updated_at FROM monitor_source_posts WHERE monitor_id=${monitorId()} AND id=${id} FOR UPDATE`;
     if (!post || post.processing_status !== "pending" || rowVersion(post) !== input.expectedVersion) throw new StalePostWork("帖子已变化，忽略过期识别结果");
-    const affected = await writePostActions(tx, post, input.actions, { events: input.events });
+    const affected = await writePostActions(tx, post, input.actions, { events: input.events, standaloneFollowups: input.standaloneFollowups });
     const [linked] = await tx`SELECT 1 FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND sources @> ${tx.json([{ postId: id }])}::jsonb LIMIT 1`;
     await tx`UPDATE monitor_source_posts SET title=${tx.json(input.title)},summary=${input.summary ? tx.json(input.summary) : null},processing_status=${input.reviewReason ? "needs_attention" : "processed"},review_reason=${input.reviewReason?.slice(0, 1000) ?? null},model_receipt_id=${input.receiptId},filtered_out=${Boolean(input.filteredOut && !linked && !input.reviewReason)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${id}`;
     const [historical] = await tx`SELECT 1 FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${`recognition:historical:${id}`}`;

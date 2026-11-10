@@ -1,5 +1,5 @@
 import { monitor } from "./context.ts";
-import { quotedInPost } from "./evidence.ts";
+import { quotedInPost, quotedScopeInPost } from "./evidence.ts";
 import type { ActionRecognitionBody, Proposition } from "./recognize.ts";
 import { languages, translated, type EditorialScope } from "../actions.ts";
 import { defaultScopeLabel } from "./scope-labels.ts";
@@ -26,7 +26,7 @@ export function recognizedScope(claim: Claim, source: string, author: string, in
   const issue = (reason: string) => ({ scope, issue: reason });
   if (!catalog) return { scope, issue: null };
   if ([scope.productCodes, scope.planCodes, scope.quotaWindowCodes].some(codes => new Set(codes).size !== codes.length)) return issue("影响范围含重复的目录代码");
-  if (raw.audienceSource && !quotedInPost(raw.audienceSource, source)) return issue("范围不在本帖中");
+  if (raw.audienceSource && !quotedScopeInPost(raw.audienceSource, source)) return issue("范围不在本帖中");
   const audience = [raw.audienceSource, raw.audienceZh].filter(Boolean).join(" ");
   const selected = /\b(?:selected|some|eligible|qualifying|affected)\b|部分|特定|符合|受影响|受影響/i.test(audience);
   const paid = /\bpaid\b|付费|付費/i.test(audience);

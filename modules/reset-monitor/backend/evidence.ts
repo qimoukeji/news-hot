@@ -7,6 +7,12 @@ export function quotedInPost(excerpt: string, post: string): boolean {
   return parts.length > 0 && parts.every(part => loose(post).includes(part));
 }
 
+/** Live scope lists join separate literal audience spans with semicolons. Check every span. */
+export function quotedScopeInPost(excerpt: string, post: string): boolean {
+  const parts = excerpt.split(/[;；]/);
+  return parts.length === 1 ? quotedInPost(excerpt, post) : parts.every(part => !!part.trim() && quotedInPost(part, post));
+}
+
 /** Read literal counters only; the recognizer must still establish their event and meaning. */
 export function bankedRoundCounts(excerpt: string): { completed: number; total: number } | null {
   const match = /\bbanked\s+(\d+)\s*\/\s*(\d+)\b/i.exec(excerpt);
@@ -16,13 +22,25 @@ export function bankedRoundCounts(excerpt: string): { completed: number; total: 
 }
 
 /** Inspect the completed assertion rather than an adjacent question or usage instruction. */
-export function confirmsCompletedAction(excerpt: string, verifiedBankedEvent = false): boolean {
+export function confirmsCompletedAction(excerpt: string, verifiedBankedEvent = false, kind?: Proposition["kind"]): boolean {
   const clauses = excerpt.match(/[^.!?。！？;；\n]+[.!?。！？;；]?/g) ?? [];
-  return clauses.some(clause => {
-    if (/[?？]/.test(clause) || /\b(?:will|would|should|soon|coming|tomorrow|scheduled|planned|expected|if|unless|maybe|perhaps|might|could|not|never|haven['’]t|hasn['’]t|isn['’]t|wasn['’]t|weren['’]t|didn['’]t|can['’]t|won['’]t)\b|尚未|还未|還未|没有|沒有|并未|並未|将会|將會|如果/i.test(clause)) return false;
+  const completedClauses = clauses.filter(clause => {
+    if (/[?？]/.test(clause) || /\b(?:will|would|should|soon|coming|tomorrow|scheduled|planned|expected|if|unless|maybe|perhaps|might|could|not|never|haven['’]t|hasn['’]t|isn['’]t|aren['’]t|wasn['’]t|weren['’]t|didn['’]t|can['’]t|won['’]t)\b|尚未|还未|還未|没有|沒有|并未|並未|将会|將會|如果/i.test(clause)) return false;
     if (/\b(?:feel(?:ing)?|felt|slept|sleep|youth)\b|感觉|感覺|睡醒/i.test(clause)) return false;
     if (/\b(?:my|mine)\b|我的/i.test(clause)) return false;
     if (/\bi\b|我已/i.test(clause) && !/\b(?:all\s+(?:users|accounts|subscriptions)|everyone|users)\b|所有|全部|用户|用戶/i.test(clause)) return false;
+    return true;
+  });
+  // Present distribution plus present redemption establishes delivery, not a reset of usage.
+  if (kind === "reset_credit"
+    && completedClauses.some(clause => /\bwe(?:['’]re|\s+are)\s+(?:giving|issuing|granting)\b/i.test(clause) && /\bresets?\b|重置/i.test(clause)
+      && !/\b(?:after|once|when|starting|next|later)\b|\b(?:no|zero|0)\s+(?:(?:more|additional|further)\s+)?reset(?:\s+credit)?s?\b/i.test(clause))
+    && completedClauses.some(clause => /\b(?:use|redeem)\s+(?:them|these|(?:your|the)\s+(?:reset\s+)?credits?)\b/i.test(clause)
+      && /\b(?:now|anytime|any\s+time)\b/i.test(clause)
+      && !/\b(?:after|once|when|starting|from|later|next)\b/i.test(clause))
+    && !clauses.some(clause => !/[?？]/.test(clause) && /\b(?:use|redeem|available|unavailable|usable|redeemable)\b|可用|可使用|可兑换|可兌換/i.test(clause)
+      && /\b(?:unavailable|not|never|cannot|can['’]t|isn['’]t|aren['’]t|won['’]t|will|soon|tomorrow|after|once|when|starting|next|later)\b|尚未|还未|還未|无法|無法/i.test(clause))) return true;
+  return completedClauses.some(clause => {
     const quotaObject = /\b(?:resets?|usage|limits?|quotas?|credits?|rewards?|banked)\b|额度|額度|重置|奖励|獎勵/i.test(clause);
     // Discourse connectors do not change the assertion; its negation and ownership checks stay above.
     const assertion = clause.replace(/^\s*(?:(?:and|but|now|so|yes|well|indeed)\b[,\s]*)+/i, "");

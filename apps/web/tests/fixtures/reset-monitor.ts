@@ -184,6 +184,35 @@ export function createMonitorFixture() {
         if (completesPost) { state.processingStatus = "processed"; state.reviewReason = null; }
         return send({ saved: true });
       }
+      if (path.includes("/events/") && path.includes("/review") && body.actions?.update.some((action: ReviewCommands["actions"]["update"][number]) => action.eventId)) {
+        const before = detail(product, true), nextActions = structuredClone(before.options.actions);
+        for (const patch of body.actions.update as ReviewCommands["actions"]["update"]) {
+          const action = nextActions.find(action => action.id === patch.id)!;
+          const target = before.options.events.find(event => event.id === (patch.eventId ?? action.eventId));
+          const origin = before.options.events.find(event => event.id === action.eventId)!;
+          if (!target || target.type !== origin.type || target.id !== origin.id && target.withdrawn) { res.statusCode = 400; return send({ detail: "目标事件必须同类型且未撤回" }); }
+          const sequence = target.id === origin.id ? action.sequence : Math.max(0, ...nextActions.filter(action => action.eventId === target.id).map(action => action.sequence)) + 1;
+          Object.assign(action, patch, { sequence });
+        }
+        for (const source of body.sources.add as ReviewCommands["sources"]["add"]) nextActions.find(action => action.id === source.actionId)!.sources.push({ postId: source.postId });
+        for (const source of body.sources.remove as ReviewCommands["sources"]["remove"]) {
+          const action = nextActions.find(action => action.id === source.actionId)!;
+          action.sources = action.sources.filter(item => item.postId !== source.postId);
+        }
+        const affected = [...new Set((body.actions.update as ReviewCommands["actions"]["update"]).flatMap(patch => [before.options.actions.find(action => action.id === patch.id)!.eventId, nextActions.find(action => action.id === patch.id)!.eventId]))];
+        const result = (actions: ReviewAction[], eventId: string) => {
+          const last = actions.filter(action => action.eventId === eventId).sort((a, b) => a.sequence - b.sequence).at(-1);
+          return { status: last ? last.action === "confirm" ? "completed" : last.action === "announce" ? "announced" : last.invalidatesEvent ? "cancelled" : "in_progress" : null, time: last?.time ?? null };
+        };
+        if (path.endsWith("/preview")) return send({ previewToken: "preview-token", changes: affected.map(eventId => ({ eventId, before: result(before.options.actions, eventId), after: result(nextActions, eventId) })),
+          actionChanges: (body.actions.update as ReviewCommands["actions"]["update"]).map(patch => {
+            const original = before.options.actions.find(action => action.id === patch.id)!, changed = nextActions.find(action => action.id === patch.id)!;
+            return { actionId: patch.id, eventId: changed.eventId, before: { ...original, event_id: original.eventId }, after: { ...changed, event_id: changed.eventId } };
+          }), sourceChanges: [], orderChanges: [], lastSourceRemovals: [] });
+        if (state.previewConflict) { res.statusCode = 409; return send({ detail: "事件版本已变化，请重新预览" }); }
+        associationActions.set(product.platform, nextActions);
+        return send({ saved: true });
+      }
       const record = createdEvents.find(record => record.platform === product.platform && (path === `${product.api}/events/${record.event.id}` || path.startsWith(`${product.api}/events/${record.event.id}/`)));
       if (record) {
         const event = record.event;

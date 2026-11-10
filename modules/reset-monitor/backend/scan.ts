@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { config } from "@aihot/backend/config";
 import { sql, type Db } from "@aihot/backend/db";
 import { deliverContent } from "@aihot/backend/notify/deliver";
-import { monitor, monitorId, authorHandles } from "./context.ts";
+import { monitor, monitorId, authorHandles, purpose } from "./context.ts";
 import { publicV2Snapshot } from "./public-v2.ts";
 import { cursorKey, watermarksKey, collectorName } from "../config.ts";
 import { collectPosts, collectionProgressKey, CollectionIncompleteError } from "./collection.ts";
@@ -24,8 +24,12 @@ async function touchWatermarks(patch: Record<string, string>, db: Db = sql) {
     ON CONFLICT (monitor_id,key) DO UPDATE SET value=monitor_state.value || EXCLUDED.value,updated_at=now()`;
 }
 async function pendingPosts(): Promise<number> {
-  const [row] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM monitor_source_posts WHERE monitor_id=${monitorId()}
-    AND NOT context_only AND processing_status IN ('pending','failed') AND lower(author)=ANY(${authorHandles()}::text[])`;
+  // A paid answer with an unreadable target is a settled outcome, unlike a failed request with no response.
+  const [row] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM monitor_source_posts post WHERE monitor_id=${monitorId()}
+    AND NOT context_only AND lower(author)=ANY(${authorHandles()}::text[])
+    AND (processing_status='pending' OR processing_status='failed' AND NOT EXISTS (
+      SELECT 1 FROM receipts WHERE id=post.model_receipt_id AND purpose=${purpose("recognize")}
+        AND status IN ('completed','failed') AND response IS NOT NULL))`;
   return row?.n ?? 0;
 }
 export { collectPosts } from "./collection.ts";
@@ -106,5 +110,5 @@ async function tick() {
     await db`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${windowKey}`;
     await db`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${collectionProgressKey(window.roundId)}`;
   });
-  return { ...collected, ...result, outcome: result.reviewed ? "needs_review" : "completed", complete: true, pushed: await flushResetPushes(), pending: 0, verifiedAt: started.toISOString() };
+  return { ...collected, ...result, outcome: result.reviewed || result.failed ? "needs_review" : "completed", complete: true, pushed: await flushResetPushes(), pending: 0, verifiedAt: started.toISOString() };
 }

@@ -10,6 +10,8 @@ import { inMonitor } from "../backend/context.ts";
 import { storeCollectedPost, sourcePost, loadActionInput } from "../backend/action-store.ts";
 import { applyOfflineRecognition, applyRecognitionGroup } from "../backend/assemble.ts";
 import { processPending } from "../backend/thread-processing.ts";
+import { publicV2Snapshot } from "../backend/public-v2.ts";
+import { monitorPostDetail, previewMonitorReview, submitMonitorReview } from "../backend/manual-review.ts";
 import type { ActionRecognitionBody, ThreadRecognitionInput } from "../backend/recognize.ts";
 import { threadOutputSchema } from "../backend/recognize.ts";
 
@@ -37,15 +39,20 @@ let omitLastTarget = false;
 let reviewFirstTarget = false;
 let outputEventId: string | null = null;
 let postScope: null | Record<string, unknown> | undefined;
+let rootType: string | undefined;
+let adjustOutput: ((postId: string, output: ActionRecognitionBody) => unknown) | undefined;
 const model = await stub(async (_hit, request) => {
   const input = JSON.parse(JSON.parse(request.body).messages[1].content) as ThreadRecognitionInput;
   inputs.push(input);
   if (beforeReply) await beforeReply(input);
   const targets = omitLastTarget ? input.targets.slice(0, -1) : input.targets;
   const existingEventId = outputEventId ?? input.events[0]?.id ?? null;
-  const content = { posts: targets.map(post => ({ postId: post.id, ...bodyFor(post.id, existingEventId),
-    ...(postScope === undefined ? {} : { scope: postScope }),
-    ...(reviewFirstTarget && post.id === "101" ? { needsReview: true, reviewReason: "A separate unsupported detail needs review" } : { reviewReason: null }) })) };
+  const content = { ...(rootType === undefined ? {} : { type: rootType }), posts: targets.map(post => {
+    const body = bodyFor(post.id, existingEventId);
+    return { postId: post.id, ...body, ...(postScope === undefined ? {} : { scope: postScope }),
+      ...(reviewFirstTarget && post.id === "101" ? { needsReview: true, reviewReason: "A separate unsupported detail needs review" } : { reviewReason: null }),
+      ...adjustOutput?.(post.id, body) as object };
+  }) };
   return { choices: [{ finish_reason: "stop", message: { content: JSON.stringify(content) } }] };
 });
 Object.assign(process.env, { MONITOR_MODEL: "default", LLM_MODEL: "synthetic-thread", LLM_API_KEY: "synthetic", LLM_BASE_URL: `${model.url}/v1` });
@@ -59,7 +66,7 @@ beforeEach(async () => {
   await sql`DELETE FROM receipts`;
   await sql`DELETE FROM budgets`;
   inputs.length = 0; beforeReply = null; omitLastTarget = false; reviewFirstTarget = false; outputEventId = null;
-  postScope = undefined;
+  postScope = undefined; rootType = undefined; adjustOutput = undefined;
   process.env.LLM_MODEL = "synthetic-thread";
   config.modelCallsEnabled = true; process.env.COLLECT_ENABLED = "true";
 });
@@ -144,17 +151,19 @@ test("manual edits while the model is running are preserved and no partial group
   const before = model.hits(); await processPending(); assert.equal(model.hits(), before);
 }));
 
-test("an output missing one target reviews the entire group without accepting any action or repurchasing", async () => inMonitor(codex, async () => {
+test("an output missing one target retains the other actions without repurchasing", async () => inMonitor(codex, async () => {
   await seed(["101", "102", "103"]); omitLastTarget = true;
   const before = model.hits();
   const result = await processPending();
-  assert.equal(result.reviewed, 3);
+  assert.equal(result.reviewed, 0);
+  assert.equal(result.failed, 1);
   assert.equal(result.modelCalls, 1);
   assert.equal(result.schemaFailures, 1);
   const saved = await loadActionInput();
-  assert.equal(saved.events.length, 0); assert.equal(saved.actions.length, 0);
-  assert.ok(saved.posts.every(post => post.processing_status === "needs_attention"));
-  assert.equal((await sql`SELECT status FROM receipts WHERE purpose='monitor.recognize'`)[0].status, "failed");
+  assert.equal(saved.events.length, 1); assert.equal(saved.actions.length, 2);
+  assert.ok(saved.posts.filter(post => post.id !== "103").every(post => post.processing_status === "processed"));
+  assert.equal(saved.posts.find(post => post.id === "103")!.processing_status, "failed");
+  assert.equal((await sql`SELECT status FROM receipts WHERE purpose='monitor.recognize'`)[0].status, "completed");
   await processPending(); assert.equal(model.hits() - before, 1);
 }));
 
@@ -172,8 +181,87 @@ test("the observed empty scope is accepted, while nonempty extra facts produce s
   const rejected = await processPending();
   assert.equal(rejected.schemaFailures, 1);
   const saved = (await sourcePost("104"))!;
-  assert.match(saved.review_reason!, /posts\.0\.scope.*unrecognized_keys/);
+  assert.match(saved.review_reason!, /帖子级范围无法归属到动作/);
   assert.doesNotMatch(saved.review_reason!, /confidential|Do not leak/);
+}));
+
+test("JSON-mode metadata cannot discard a connected group's valid and unrelated posts", async () => inMonitor(codex, async () => {
+  await seed(["101", "102", "103", "104"]);
+  await sql`UPDATE monitor_source_posts SET reply_to=${sql.json({ postId: "103", author })} WHERE monitor_id='codex' AND id='104'`;
+  rootType = "json_object";
+  const result = await processPending();
+  assert.equal(result.modelCalls, 1); assert.equal(result.schemaFailures, 0); assert.equal(result.reviewed, 0);
+  const saved = await loadActionInput();
+  assert.equal(saved.events.length, 1); assert.equal(saved.actions.length, 3);
+  assert.ok(saved.posts.every(post => post.processing_status === "processed" && post.title));
+  assert.equal(new Set(saved.posts.map(post => post.model_receipt_id)).size, 1);
+  const before = model.hits(); await processPending(); assert.equal(model.hits(), before);
+}));
+
+test("a confirmation flagged by fact checks is visible and can be corrected on the same action", async () => inMonitor(codex, async () => {
+  await seed(["101"]);
+  const excerpt = "We're giving users reset credits on November 12. Use them anytime.";
+  await sql`UPDATE monitor_source_posts SET text=${excerpt} WHERE monitor_id='codex' AND id='101'`;
+  adjustOutput = (_id, body) => ({ actions: [{ ...body.actions[0]!, kind: "reset_credit", action: "confirm", excerpt, timeExcerpt: null }] });
+  const result = await processPending();
+  assert.equal(result.reviewed, 1);
+  const snapshot = await publicV2Snapshot();
+  const [event] = snapshot.events;
+  assert.equal(event!.status, "completed"); assert.equal(event!.type, "reset_credit");
+  const published = new Date(posts["101"].at).toISOString();
+  assert.deepEqual(event!.time, { kind: "instant", at: published });
+  assert.equal(snapshot.resetTime, published);
+  const [action] = event!.updates;
+  assert.equal(action!.action, "confirm"); assert.equal(action!.sources[0]!.postId, "101");
+  assert.match((await sourcePost("101"))!.review_reason!, /尚未|预期|未来/);
+  const detail = (await monitorPostDetail("101"))!;
+  const command = { version: detail.version, versions: detail.versions, reason: "核对原帖发放日期", completeProcessing: true,
+    actions: { update: [{ id: action!.id, action: "announce", time: { kind: "date", date: "2026-11-12", timeZone: "UTC" }, title: local("Planned reset credits"), summary: null }] } };
+  const preview = (await previewMonitorReview("101", command))!;
+  await submitMonitorReview("101", { ...command, previewToken: preview.previewToken }, "reviewer");
+  const corrected = (await publicV2Snapshot()).events[0]!;
+  assert.equal(corrected.id, event!.id); assert.equal(corrected.updates[0]!.id, action!.id);
+  assert.equal(corrected.updates[0]!.action, "announce"); assert.equal(corrected.status, "announced");
+  assert.equal((await sourcePost("101"))!.processing_status, "processed");
+  const before = model.hits(); await processPending(); assert.equal(model.hits(), before);
+}));
+
+test("recognizable type conflicts and incomplete fields preserve the model action and other posts", async () => inMonitor(codex, async () => {
+  await seed(["101", "104"]);
+  const excerpt = "We have granted users two resets that they can redeem anytime.";
+  await sql`UPDATE monitor_source_posts SET text=${excerpt} WHERE monitor_id='codex' AND id='101'`;
+  await sql`UPDATE monitor_source_posts SET reply_to=${sql.json({ postId: "101", author })} WHERE monitor_id='codex' AND id='104'`;
+  adjustOutput = (id, body) => id === "101" ? { actions: [{ ...body.actions[0]!, action: "confirm", excerpt, title: { zh: "发放重置次数" },
+    rawScope: { ...body.actions[0]!.rawScope, plans: "Pro, Team" }, scope: { ...body.actions[0]!.scope, type: "paid" } }] } : {};
+  const result = await processPending();
+  assert.equal(result.modelCalls, 1); assert.equal(result.schemaFailures, 1); assert.equal(result.failed, 0);
+  assert.equal((await sourcePost("104"))!.processing_status, "processed");
+  const post = (await sourcePost("101"))!;
+  assert.equal(post.processing_status, "needs_attention");
+  assert.match(post.review_reason!, /动作套餐原文无法确认/); assert.match(post.review_reason!, /可兑换的重置次数/);
+  const [event] = (await publicV2Snapshot()).events;
+  assert.equal(event!.type, "direct_reset"); assert.equal(event!.status, "completed");
+  assert.equal(event!.updates[0]!.title.zh, "发放重置次数");
+}));
+
+test("a follow-up without a safe parent is public as progress, without inventing an initial action", async () => inMonitor(codex, async () => {
+  await seed(["101"]);
+  adjustOutput = (_id, body) => ({ actions: [{ ...body.actions[0]!, action: "progress", eventId: "unknown", localEventKey: null }] });
+  await processPending();
+  const [event] = (await publicV2Snapshot()).events;
+  assert.equal(event!.status, "in_progress");
+  assert.deepEqual(event!.updates.map(update => update.action), ["progress"]);
+  adjustOutput = undefined;
+  await seed(["104"]);
+  await sql`UPDATE monitor_source_posts SET reply_to=${sql.json({ postId: "101", author })} WHERE monitor_id='codex' AND id='104'`;
+  await processPending();
+  assert.ok(inputs.at(-1)!.events.some(candidate => candidate.id === event!.id && candidate.status === "in_progress"));
+  const detail = (await monitorPostDetail("101"))!;
+  const command = { version: detail.version, versions: detail.versions, sources: { remove: [{ actionId: event!.updates[0]!.id, postId: "101" }] } };
+  const preview = (await previewMonitorReview("101", command))!;
+  await submitMonitorReview("101", { ...command, previewToken: preview.previewToken }, "reviewer");
+  assert.equal((await publicV2Snapshot()).events.length, 0);
+  assert.equal((await loadActionInput()).standaloneFollowupIds!.size, 0);
 }));
 
 test("an operator can atomically replay a saved answer while preserving its original paid receipt", async () => inMonitor(codex, async () => {
@@ -231,9 +319,12 @@ test("an output cannot alter an existing event absent from the group's supplied 
   await processPending();
   assert.ok(inputs[0]!.events.every(event => event.id !== outputEventId));
   const saved = await loadActionInput();
-  assert.deepEqual(saved.events, baseline.events); assert.deepEqual(saved.actions, baseline.actions);
+  assert.deepEqual(saved.events.filter(event => event.id === outputEventId), [...baseline.events]);
+  assert.deepEqual(saved.actions.filter(action => action.event_id === outputEventId), [...baseline.actions]);
+  assert.equal(saved.events.length, 2);
+  assert.equal(saved.actions.find(action => action.event_id !== outputEventId)!.sources[0]!.postId, "101");
   assert.equal(saved.posts.find(post => post.id === "101")!.processing_status, "needs_attention");
-  assert.equal((await sql`SELECT status FROM receipts WHERE purpose='monitor.recognize'`)[0].status, "failed");
+  assert.equal((await sql`SELECT status FROM receipts WHERE purpose='monitor.recognize'`)[0].status, "completed");
   const before = model.hits(); await processPending(); assert.equal(model.hits(), before);
 }));
 

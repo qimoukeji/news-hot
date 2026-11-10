@@ -188,7 +188,7 @@ test("related explanations, uncertain results and failed recognition are never h
   answers.set(invalid.id, recognition(invalid.text, 0)); invalidOutput = true;
   await inMonitor(definition, () => processPending());
   const failed = (await inMonitor(definition, () => sourcePost(invalid.id)))!;
-  assert.equal(failed.filtered_out, false); assert.equal(failed.processing_status, "needs_attention");
+  assert.equal(failed.filtered_out, false); assert.equal(failed.processing_status, "failed");
 });
 
 for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: reviewable recognition preserves post title and summary without accepting actions`, async () => {
@@ -219,7 +219,7 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: r
   assert.equal(input.events.length, 0); assert.equal(input.actions.length, 0);
 });
 
-test("duplicate scope codes retain recognized post text for review without writing actions", async () => {
+test("duplicate scope codes are normalized without losing the post or its action", async () => {
   const post = await addPost(codex, "We reset monthly usage.");
   const answer = recognition(post.text, 0, [claim(post.text, { scope: { ...scope, quotaWindowCodes: ["monthly", "monthly"] } })]);
   answer.title = local("Monthly usage update"); answer.summary = local("A monthly reset was reported, but its scope needs review.");
@@ -227,10 +227,11 @@ test("duplicate scope codes retain recognized post text for review without writi
   const before = model.hits();
   await inMonitor(codex, () => processPending());
   const saved = (await inMonitor(codex, () => sourcePost(post.id)))!;
-  assert.equal(saved.processing_status, "needs_attention"); assert.match(saved.review_reason!, /重复的目录代码/);
+  assert.equal(saved.processing_status, "processed"); assert.equal(saved.review_reason, null);
   assert.deepEqual(saved.title, answer.title); assert.deepEqual(saved.summary, answer.summary);
   const input = await inMonitor(codex, () => loadActionInput());
-  assert.equal(input.events.length, 0); assert.equal(input.actions.length, 0);
+  assert.equal(input.events.length, 1); assert.equal(input.actions.length, 1);
+  assert.deepEqual(input.events[0]!.scope!.quotaWindowCodes, ["monthly"]);
   const [receipt] = await sql`SELECT status FROM receipts WHERE id=${saved.model_receipt_id}`;
   assert.equal(receipt!.status, "completed"); assert.equal(model.hits() - before, 1);
 });
@@ -437,13 +438,13 @@ test("an already in-flight receipt leaves the post pending and reuses its origin
   assert.equal(model.hits() - before, 1);
 });
 
-test("invalid model schema is rejected with review state in the same recovery path", async () => {
+test("an unreadable model envelope marks the post and receipt failed without replacing existing copy", async () => {
   const post = await addPost(codex, "We reset usage."); invalidOutput = true;
   const title = local("Existing title"), summary = local("Existing summary");
   await sql`UPDATE monitor_source_posts SET title=${sql.json(title)},summary=${sql.json(summary)} WHERE monitor_id='codex' AND id=${post.id}`;
-  assert.equal((await inMonitor(codex, () => processPending())).processed, 1);
+  assert.equal((await inMonitor(codex, () => processPending())).failed, 1);
   const saved = (await inMonitor(codex, () => sourcePost(post.id)))!;
-  assert.equal(saved.processing_status, "needs_attention");
+  assert.equal(saved.processing_status, "failed");
   assert.deepEqual(saved.title, title); assert.deepEqual(saved.summary, summary);
   const [receipt] = await sql`SELECT status FROM receipts WHERE id=${saved.model_receipt_id}`;
   assert.equal(receipt!.status, "failed");
@@ -624,6 +625,20 @@ test("pending editorial translation never blocks a completed collection checkpoi
   const [unchanged] = await sql`SELECT value FROM monitor_state WHERE monitor_id='grok' AND key=${checkpointKey}`;
   assert.deepEqual(unchanged!.value, advanced!.value);
 });
+
+test("a settled model format failure does not stall another post's event or the next collection window", async () => inMonitor(grok, async () => {
+  mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T13:00:00Z") });
+  await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES('grok',${cursorKey()},${sql.json({ checkpointVersion: 2, scannedThrough: "2026-10-23T11:00:00Z" })})`;
+  answers.set("900101", recognition("We reset usage.", 0));
+  const result = await monitorTick();
+  assert.ok("pending" in result && result.pending === 0 && result.failed === 1 && result.outcome === "needs_review");
+  const saved = await loadActionInput();
+  assert.equal(saved.posts.find(post => post.id === "900201")!.processing_status, "failed");
+  assert.equal(saved.posts.find(post => post.id === "900101")!.processing_status, "processed");
+  assert.equal((await publicV2Snapshot()).events.length, 1);
+  const [checkpoint] = await sql`SELECT value FROM monitor_state WHERE monitor_id='grok' AND key=${cursorKey()}`;
+  assert.equal(checkpoint!.value.scannedThrough, "2026-10-23T13:00:00.000Z");
+}));
 
 test("a preflight model budget refusal stays pending and resumes after the window resets", async () => {
   mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T13:00:00Z") });
