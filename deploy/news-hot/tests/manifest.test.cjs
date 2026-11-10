@@ -2,8 +2,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
-const { create, migrations, verify, plan } = require('../manifest.cjs');
+const { create, migrations, verify, plan, imageConfigId } = require('../manifest.cjs');
 
 const oldSha = '1'.repeat(40);
 const newSha = '2'.repeat(40);
@@ -115,4 +116,125 @@ test('business time conversion requires its cutoff and ignores other modules wit
   fs.rmSync(path.join(f.source, 'modules/other/migrations/0152_monitor_actions_drop_scalar_time.sql'));
   f.sql('0152_monitor_actions_drop_scalar_time.sql', 'SELECT 1;', 'reset-monitor');
   assert.throws(() => plan(f.manifest(newSha), previous, ['0001_base.sql'], oldSha), /requires the 0146 cutoff/);
+});
+
+const appTag = 'news-hot:' + newSha;
+const configDigest = 'a'.repeat(64);
+const otherDigest = 'b'.repeat(64);
+function savedImage(tag = appTag, config = configDigest + '.json') {
+  return { Config: config, RepoTags: [tag], Layers: [] };
+}
+function configCli(input, tag = appTag) {
+  return spawnSync(process.execPath, [path.join(__dirname, '../manifest.cjs'), 'image-config-id', tag], {
+    input, encoding: 'utf8', timeout: 10000,
+  });
+}
+
+test('image config ID comes from classic and OCI archive Config paths, not an index digest', () => {
+  for (const config of [configDigest + '.json', 'blobs/sha256/' + configDigest]) {
+    const image = { ...savedImage(appTag, config), Id: 'sha256:' + otherDigest };
+    assert.equal(imageConfigId([image], appTag), 'sha256:' + configDigest);
+  }
+});
+
+test('image config lookup normalizes docker.io/library tags in either direction', () => {
+  for (const tag of [appTag, 'postgres:18-alpine']) {
+    for (const archiveTag of [tag, 'docker.io/library/' + tag]) {
+      for (const requestedTag of [tag, 'docker.io/library/' + tag]) {
+        assert.equal(imageConfigId([savedImage(archiveTag)], requestedTag), 'sha256:' + configDigest);
+      }
+    }
+  }
+});
+
+test('multi-image archive selects only the requested tag and allows other aliases', () => {
+  const manifest = [
+    savedImage('postgres:18-alpine', otherDigest + '.json'),
+    { ...savedImage(), RepoTags: ['news-hot:latest', appTag] },
+    savedImage('news-hot:previous', 'blobs/sha256/' + otherDigest),
+  ];
+  assert.equal(imageConfigId(manifest, appTag), 'sha256:' + configDigest);
+  assert.equal(imageConfigId(manifest, 'postgres:18-alpine'), 'sha256:' + otherDigest);
+});
+
+test('image config lookup rejects missing targets and does not alias other registries', () => {
+  for (const manifest of [
+    [],
+    [savedImage('news-hot:latest')],
+    [savedImage('registry.example/library/' + appTag)],
+    [savedImage('docker.io/another/' + appTag)],
+    [{ Config: configDigest + '.json', RepoTags: null, Layers: [] }],
+  ]) assert.throws(() => imageConfigId(manifest, appTag), JSON.stringify(manifest));
+});
+
+test('image config lookup rejects duplicate target tags even when config IDs agree', () => {
+  for (const manifest of [
+    [savedImage(), savedImage()],
+    [savedImage(), savedImage(appTag, otherDigest + '.json')],
+    [savedImage(), savedImage('docker.io/library/' + appTag)],
+    [{ ...savedImage(), RepoTags: [appTag, appTag] }],
+    [{ ...savedImage(), RepoTags: [appTag, 'docker.io/library/' + appTag] }],
+  ]) assert.throws(() => imageConfigId(manifest, appTag), JSON.stringify(manifest));
+});
+
+test('image config lookup rejects non-config digests, unsafe paths and malformed config fields', () => {
+  for (const config of [
+    undefined, null, 123, {}, [], [configDigest + '.json'], '',
+    'sha256:' + configDigest,
+    configDigest.slice(1) + '.json',
+    'g'.repeat(64) + '.json',
+    configDigest + '.json/extra',
+    '../' + configDigest + '.json',
+    '/' + configDigest + '.json',
+    'C:\\' + configDigest + '.json',
+    'blobs/sha512/' + configDigest,
+    'blobs/sha256/../' + configDigest,
+    'blobs/sha256/' + configDigest + '.json',
+  ]) {
+    assert.throws(() => imageConfigId([{ ...savedImage(), Config: config }], appTag), JSON.stringify(config));
+  }
+});
+
+test('image config lookup rejects malformed manifests, tags and OCI index-only input', () => {
+  for (const manifest of [
+    undefined, null, true, 'manifest.json', {},
+    { schemaVersion: 2, manifests: [{ digest: 'sha256:' + otherDigest }] },
+    [null], [42],
+    [{ ...savedImage(), RepoTags: appTag }],
+    [{ ...savedImage(), RepoTags: [123] }],
+  ]) assert.throws(() => imageConfigId(manifest, appTag));
+  for (const tag of [undefined, null, 123, {}, '', ' ']) {
+    assert.throws(() => imageConfigId([savedImage()], tag));
+  }
+});
+
+test('image-config-id CLI reads stdin and outputs only the config ID for both archive formats', () => {
+  for (const config of [configDigest + '.json', 'blobs/sha256/' + configDigest]) {
+    const result = configCli(JSON.stringify([
+      savedImage('postgres:18-alpine', otherDigest + '.json'),
+      savedImage('docker.io/library/' + appTag, config),
+    ]));
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'sha256:' + configDigest + '\n');
+    assert.equal(result.stderr, '');
+  }
+});
+
+test('image-config-id CLI fails without emitting an ID for invalid or ambiguous stdin', () => {
+  for (const input of [
+    '', '{', 'null', '{}',
+    JSON.stringify([savedImage('news-hot:missing')]),
+    JSON.stringify([savedImage(), savedImage('docker.io/library/' + appTag)]),
+    JSON.stringify([{ ...savedImage(), RepoTags: [appTag, appTag] }]),
+    JSON.stringify([savedImage(appTag, '../' + configDigest + '.json')]),
+    JSON.stringify([{ ...savedImage(), Config: [configDigest + '.json'] }]),
+    JSON.stringify({ schemaVersion: 2, manifests: [{ digest: 'sha256:' + otherDigest }] }),
+  ]) {
+    const result = configCli(input);
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0, input);
+    assert.equal(result.stdout, '', input);
+    assert.notEqual(result.stderr.trim(), '', input);
+  }
 });

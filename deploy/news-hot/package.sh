@@ -16,7 +16,7 @@ docker build --build-arg "APP_BASE=news-hot-base:$sha" -f deploy/news-hot/Docker
 docker pull postgres:18-alpine
 docker save "news-hot:$sha" | gzip > "$bundle/app-image.tar.gz"
 docker save postgres:18-alpine | gzip > "$bundle/db-image.tar.gz"
-node deploy/news-hot/manifest.cjs create "$sha" "$bundle" "$PWD" \
-  "$(docker image inspect --format '{{.Id}}' "news-hot:$sha")" \
-  "$(docker image inspect --format '{{.Id}}' postgres:18-alpine)"
+app_id=$(gzip -dc "$bundle/app-image.tar.gz" | tar -xOf - manifest.json | node deploy/news-hot/manifest.cjs image-config-id "news-hot:$sha")
+db_id=$(gzip -dc "$bundle/db-image.tar.gz" | tar -xOf - manifest.json | node deploy/news-hot/manifest.cjs image-config-id postgres:18-alpine)
+node deploy/news-hot/manifest.cjs create "$sha" "$bundle" "$PWD" "$app_id" "$db_id"
 node deploy/news-hot/manifest.cjs verify "$sha" "$bundle" "$PWD"

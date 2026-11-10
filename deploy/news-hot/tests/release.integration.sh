@@ -5,6 +5,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 tool=$here/../manifest.cjs
 release_script=$here/../release.sh
+package_script=$here/../package.sh
 temp=$(mktemp -d)
 trap 'rm -rf "$temp"' EXIT
 old_sha=$(printf '1%.0s' {1..40})
@@ -77,6 +78,11 @@ fixture() {
 set -euo pipefail
 printf '%s %s\n' "${RELEASE_SHA:-unset}" "$*" >> "$TEST_LOG"
 if [[ $1 == load ]]; then cat >/dev/null; exit 0; fi
+if [[ $1 == build || $1 == pull ]]; then exit 0; fi
+if [[ $1 == save ]]; then
+  if [[ $2 == news-hot:* ]]; then cat "$TEST_APP_ARCHIVE"; else cat "$TEST_DB_ARCHIVE"; fi
+  exit 0
+fi
 if [[ $1 == image ]]; then printf '%s\n' "$TEST_APP_ID"; exit 0; fi
 if [[ $1 == run ]]; then tar -czf - -T /dev/null; exit 0; fi
 [[ $1 == compose ]] || exit 90
@@ -162,6 +168,45 @@ approval() {
   node "$tool" get "$root/prepare.json" approvalDigest
 }
 
+package_fixture() (
+  mode=$1
+  fixture "package_$mode"
+  cp "$tool" "$source/deploy/news-hot/manifest.cjs"
+  git -C "$source" add .
+  git -C "$source" -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm package
+  sha=$(git -C "$source" rev-parse HEAD)
+  mkdir -p "$root/app/blobs/sha256" "$root/db"
+  app_config=$(printf 'app-config' | sha256sum | cut -d' ' -f1)
+  db_config=$(printf 'db-config' | sha256sum | cut -d' ' -f1)
+  printf 'app-config' > "$root/app/blobs/sha256/$app_config"
+  head -c 262144 /dev/zero > "$root/app/layer.tar"
+  printf 'db-config' > "$root/db/$db_config.json"
+  app_tag="docker.io/library/news-hot:$sha"
+  if [[ $mode == missing_tag ]]; then app_tag=news-hot:wrong; fi
+  printf '[{"Config":"blobs/sha256/%s","RepoTags":["%s"]}' "$app_config" "$app_tag" > "$root/app/manifest.json"
+  if [[ $mode == duplicate_tag ]]; then printf ',{"Config":"blobs/sha256/%s","RepoTags":["%s"]}' "$app_config" "$app_tag" >> "$root/app/manifest.json"; fi
+  printf ']\n' >> "$root/app/manifest.json"
+  printf '[{"Config":"%s.json","RepoTags":["postgres:18-alpine"]}]\n' "$db_config" > "$root/db/manifest.json"
+  tar -cf "$root/app.tar" -C "$root/app" manifest.json "blobs/sha256/$app_config" layer.tar
+  tar -cf "$root/db.tar" -C "$root/db" manifest.json "$db_config.json"
+  export TEST_APP_ARCHIVE=$root/app.tar TEST_DB_ARCHIVE=$root/db.tar TEST_APP_ID=sha256:$(printf 'f%.0s' {1..64})
+  cd "$source"
+  if [[ $mode == config_identity ]]; then
+    bash "$package_script" "$sha" "$root/packaged" > "$root/output" 2>&1 || die 'package failed'
+    [[ $(node "$tool" get "$root/packaged/release.json" appId) == "sha256:$app_config" ]] || die 'package used OCI index instead of app config'
+    [[ $(node "$tool" get "$root/packaged/release.json" dbId) == "sha256:$db_config" ]] || die 'package lost classic DB config'
+  else
+    if bash "$package_script" "$sha" "$root/packaged" > "$root/output" 2>&1; then die 'invalid image manifest packaged successfully'; fi
+    [[ ! -e $root/packaged/release.json ]] || die 'invalid image manifest produced a release manifest'
+  fi
+  ! grep -q ' image inspect ' "$log" || die 'package inferred identity from Docker image store'
+)
+for package_mode in config_identity missing_tag duplicate_tag; do
+  package_fixture "$package_mode"
+  case_name=package_$package_mode
+  ok
+done
+
 fixture missing_approval
 candidate migration
 expect_failure
@@ -246,6 +291,15 @@ printf 'tamper' >> "$bundle/app-image.tar.gz"
 expect_failure
 assert_no_stop
 assert_current "$old_sha"
+ok
+
+fixture loaded_image_identity_mismatch
+candidate
+export TEST_APP_ID=sha256:$(printf 'f%.0s' {1..64})
+expect_failure
+assert_no_stop
+assert_current "$old_sha"
+grep -q 'Loaded image identity mismatch' "$root/output" || die 'loaded image identity check was bypassed'
 ok
 
 history_candidate() {

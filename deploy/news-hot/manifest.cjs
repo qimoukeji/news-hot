@@ -24,6 +24,18 @@ function migrations(root) {
   assert(new Set(result.map(row => row.name)).size === result.length, 'Duplicate migration filenames');
   return result;
 }
+function imageConfigId(archiveManifest, tag) {
+  assert(Array.isArray(archiveManifest), 'Expected an image archive manifest');
+  assert(typeof tag === 'string' && tag.length > 0, 'Expected an image tag');
+  const normalize = value => value.replace(/^docker\.io\/(?:library\/)?/, '');
+  const images = archiveManifest.flatMap(image => image && Array.isArray(image.RepoTags)
+    ? image.RepoTags.filter(value => typeof value === 'string' && normalize(value) === normalize(tag)).map(() => image) : []);
+  assert(images.length === 1, 'Expected exactly one archived image for tag: ' + tag);
+  assert(typeof images[0].Config === 'string', 'Invalid archived image config path');
+  const match = /^(?:blobs\/sha256\/([a-f0-9]{64})|([a-f0-9]{64})\.json)$/.exec(images[0].Config);
+  assert(match, 'Invalid archived image config path');
+  return 'sha256:' + (match[1] || match[2]);
+}
 function create(sha, bundle, root, appId, dbId) {
   assert(shaPattern.test(sha), 'Expected a full commit SHA');
   assert(/^sha256:[a-f0-9]{64}$/.test(appId) && /^sha256:[a-f0-9]{64}$/.test(dbId), 'Expected image content IDs');
@@ -75,11 +87,12 @@ function plan(candidate, previous, applied, currentSha) {
   const state = { sha: candidate.sha, currentSha, manifestHash: hash(JSON.stringify(candidate)), applied: appliedNames, pending, needsBusinessTimeUpgrade };
   return Object.assign(state, { approvalDigest: hash(JSON.stringify(state)), needsMigration: pending.length > 0 });
 }
-module.exports = { hash, migrations, create, validate, verify, plan };
+module.exports = { hash, migrations, imageConfigId, create, validate, verify, plan };
 if (require.main === module) {
   try {
     const [command, ...args] = process.argv.slice(2);
-    if (command === 'create') create(...args);
+    if (command === 'image-config-id') console.log(imageConfigId(JSON.parse(fs.readFileSync(0, 'utf8')), args[0]));
+    else if (command === 'create') create(...args);
     else if (command === 'verify') verify(...args);
     else if (command === 'plan') {
       const [candidate, previous, ledger, currentSha] = args;

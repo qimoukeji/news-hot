@@ -104,3 +104,5 @@ for script in deploy/news-hot/*.sh; do bash -n "$script" || exit; done
 ```
 
 仓库业务代码仍须通过根目录 AGENTS.md 要求的完整检查。`package.sh` 必须运行在目标 SHA 的 checkout，输出目录在源码之外；它不接受工作区内容冒充已提交的发布。
+
+发布清单中的 appId、dbId 从对应 docker save 归档的 manifest.json 提取目标镜像的配置摘要，不使用 CI 的 docker inspect Id。containerd image store 可将后者返回为含证明信息的 OCI 索引摘要，而服务器 Docker 26 加载同一归档后返回配置摘要。打包只接受唯一目标标签及合法配置路径；目标缺失、重复或路径非法立即失败。归档 checksum、加载后的镜像 ID 比对以及现有发布审批与恢复流程保持有效。
