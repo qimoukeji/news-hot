@@ -89,16 +89,17 @@ async function snapshot(db: Db, definitions: readonly ResetMonitorBackendDefinit
 
 export async function inventoryScopeCutover(db: Db, definitions: readonly ResetMonitorBackendDefinition[]) {
   const state = await snapshot(db, definitions);
-  const events = state.monitors.flatMap(({ definition, input }) => input.events.filter(requiresReview).map(row => ({
+  const events = state.monitors.flatMap(({ definition, input }) => input.events.filter(row => Object.keys(legacyFields(row)).length).map(row => ({
     monitorId: definition.monitorId, eventId: row.id, legacy: legacyFields(row), title: row.title, summary: row.summary,
-    scope: { type: row.scope!.type, note: row.scope!.note },
+    scope: { type: row.scope!.type, note: row.scope!.note }, reviewRequired: requiresReview(row),
     actions: input.actions.filter(action => action.event_id === row.id).map(action => ({ id: action.id, title: action.title,
       summary: action.summary, urls: action.sources.flatMap(({ postId }) => input.posts.find(post => post.id === postId)?.url ?? []) })),
   })));
-  return { fingerprint: state.fingerprint, fieldsToRemove: state.monitors.flatMap(({ input }) => input.events).filter(row => Object.keys(legacyFields(row)).length).length,
+  return { fingerprint: state.fingerprint, fieldsToRemove: events.length,
     pendingRecognition: state.pending, deliveries: state.deliveries, enabledSubscriptions: state.subscriptions, unconfigured: state.unconfigured,
     unpublishedEvents: state.unpublished,
-    events, reviewTemplate: { fingerprint: state.fingerprint, events: events.map(({ monitorId, eventId }) => ({ monitorId, eventId, reviewed: false })) } };
+    events, reviewTemplate: { fingerprint: state.fingerprint, events: events.filter(row => row.reviewRequired)
+      .map(({ monitorId, eventId }) => ({ monitorId, eventId, reviewed: false })) } };
 }
 
 /** One stopped-writer transaction. Callers must verify the backup before entering it. */
@@ -113,8 +114,11 @@ export async function executeScopeCutover(db: Db, definitions: readonly ResetMon
     throw new Error("Resolve outstanding recognition, deliveries, unpublished changes and unconfigured events before switching contracts");
   }
   const reviewed = new Map(review.events.map(row => [recordKey(row.monitorId, row.eventId), row]));
+  const eligible = new Set(state.monitors.flatMap(({ definition, input }) => input.events.filter(row => Object.keys(legacyFields(row)).length)
+    .map(row => recordKey(definition.monitorId, row.id))));
   const required = state.monitors.flatMap(({ definition, input }) => input.events.filter(requiresReview).map(row => recordKey(definition.monitorId, row.id)));
-  if (reviewed.size !== review.events.length || reviewed.size !== required.length || required.some(key => !reviewed.has(key))) {
+  if (reviewed.size !== review.events.length || review.events.some(row => !eligible.has(recordKey(row.monitorId, row.eventId)))
+    || required.some(key => !reviewed.has(key))) {
     throw new Error("Each event with retired scope facts requires exactly one reviewed entry");
   }
   let events = 0, actions = 0;
@@ -134,7 +138,7 @@ export async function executeScopeCutover(db: Db, definitions: readonly ResetMon
       const corrections = entry?.actions ?? [];
       const sourcedActions = eventActions.filter(action => action.sources.length > 0);
       const eligibilityActions = sourcedActions.length ? sourcedActions : eventActions.filter(action => action.action === "confirm");
-      if (entry && !eligibilityActions.some(action => localizedTextSchema.safeParse(
+      if (entry && requiresReview(row) && !eligibilityActions.some(action => localizedTextSchema.safeParse(
         corrections.find(correction => correction.id === action.id)?.summary ?? action.summary).success)) {
         throw new Error(`Reviewed event ${row.id} still has no complete action summary preserving the scope facts`);
       }
@@ -184,7 +188,7 @@ async function main() {
       if (values["worker-stopped"] || values["database-backup"] || values["verification-database-env"]) throw new Error("Apply options cannot be used with a read-only inventory");
       const inventory = await sql.begin("isolation level repeatable read read only", db => inventoryScopeCutover(db, RESET_MONITOR_BACKENDS));
       await writeFile(values.inventory, JSON.stringify(inventory, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-      console.log(JSON.stringify({ eventsToReview: inventory.events.length, fieldsToRemove: inventory.fieldsToRemove,
+      console.log(JSON.stringify({ eventsToReview: inventory.reviewTemplate.events.length, fieldsToRemove: inventory.fieldsToRemove,
         pendingRecognition: inventory.pendingRecognition.length, outstandingDeliveries: inventory.deliveries.filter(row => row.status !== "failed").length,
         unpublishedEvents: inventory.unpublishedEvents.length }));
       return;

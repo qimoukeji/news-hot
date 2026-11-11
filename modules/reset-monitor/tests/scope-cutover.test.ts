@@ -133,7 +133,8 @@ test("empty retired arrays need no invented summary and unknown never retains th
   await saveOldFingerprint();
   const inventory = await overview();
   assert.equal(inventory.fieldsToRemove, 1);
-  assert.deepEqual(inventory.events, []);
+  assert.deepEqual(inventory.reviewTemplate.events, []);
+  assert.equal(inventory.events[0]!.reviewRequired, false);
   assert.deepEqual(await apply({ fingerprint: inventory.fingerprint, events: [] }), { events: 1, actions: 0 });
   const input = await inMonitor(codex, () => loadActionInput());
   assert.equal(input.events[0]!.scope?.type, "unknown");
@@ -143,6 +144,19 @@ test("empty retired arrays need no invented summary and unknown never retains th
   const [baseline] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key=${`webhook:event:${event}`}`;
   assert.equal(baseline!.value.revision, 4);
   assert.equal((await sql`SELECT id FROM monitor_webhook_notifications`).length, 0);
+});
+
+test("reviewed empty-code records can correct an audience or add a sourced summary", async () => {
+  await sql`UPDATE monitor_event_records SET scope=${sql.json({ type: "all_users", note: properName("All users"),
+    productCodes: [], planCodes: [], quotaWindowCodes: [] })}`;
+  await saveOldFingerprint();
+  const inventory = await overview();
+  assert.equal(inventory.events[0]!.reviewRequired, false);
+  assert.deepEqual(await apply({ fingerprint: inventory.fingerprint, events: [{ monitorId: "codex", eventId: event,
+    reviewed: true, scope: { type: "unknown", note: null }, actions: [{ id: "legacy-confirm", summary }] }] }), { events: 1, actions: 1 });
+  const input = await inMonitor(codex, () => loadActionInput());
+  assert.deepEqual(input.events[0]!.scope, { type: "unknown", note: null });
+  assert.deepEqual(input.actions[0]!.summary, summary);
 });
 
 test("an unpublished business change blocks rebasing rather than swallowing its notification", async () => {
