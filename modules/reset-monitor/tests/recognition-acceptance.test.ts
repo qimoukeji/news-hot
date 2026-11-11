@@ -21,8 +21,8 @@ function response(excerpt: string): ActionRecognitionBody {
   return { relevant: true, needsReview: false, title: localized("Quota update"), summary: localized("A quota action"), actions: [{
     eventId: null, localEventKey: "initial", existingActionId: null, kind: "direct_reset", kindExplicit: true,
     action: "confirm", invalidatesEvent: false, real: true, role: "action", excerpt, title: localized("Usage reset"), summary: null,
-    timeExcerpt: null, rawScope: { audienceSource: null, audienceZh: null, plans: null, productsZh: null },
-    scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: localized("All users") }, scopeExcerpt: null,
+    timeExcerpt: null,
+    scope: { type: "unknown", note: null }, scopeExcerpt: null,
   }] };
 }
 async function post(definition: typeof codex, text: string, quotedPost?: Parameters<typeof storeCollectedPost>[0]["quotedPost"]) {
@@ -68,8 +68,7 @@ for (const definition of definitions) {
     assert.equal((await publicV2Snapshot()).events[0]!.status, "completed");
     const input = await loadActionInput();
     assert.deepEqual(input.actions[0]!.time, bt(at));
-    assert.equal(input.events[0]!.scope!.note!.en, "All users");
-    assert.equal(input.events[0]!.scope!.note!.zh, "所有用户");
+    assert.deepEqual(input.events[0]!.scope, { type: "unknown", note: null });
   }));
 
   test(`${definition.monitorId}: a valid action survives another fact requiring review and is not retried`, async () => inMonitor(definition, async () => {
@@ -94,7 +93,6 @@ for (const definition of definitions) {
   test(`${definition.monitorId}: verified quotation supplies a unique event and unchanged scope for Done`, async () => inMonitor(definition, async () => {
     const original = "We will reset usage for all paid users.", initial = response(original);
     initial.actions[0]!.action = "announce";
-    initial.actions[0]!.rawScope = { audienceSource: "all paid users", audienceZh: "付费用户", productsZh: null, plans: null };
     initial.actions[0]!.scope.type = "paid_users";
     initial.actions[0]!.scope.note = localized("Paid users");
     initial.actions[0]!.scopeExcerpt = "all paid users";
@@ -113,23 +111,25 @@ for (const definition of definitions) {
     assert.equal((await sourcePost(child.id))!.processing_status, "processed");
   }));
 
-  test(`${definition.monitorId}: unsupported product mapping retains the action and literal restrictions`, async () => inMonitor(definition, async () => {
-    const text = "We reset usage for all paid users of Unlisted Studio.", saved = await post(definition, text), answer = response(text), claim = answer.actions[0]!;
-    claim.rawScope = { audienceSource: "all paid users", audienceZh: "付费用户", productsZh: "Unlisted Studio", plans: null };
-    claim.scope.type = "paid_users";
-    claim.scope.productCodes = ["unlisted-studio"];
-    claim.scope.note = { ...localized("Paid users"), zh: "付费用户" };
-    claim.scopeExcerpt = text;
+  test(`${definition.monitorId}: new product, plan and quota window need no configuration`, async () => inMonitor(definition, async () => {
+    const text = "We reset the rolling 36-hour quota in Aurora Desk for Campus Pilot users, except trial seats.";
+    const saved = await post(definition, text), answer = response(text), claim = answer.actions[0]!;
+    claim.scope = { type: "selected_users", note: localized("Eligible users") };
+    claim.scopeExcerpt = "Campus Pilot users, except trial seats";
+    claim.summary = { ...localized("Aurora Desk's rolling 36-hour quota was reset for Campus Pilot users, except trial seats."),
+      zh: "Aurora Desk 的滚动 36 小时额度已为 Campus Pilot 用户重置，试用席位除外。" };
     await applyOfflineRecognition(saved.id, answer, saved.version);
+    const stored = await loadActionInput();
+    assert.deepEqual(stored.events[0]!.summary, claim.summary);
     const event = (await publicV2Snapshot()).events[0]!;
     assert.equal(event.status, "completed");
-    assert.equal(event.scope.type, "paid_users");
-    assert.deepEqual(event.scope.productCodes, []);
-    assert.equal(event.scope.note!.zh, "付费用户");
+    assert.deepEqual(event.scope, claim.scope);
+    assert.deepEqual(event.updates[0]!.summary, claim.summary);
     assert.equal(event.summary, null, "event overview is pending");
-    assert.match(event.updates[0]!.summary!.zh, /Unlisted Studio/);
     assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
+    assert.equal((await sourcePost(saved.id))!.text, text);
   }));
+
 }
 
 for (const [expression, expected, confirmedAt] of [
@@ -165,28 +165,63 @@ for (const [expression, expected, confirmedAt] of [
     assert.deepEqual(completed.updates.find(update => update.id === action.id)!.time, bt(expected));
 }));
 
-test("unknown audience and hourly coverage do not become all-users evidence or a five-hour quota", async () => inMonitor(codex, async () => {
-  const text = "We reset weekly and hourly usage.", saved = await post(codex, text), answer = response(text), claim = answer.actions[0]!;
-  claim.scope.quotaWindowCodes = ["weekly", "five-hour", "hourly"];
-  claim.scopeExcerpt = text;
+test("a weekly reset and a five-hour cap increase remain distinct facts", async () => inMonitor(codex, async () => {
+  const reset = "We reset weekly usage.", text = reset + " We also raised the five-hour cap.";
+  const saved = await post(codex, text), answer = response(reset), claim = answer.actions[0]!;
+  claim.summary = { ...localized("Weekly usage was reset; the five-hour cap was raised."), zh: "每周额度已重置，五小时上限已提高。" };
+  answer.actions.push({ ...claim, real: false, role: "explanation", localEventKey: "limit-change",
+    excerpt: "We also raised the five-hour cap.", summary: localized("The five-hour cap was raised.") });
   await applyOfflineRecognition(saved.id, answer, saved.version);
-  const event = (await publicV2Snapshot()).events[0]!;
-  assert.equal(event.scope.type, "unknown");
-  assert.equal(event.scope.note!.zh, "所有用户");
-  assert.deepEqual(event.scope.quotaWindowCodes, ["weekly"]);
+  const [event, ...extra] = (await publicV2Snapshot()).events;
+  assert.equal(extra.length, 0);
+  assert.deepEqual(event!.updates.map(update => [update.action, update.summary]), [["confirm", claim.summary]]);
+  assert.deepEqual(event!.time, bt(at), "the five-hour window is not a time of issuance");
+  assert.equal(event!.scope.type, "unknown");
   assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
 }));
 
-test("audience-only scope evidence cannot hide a quota cycle explicitly named by the same action", async () => inMonitor(codex, async () => {
-  const text = "We reset weekly usage for all paid users.", saved = await post(codex, text), answer = response(text), claim = answer.actions[0]!;
-  claim.rawScope.audienceSource = "all paid users";
-  claim.rawScope.audienceZh = "付费用户";
-  claim.scope.type = "paid_users";
-  claim.scope.quotaWindowCodes = ["weekly"];
+test("supplemental sources keep accepted facts; a sourced amendment changes the audience", async () => inMonitor(codex, async () => {
+  const text = "We reset usage for all paid users.", initial = response(text), first = await post(codex, text);
+  const claim = initial.actions[0]!;
+  claim.scope = { type: "paid_users", note: localized("Paid users") };
   claim.scopeExcerpt = "all paid users";
-  await applyOfflineRecognition(saved.id, answer, saved.version);
-  assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
-  assert.deepEqual((await publicV2Snapshot()).events[0]!.scope.quotaWindowCodes, ["weekly"]);
+  claim.summary = localized("Usage was reset for all paid users.");
+  const [eventId] = (await applyOfflineRecognition(first.id, initial, first.version)).eventIds;
+  const [prior] = (await loadActionInput()).actions;
+
+  const repeatText = "We reset usage. Free users are eligible for a different program.";
+  const repeat = await post(codex, repeatText), repeated = response("We reset usage.");
+  Object.assign(repeated.actions[0]!, {
+    eventId, localEventKey: null, existingActionId: prior!.id,
+    scope: { type: "all_users", note: localized("All users") },
+    scopeExcerpt: "Free users are eligible for a different program",
+    summary: localized("Everyone got a reset."),
+  });
+  assert.deepEqual((await applyOfflineRecognition(repeat.id, repeated, repeat.version)).eventIds, [eventId]);
+  const afterRepeat = await loadActionInput();
+  assert.equal(afterRepeat.events.length, 1);
+  assert.deepEqual(afterRepeat.events[0]!.scope, claim.scope);
+  assert.equal(afterRepeat.actions.length, 1);
+  assert.equal(afterRepeat.actions[0]!.id, prior!.id);
+  assert.deepEqual(afterRepeat.actions[0]!.summary, claim.summary);
+  assert.deepEqual(new Set(afterRepeat.actions[0]!.sources.map(source => source.postId)), new Set([first.id, repeat.id]));
+
+  const correction = "Correction: the usage reset was only for affected paid users.";
+  const changed = await post(codex, correction), revised = response(correction);
+  const amendment = revised.actions[0]!;
+  Object.assign(amendment, {
+    eventId, localEventKey: null, action: "amend",
+    scope: { type: "selected_users", note: localized("Affected users") },
+    scopeExcerpt: "only for affected paid users", summary: localized("Only affected paid users received the reset."),
+  });
+  assert.deepEqual((await applyOfflineRecognition(changed.id, revised, changed.version)).eventIds, [eventId]);
+  const afterAmendment = await loadActionInput();
+  assert.deepEqual(afterAmendment.events[0]!.scope, amendment.scope);
+  const added = afterAmendment.actions.find(action => action.id !== prior!.id)!;
+  assert.equal(added.action, "amend");
+  assert.deepEqual(added.sources, [{ postId: changed.id }]);
+  assert.deepEqual(added.summary, amendment.summary);
+  assert.equal((await publicV2Snapshot()).events[0]!.status, "completed");
 }));
 
 test("a partially accepted paid response completes its receipt in the same transaction", async () => inMonitor(codex, async () => {

@@ -16,7 +16,7 @@ export interface ContextInput {
 }
 export interface OpenEventInput {
   id: string; kind: ResetMonitorEventKind; status: EventStatus; publishedAt: string; author?: string;
-  title: string; summary: string | null; time: PublicTime; scope: string | null;
+  title: string; summary: string | null; time: PublicTime; scope: { type: z.infer<typeof scopeSchema.shape.type>; note: string | null };
   actions: Array<{ id: string; action: string; invalidatesEvent: boolean; sequence: number; title: string; summary: string | null }>;
   sourcePostIds: string[];
 }
@@ -29,17 +29,13 @@ export interface Proposition {
   eventId: string | null;
   excerpt: string;
   timeExcerpt: string | null;
-  scope: { audienceSource: string | null; plans: string[] | null; audienceZh: string | null; productsZh: string | null };
 }
-const rawScopeSchema = z.strictObject({ audienceSource: z.string().nullable(), plans: z.array(z.string()).nullable(), audienceZh: z.string().nullable(), productsZh: z.string().nullable() });
-
-
 
 export const actionTextSchema = z.strictObject({
   en: z.string().trim().min(1), zh: z.string().trim().min(1), "zh-Hant": z.string().trim().min(1),
   ja: z.string().trim().min(1), ko: z.string().trim().min(1), ru: z.string().trim().min(1), es: z.string().trim().min(1),
 });
-const claimScopeSchema = scopeSchema.extend({ note: actionTextSchema.nullable() });
+const claimScopeSchema = z.strictObject({ type: scopeSchema.shape.type, note: actionTextSchema.nullable() });
 const claimSchema = z.strictObject({
   eventId: z.string().nullable(), localEventKey: z.string().nullable(), existingActionId: z.string().nullable(),
   kind: z.enum(["direct_reset", "reset_credit", "bonus_credit"]), kindExplicit: z.boolean(),
@@ -47,7 +43,7 @@ const claimSchema = z.strictObject({
   real: z.boolean(), role: z.enum(["action", "answer", "explanation", "policy", "uncertain"]),
   excerpt: z.string().min(1), title: actionTextSchema, summary: actionTextSchema.nullable(),
   timeExcerpt: z.string().trim().nullable().optional().transform(value => value || null),
-  rawScope: rawScopeSchema, scope: claimScopeSchema,
+  scope: claimScopeSchema,
   scopeExcerpt: z.string().min(1).nullable(),
 }).refine(value => !value.invalidatesEvent || value.action === "amend", "Only amendments may invalidate an event");
 export const actionRecognitionSchema = z.strictObject({
@@ -56,8 +52,8 @@ export const actionRecognitionSchema = z.strictObject({
 });
 export type ActionRecognitionBody = z.infer<typeof actionRecognitionSchema>;
 export type ActionRecognition = ActionRecognitionBody & { model: string; promptVersion: string; receiptId: number };
-export const actionRecognitionVersion = "reset-monitor-actions-2026-11-10.3";
-export const threadRecognitionVersion = "reset-monitor-thread-2026-11-10.4";
+export const actionRecognitionVersion = "reset-monitor-actions-2026-11-11.1";
+export const threadRecognitionVersion = "reset-monitor-thread-2026-11-11.2";
 const threadPostBodySchema = actionRecognitionSchema.extend({ postId: z.string().min(1), reviewReason: z.string().nullable() });
 const threadPostSchema = z.preprocess(value => {
   // A live response included a meaningless post-level scope:null; never discard non-null facts.
@@ -125,7 +121,6 @@ function paidPost(post: Record<string, unknown>, postId: string) {
     return fallback(reason, defaultTitle ? Object.fromEntries(Object.entries(defaultTitle)
       .map(([key, label]) => [key, nonblank(known[key]) ? known[key] : label])) : null);
   };
-  const codeList = (value: unknown) => Array.isArray(value) && value.every(nonblank) ? [...new Set(value)] : null;
   const actions = Array.isArray(post.actions) ? post.actions : record(post.actions) ? [post.actions] : null;
   if (!actions) return undefined;
   const relevant = explicitBoolean(post.relevant);
@@ -142,19 +137,10 @@ function paidPost(post: Record<string, unknown>, postId: string) {
     const role = claimSchema.shape.role.safeParse(claim.role);
     const id = (value: unknown) => value == null || nonblank(value) ? value ?? null : fallback("动作关联格式无法确认", null);
     const scope = record(claim.scope);
-    const productCodes = codeList(scope?.productCodes), planCodes = codeList(scope?.planCodes);
-    const quotaWindowCodes = codeList(scope?.quotaWindowCodes);
     const scopeType = scopeSchema.shape.type.safeParse(scope?.type);
-    const cleanScope = scopeType.success && productCodes && planCodes && quotaWindowCodes
-      ? { type: scopeType.data, productCodes, planCodes, quotaWindowCodes, note: localized(scope?.note, "动作范围说明不完整") }
-      : fallback("动作范围无法确认", { type: "unknown", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null });
-    const raw = record(claim.rawScope);
-    const rawScope = {
-      audienceSource: optionalText(raw?.audienceSource, "动作范围原文不完整"),
-      plans: raw?.plans === null ? null : codeList(raw?.plans) ?? fallback("动作套餐原文无法确认", null),
-      audienceZh: optionalText(raw?.audienceZh, "动作范围原文不完整"),
-      productsZh: optionalText(raw?.productsZh, "动作范围原文不完整"),
-    };
+    const cleanScope = scopeType.success
+      ? { type: scopeType.data, note: localized(scope?.note, "动作范围说明不完整") }
+      : fallback("动作范围无法确认", { type: "unknown", note: null });
     const parsed = claimSchema.safeParse({
       kind, action, role: role.success ? role.data : fallback("动作说明格式无法确认", "uncertain"),
       excerpt: nonblank(claim.excerpt) ? claim.excerpt : fallback("缺少动作原文引文", "—"),
@@ -166,14 +152,14 @@ function paidPost(post: Record<string, unknown>, postId: string) {
       title: localized(claim.title, "动作标题不完整", fallbackTitle), summary: localized(claim.summary, "动作摘要不完整"),
       timeExcerpt: nonblank(claim.timeExcerpt) ? claim.timeExcerpt : claim.timeExcerpt == null || typeof claim.timeExcerpt === "string"
         ? null : fallback("动作时间格式无法确认", null),
-      rawScope, scope: cleanScope, scopeExcerpt: optionalText(claim.scopeExcerpt, "动作范围引文无法确认"),
+      scope: cleanScope, scopeExcerpt: optionalText(claim.scopeExcerpt, "动作范围引文无法确认"),
     });
     if (parsed.success && !accepted.some(prior => stableJson(prior) === stableJson(parsed.data))) accepted.push(parsed.data);
   }
   if (actions.length && !accepted.length) return undefined;
   const assertedAction = accepted.some(action => action.real);
   if (assertedAction && relevant !== true) reasons.add("帖子相关性与动作不一致");
-  if (["scope", "rawScope", "scopeExcerpt"].some(key => post[key] != null)) reasons.add("帖子级范围无法归属到动作");
+  if (["scope", "scopeExcerpt"].some(key => post[key] != null)) reasons.add("帖子级范围无法归属到动作");
   const title = localized(post.title, "帖子标题不完整", fallbackTitle);
   const summary = localized(post.summary, "帖子摘要不完整");
   const needsReview = explicitBoolean(post.needsReview) ?? fallback("帖子复核状态无法确认", true);
@@ -209,24 +195,20 @@ export function paidThreadOutputSchema(input: Pick<ThreadRecognitionInput, "targ
 }
 
 export async function threadModelRevision(): Promise<string> {
-  const model = await modelFor("monitor"), spec = MODELS[model]!, definition = currentMonitor();
+  const model = await modelFor("monitor"), spec = MODELS[model]!;
   return sha256(stableJson({ model, spec, base: credential("models", spec.baseUrlEnv),
-    prompt: threadRecognitionPrompt(), version: threadRecognitionVersion, catalog: definition.publicV2?.catalog,
-    defaults: Object.fromEntries(definition.authors.map(author => [author.handle, definition.defaultProductForAuthor?.(author.handle) ?? null])) }));
+    prompt: threadRecognitionPrompt(), version: threadRecognitionVersion }));
 }
 
 export async function recognizeThread(input: ThreadRecognitionInput, executionId: string): Promise<ThreadRecognition> {
   const model = await modelFor("monitor"), spec = MODELS[model]!;
   const definition = currentMonitor();
   const system = threadRecognitionPrompt();
-  const catalog = definition.publicV2?.catalog;
-  const authorProducts = Object.fromEntries(input.targets.map(post => [post.author, definition.defaultProductForAuthor?.(post.author) ?? null]));
   const response = await chatJson({ model, purpose: requestPurpose("recognize"), subject: `thread:${executionId}`, attemptTag: executionId,
     retryFailed: false, promptVersion: `${threadRecognitionVersion}:${definition.promptVersion}`,
-    system, user: JSON.stringify({ ...input, catalog, authorProducts }),
+    system, user: JSON.stringify(input),
     inputMetrics: { targetsChars: JSON.stringify(input.targets).length, contextChars: JSON.stringify(input.context).length,
-      eventsChars: JSON.stringify(input.events).length, catalogChars: JSON.stringify(catalog ?? null).length,
-      authorProductsChars: JSON.stringify(authorProducts).length },
+      eventsChars: JSON.stringify(input.events).length },
     schema: paidThreadOutputSchema(input), deferOutputRejection: true, temperature: 0.1, maxTokens: 14000,
     ...(spec.model === "deepseek-flash" && !spec.reasoningTokens ? { extra: { thinking: { type: "disabled" } } } : {}),
   });
@@ -243,7 +225,7 @@ Read targets in publication order. A new event's localEventKey is shared across 
 For an existing event return its actual eventId. Never recreate an accepted announcement or action from context. Only claim an existingActionId when the target repeats that same fact.
 Explicit replyTo/quotedPostId edges take priority when resolving a short completion. Same-author standalone posts may also identify a unique event through a specific shared promise and delivery-round semantics, even with unrelated posts between them. Never infer identity solely from timestamps, author identity or a generic keyword. context includes read-only original promises and latest sources for supplied events; it does not imply a reply/quote edge.
 Each target needs its own title, summary, relevant, needsReview, reviewReason and actions. Preserve valid independently supported actions even if another target needs review.
-scope, rawScope and scopeExcerpt exist ONLY inside actions, never on a post. For unrelated posts use relevant=false and actions=[].
+scope and scopeExcerpt exist ONLY inside actions, never on a post. For unrelated posts use relevant=false and actions=[].
 Required JSON Schema (field types, enum values and required keys are authoritative):
 ${JSON.stringify(z.toJSONSchema(z.strictObject({ posts: z.array(threadPostBodySchema).min(1) }), { io: "input" }))}
 Return no extra keys. summary and scope.note, when nonnull, use the same seven-language object as title.`;
@@ -259,10 +241,6 @@ An official postponement with an unknown replacement time is progress with timeE
 relevant describes relevance to direct resets, reset credits, bonus credits and their follow-ups, including related explanations that create no action. An empty actions array is not evidence of irrelevance. Set relevant=false only for clearly unrelated material; uncertain or incomplete context requires needsReview=true. Do not invent an action merely because the post matched a search keyword.
 eventId must identify an existing listed event or null for a new event. New events have a nonempty localEventKey; multiple actions for the same new event use the same localEventKey and put its initial announce/confirm first. Existing events use null localEventKey. existingActionId identifies an existing listed action only when this post repeats the SAME fact; add source evidence rather than a second action. Distinct progress/revision facts remain separate. Do not infer identity merely because action types match or timestamps are close. For a follow-up, choose the explicit eventId; no suitable unique target means needsReview. Cross-author association requires an explicit original-post link, embedded quote or verified direct reply to that event's saved source.
 Existing actions are replayed in their saved sequence. New actions append to that sequence, in the order you return them; adding a source to an existing action never changes its order. If accepting this post requires inserting or reordering an earlier action, set needsReview=true instead of proposing an automatic reorder. A source publication date is not an action sequence.
-Use rawScope for the literal accepted audience/product/plan facts, scope for catalog codes and seven-language notes. Missing audience uses unknown unless the unique referenced event supplies a verified audience. Explicit selected audience must retain the actual conditions, paid must stay paid. Incomplete catalog mapping alone must not set needsReview: keep the explicit action, use unknown audience or an empty productCodes list for an unmapped product set, and retain actual restrictions in the localized summary. Never invent catalog codes. scopeExcerpt quotes the outer post's scope; null only when no restriction is stated. Default product is allowed only from the configured author policy.
-rawScope has exactly audienceSource (string or null), plans (array of literal plan-name strings or null), audienceZh (string or null), productsZh (string or null). For two named plans, use plans=["Plan A","Plan B"], never plans="Plan A, Plan B". Use null when no plan is stated; do not substitute catalog codes for the original names.
-scope.type is exactly all_users, paid_users, selected_users or unknown; paid and selected are invalid. If an audience's plan names cannot be fully mapped to the supplied catalog, use unknown and preserve the actual audience restrictions in the summary and rawScope, without inventing catalog entries.
-scope.note is a concise audience label in all seven languages, not a literal repetition of rawScope. Use Paid users / 付费用户 for paid audiences and for two or more named paid plans. Do not append signup or upgrade cutoffs, claim conditions, quota windows, affected-user counts, product names or all-accounts wording to that paid-user label. For example Paid users; accounts created or upgraded before 8pm PT are also eligible becomes Paid users. Keep a single named plan explicit, such as Max users / Max 用户; combinations that include a free plan must not be labeled paid users. Put all omitted actual eligibility conditions in the action's seven-language summary, not just in the source text. For a selected audience, summary.zh must contain the complete literal rawScope.audienceZh condition if the note omits it. Preserve the exact original evidence, scope.type and every catalog code; never expand the actual scope. Use All users / 所有用户 for an unrestricted or unspecified audience label, while keeping scope.type=unknown when the audience cannot be verified. Never append unknown or product labels to scope.note. Redemption steps, usage instructions and missing-information commentary do not belong in the label.
 timeExcerpt is the outer post's literal BUSINESS TIME expression, or null. Do not output inferred timestamps; code resolves dates/timezones. A confirmation cannot reuse a forecast as its actual completion time. Evaluate completion by its factual clause: an adjacent question or your pronoun cannot negate an explicit It is done assertion; future, conditional, negative and personal-feeling clauses are not confirmations. Future reward claim deadlines/expiry are summary facts, not event time or an occurred action. Progress may record actual campaign closure, expiry or reopening without changing a completed event. Cancellation amendments must quote an explicit whole-event fact in excerpt. An ordinary amendment must not invalidate an event. Cancelled events are terminal; later announcements, confirmations or ordinary amendments cannot reopen them. Never mark a personal report, future promise, condition, question or negation as a cancellation. Never use an account-specific report, question, negation, condition or future promise as current completion/closure.
 Use/redeem/claim-by deadlines and reset-card expiration describe how long a grant can be used, never when it is issued or when usage is reset. For example, Use them anytime by March 8 belongs in the summary, with timeExcerpt=null for the issuance. Preserve a separate explicit grant schedule if one exists. Do not create a future expiry progress action merely because an expiration is mentioned.
 Product rules supplied separately constrain what is an event.`;

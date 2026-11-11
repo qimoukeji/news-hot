@@ -34,7 +34,7 @@ export function EventEditorDialog({ event, onClose, onCreated }: { event?: Revie
       if (form.type !== event.type) patch.type = form.type;
       if (form.title !== text(event.title)) patch.title = { zh: form.title };
       if (form.summary !== text(event.summary)) patch.summary = form.summary.trim() ? { zh: form.summary } : null;
-      if (form.scope !== initial().scope) patch.scope = { ...(event.scope ?? emptyScope()), note: form.scope.trim() ? { zh: form.scope.trim() } : null };
+      if (form.scope !== initial().scope) patch.scope = { type: event.scope?.type ?? "unknown", note: form.scope.trim() ? { zh: form.scope.trim() } : null };
       const base = `${adminApiPath}/events/${encodeURIComponent(event.id)}`;
       if (form.type !== event.type && !preview) {
         setPreview(await run("POST", `${base}/preview`, { version: event.version, patch }, { label: "preview-event", revalidate: false }));

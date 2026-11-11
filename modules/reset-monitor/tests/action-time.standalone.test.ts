@@ -15,8 +15,8 @@ const at = "2026-10-23T12:00:00.000Z";
 const post = (text: string) => ({ text, published_at: at });
 const claim = () => ({ eventId: null, localEventKey: "event", existingActionId: null, kind: "direct_reset" as const, kindExplicit: true,
   action: "confirm" as const, invalidatesEvent: false, real: true, role: "action" as const, excerpt: "We reset usage earlier.", title: properName("Reset completed"), summary: null,
-  timeExcerpt: null as string | null, rawScope: { audienceSource: null, audienceZh: null, productsZh: null, plans: null },
-  scope: { type: "unknown" as const, productCodes: [], planCodes: [], quotaWindowCodes: [], note: properName("All users") }, scopeExcerpt: null });
+  timeExcerpt: null as string | null,
+  scope: { type: "unknown" as const, note: null }, scopeExcerpt: null });
 
 test("reset-credit usage deadlines never become delivery times, even in date-only excerpts", () => {
   const source = "We're giving Ultra and Team Premium users Fable resets based on how long you've subscribed:\n\n<6 mo: 1\n6–12 mo: 2\n>12 mo: 3\n\nUse them anytime by March 8.";
@@ -239,7 +239,7 @@ test("clear retrospective completions do not require a time excerpt or fabricate
   for (const expression of ["earlier", "previously", "yesterday", "last week"]) {
     const action = { ...claim(), excerpt: `We reset usage ${expression}.` };
     assert.equal(confirmsCompletedAction(action.excerpt), true);
-    assert.equal(actionEvidence({ ...action, scope: action.rawScope }, []), "action");
+    assert.equal(actionEvidence(action, []), "action");
     assert.deepEqual(resolveActionTime(action, post(action.excerpt)).time, bt(at));
   }
   for (const source of ["We will reset usage tomorrow.", "We have not reset usage.", "My usage was reset.", "We reset usage?", "If we reset usage, wait."])
@@ -248,9 +248,9 @@ test("clear retrospective completions do not require a time excerpt or fabricate
 
 test("a linked follow-up announcement does not require explicit timing to provide action evidence", () => {
   const action = { ...claim(), eventId: "known-event", localEventKey: null, action: "announce" as const, excerpt: "It will land soon." };
-  assert.equal(actionEvidence({ ...action, scope: action.rawScope }, []), "action");
+  assert.equal(actionEvidence(action, []), "action");
   assert.deepEqual(resolveActionTime(action, post(action.excerpt)), { time: null, issue: null });
-  assert.equal(actionEvidence({ ...action, eventId: null, scope: action.rawScope }, []), "related", "a time default cannot identify a missing event");
+  assert.equal(actionEvidence({ ...action, eventId: null }, []), "related", "a time default cannot identify a missing event");
 });
 
 test("unresolved announcements stay unknown and confirmations and progress use source instants", () => {

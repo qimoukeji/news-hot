@@ -80,14 +80,19 @@ for (const engine of ["Chromium", "WebKit"] as const) {
       await page.waitForTimeout(300);
       // preload is a hint: WebKit may inspect the media URL before the reader plays it.
       if (engine === "Chromium") assert.equal(mediaRequests, beforeRequests, "Chromium does not preload the clip");
-      assert.equal(await video.evaluate((node: HTMLVideoElement) => node.paused && node.currentTime === 0), true, "media does not start playing before interaction");
+      // WebKit can report a nonzero currentTime before it has played any media.
+      const beforePlay = await video.evaluate((node: HTMLVideoElement) => ({ paused: node.paused, played: node.played.length }));
+      assert.deepEqual(beforePlay, { paused: true, played: 0 }, "media does not start playing before interaction");
       const box = await video.boundingBox();
       assert.ok(box);
       // Chromium puts the play button above its bottom scrubber; WebKit keeps it on the bottom row.
       const playButton = { x: 30, y: box.height - (engine === "Chromium" ? 48 : 20) };
       await video.click({ position: playButton });
       // Wait for several frames so WebKit has updated its native play/pause control.
-      await expect.poll(() => video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBeGreaterThan(0.5);
+      await expect.poll(() => video.evaluate((node: HTMLVideoElement) => {
+        const played = node.played;
+        return played.length ? played.end(0) - played.start(0) : 0;
+      })).toBeGreaterThan(0.5);
       assert.equal(await video.evaluate((node: HTMLVideoElement) => !node.paused && !node.ended), true);
       assert.match(await video.evaluate((node: HTMLVideoElement) => node.currentSrc), /\/video\/clip\.webm$/);
       assert.ok(mediaRequests > beforeRequests, "playback requests the original media server");

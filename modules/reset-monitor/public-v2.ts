@@ -100,8 +100,8 @@ export function isFutureBusinessTime(time: BusinessTime, at: string): boolean {
 export const eventStatuses = ["announced", "in_progress", "completed", "cancelled"] as const;
 export type EventStatus = (typeof eventStatuses)[number];
 export const scopeSchema = z.strictObject({
-  type: z.enum(["all_users", "paid_users", "selected_users", "unknown"]).describe("unknown means audience mapping is unresolved, not confirmed eligibility for everyone."),
-  productCodes: z.array(identifier).describe("Empty means no catalog product restriction can be applied; it does not confirm coverage of all products."), planCodes: z.array(identifier), quotaWindowCodes: z.array(identifier), note: localizedTextSchema.nullable().describe("Concise localized audience label, such as All users or Paid users; actual eligibility and product restrictions remain in summaries."),
+  type: z.enum(["all_users", "paid_users", "selected_users", "unknown"]).describe("unknown means the audience is unverified and must not be interpreted as eligibility for everyone."),
+  note: localizedTextSchema.nullable().describe("Concise localized audience label. Specific eligibility, products, plans, and quota periods are described in event and action summaries."),
 });
 const eventObjectSchema = z.strictObject({
   id: identifier, type: z.enum(["direct_reset", "reset_credit", "bonus_credit"]), status: z.enum(eventStatuses),
@@ -110,9 +110,6 @@ const eventObjectSchema = z.strictObject({
 });
 function validateEvent(event: z.infer<typeof eventObjectSchema>, context: z.RefinementCtx) {
   if (event.time === null && event.status !== "announced") context.addIssue({ code: "custom", path: ["time"], message: "Only an announcement may have an unknown time" });
-  for (const key of ["productCodes", "planCodes", "quotaWindowCodes"] as const) {
-    if (new Set(event.scope[key]).size !== event.scope[key].length) context.addIssue({ code: "custom", path: ["scope", key], message: "Catalog references must be unique" });
-  }
   const ids = new Set<string>();
   event.updates.forEach((update, index) => {
     if (new Set(update.sources.map(source => source.postId)).size !== update.sources.length) context.addIssue({ code: "custom", path: ["updates", index, "sources"], message: "Source posts must be unique" });
@@ -132,28 +129,18 @@ export const sourceSchema = z.strictObject({
   id: identifier, type: z.enum(["official_social", "official_blog", "official_docs", "community", "other"]), name: localizedTextSchema,
   url: sourceUrlSchema,
 });
-const catalogEntry = z.strictObject({ code: identifier, name: localizedTextSchema });
-export const catalogSchema = z.strictObject({ products: z.array(catalogEntry), plans: z.array(catalogEntry), quotaWindows: z.array(catalogEntry) });
 const count = z.number().int().nonnegative();
 export const statisticsSchema = z.strictObject({
   typicalInterval: z.strictObject({ value: z.number().positive(), unit: z.enum(["hour", "day"]), sampleCount: count }).nullable(),
   resetsLast30Days: count.nullable(), cardsLast30Days: count.nullable(), bonusesLast30Days: count.nullable(),
 });
 const overviewFields = {
-  platform: platformSchema, sources: z.array(sourceSchema), catalog: catalogSchema, statistics: statisticsSchema,
+  platform: platformSchema, sources: z.array(sourceSchema), statistics: statisticsSchema,
   hasAnnouncement: z.boolean(), predictedResetTime: utcInstantSchema.nullable(), announcedResetTime: publicTimeSchema, resetTime: utcInstantSchema.nullable(),
 };
-type OverviewFields = {
-  sources: z.infer<typeof sourceSchema>[]; catalog: z.infer<typeof catalogSchema>;
-  hasAnnouncement: boolean; announcedResetTime: PublicTime; resetTime: string | null;
-};
-function validateOverview(value: OverviewFields, context: z.RefinementCtx) {
+function validateOverview(value: { sources: z.infer<typeof sourceSchema>[]; hasAnnouncement: boolean; announcedResetTime: PublicTime }, context: z.RefinementCtx) {
   if (!value.hasAnnouncement && value.announcedResetTime !== null) context.addIssue({ code: "custom", path: ["announcedResetTime"], message: "An announced time requires an announcement" });
-  const unique = (ids: string[], path: (string | number)[]) => {
-    if (new Set(ids).size !== ids.length) context.addIssue({ code: "custom", path, message: "IDs must be unique" });
-  };
-  unique(value.sources.map(source => source.id), ["sources"]);
-  for (const key of ["products", "plans", "quotaWindows"] as const) unique(value.catalog[key].map(entry => entry.code), ["catalog", key]);
+  if (new Set(value.sources.map(source => source.id)).size !== value.sources.length) context.addIssue({ code: "custom", path: ["sources"], message: "IDs must be unique" });
 }
 export const platformOverviewSchema = z.strictObject(overviewFields).superRefine(validateOverview);
 export const overviewSchema = z.strictObject({
@@ -186,10 +173,6 @@ export const resetSnapshotSchema = z.strictObject({
         if (!sources.has(source.sourceId)) context.addIssue({ code: "custom", path: ["events", index, "updates", updateIndex, "sources", sourceIndex], message: "Unknown source account ID" });
       });
     });
-    for (const [field, key] of [["productCodes", "products"], ["planCodes", "plans"], ["quotaWindowCodes", "quotaWindows"]] as const) {
-      const codes = new Set(snapshot.catalog[key].map(entry => entry.code));
-      if (event.scope[field].some(code => !codes.has(code))) context.addIssue({ code: "custom", path: ["events", index, "scope", field], message: "Unknown catalog code" });
-    }
   });
 });
 export const rawResetSnapshotSchema = resetSnapshotSchema.safeExtend({
@@ -215,5 +198,4 @@ export type Overview = z.infer<typeof overviewSchema>;
 
 export type PublicV2Config = {
   platform: z.infer<typeof platformSchema>;
-  catalog: z.infer<typeof catalogSchema>;
 };

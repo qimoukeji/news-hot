@@ -3,14 +3,22 @@ import { languages, translated, type EditorialText, type EditorialScope } from "
 type Label = Record<(typeof languages)[number], string>;
 const label = (values: string[]): Label => Object.fromEntries(languages.map((language, index) => [language, values[index]!])) as Label;
 
-/** Fixed display labels never infer scope.type, catalog codes or eligibility conditions. */
+/** Fixed display labels never infer scope.type or eligibility conditions. */
 const allUsers = label(["All users", "所有用户", "所有使用者", "すべてのユーザー", "모든 사용자", "Все пользователи", "Todos los usuarios"]);
 const paidUsers = label(["Paid users", "付费用户", "付費使用者", "有料ユーザー", "유료 사용자", "Платные пользователи", "Usuarios de pago"]);
 const unspecified = label(["Eligibility unspecified", "适用范围未明确", "適用範圍未明確", "対象範囲は未指定", "적용 대상 미지정", "Условия участия не указаны", "Elegibilidad no especificada"]);
 const standardLabels = [allUsers, paidUsers, unspecified];
 
+export function publicScopeLabel(type: EditorialScope["type"], note: Label | null): Label {
+  if (type === "unknown" && (!note || languages.every(language => {
+    const value = note[language].trim();
+    return value === allUsers[language] || value === allUsers.zh || value === allUsers.en;
+  }))) return defaultScopeLabel(type);
+  return note ?? defaultScopeLabel(type);
+}
+
 export function defaultScopeLabel(type: EditorialScope["type"]): Label {
-  return { ...(type === "paid_users" ? paidUsers : allUsers) };
+  return { ...(type === "all_users" ? allUsers : type === "paid_users" ? paidUsers : unspecified) };
 }
 
 /** Fill only missing languages when every supplied nonblank value matches one fixed label. */

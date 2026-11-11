@@ -87,10 +87,18 @@ test("all platforms expose action updates through v2 only and support ETag", asy
       });
       assert.equal(staleVersion.statusCode, 200);
       const body = eventListSchema.parse(response.json());
+      const ability = createMonitorServer(definition).agent!.abilities![0]!;
+      const mcp = await ability.mcp.run({});
+      assert.deepEqual(mcp.structured.events, body.list, "MCP returns the same projected events as HTTP");
+      assert.ok(ability.apiPath);
+      const agent = await app.inject(ability.apiPath);
+      assert.equal(agent.statusCode, 200);
+      assert.equal(agent.body, mcp.text, "Agent Markdown and MCP use the same event result");
       assert.equal(body.list[0]!.updates[0]!.action, "announce");
       assert.deepEqual(body.list[0]!.updates[0]!.time, bt("2026-10-02T00:00:00Z"));
       assert.equal(Date.parse(body.list[0]!.updates[0]!.publishedAt), Date.parse(sourceAt));
       assert.equal(body.list[0]!.updates[0]!.sources[0]!.postId, "post");
+      assert.deepEqual(Object.keys(body.list[0]!.scope).sort(), ["note", "type"]);
       assert.notEqual(body.list[0]!.updates[0]!.id, "post");
       assert.equal("source" in body.list[0]!.updates[0]!, false);
       const again = await app.inject({
@@ -112,6 +120,7 @@ test("all platforms expose action updates through v2 only and support ETag", asy
       (await app.inject("/api/v2/overview")).json(),
     );
     assert.equal(overview.platforms.length, 3);
+    assert.ok(overview.platforms.every(platform => !("catalog" in platform)));
     assert.ok(
       overview.platforms.every(
         (platform) =>
@@ -381,14 +390,11 @@ test("post editorial changes do not create formal event relationships", async ()
   assert.equal(input.posts.find(post => post.id === "related")!.summary!.zh, "更新了说明");
   assert.equal(JSON.stringify(await sql`SELECT before,after FROM audit_log`).includes("Private source body"), false);
 }));
-test("scope editorial text can await translation while invalid catalog codes are rejected", async () =>
+test("scope editorial text can await translation while removed scope fields are rejected", async () =>
   inMonitor(codex, async () => {
     const event = (await listEvents()).events[0]!;
     const scope = {
       type: "selected_users" as const,
-      productCodes: [],
-      planCodes: [],
-      quotaWindowCodes: [],
       note: { zh: "仅受影响用户" },
     };
     await assert.rejects(
@@ -397,11 +403,11 @@ test("scope editorial text can await translation while invalid catalog codes are
         {
           version: event.version,
           reason: "修正范围",
-          patch: { scope: { ...scope, planCodes: ["nonexistent"] } },
+          patch: { scope: { ...scope, planCodes: [] } },
         },
         "reviewer",
       ),
-      /目录/,
+      /Unrecognized key.*planCodes/,
     );
     await updateMonitorEvent(
       event.id,
@@ -425,6 +431,8 @@ test("OpenAPI v2 describes action sources and v1 no longer advertises monitor sn
     const spec = response.json();
     assert.ok(spec.paths["/api/v2/codex-resets"]);
     const event = spec.components.schemas.EventList.properties.list.items;
+    assert.deepEqual(Object.keys(event.properties.scope.properties).sort(), ["note", "type"]);
+    assert.equal(event.properties.scope.additionalProperties, false);
     const variants = event.properties.updates.items.oneOf;
     assert.deepEqual(variants.map((variant: any) => variant.properties.action.const).sort(), ["amend", "announce", "confirm", "progress"]);
     for (const variant of variants) {
@@ -434,6 +442,7 @@ test("OpenAPI v2 describes action sources and v1 no longer advertises monitor sn
     }
     assert.ok(event.properties.time.anyOf.some((time: any) => time.type === "null"));
     const overview = spec.components.schemas.Overview.properties.platforms.items;
+    assert.equal(overview.properties.catalog, undefined);
     assert.equal(overview.properties.hasAnnouncement.type, "boolean");
     assert.ok(overview.required.includes("hasAnnouncement"));
     const confirmation = variants.find((variant: any) => variant.properties.action.const === "confirm");
@@ -507,7 +516,7 @@ test("admin counts use valid relationships while translations withhold public up
     await writePostActions(db, (await sourcePost("second", db))!, [{ id: original.id, eventId: "event", action: original.action, title: original.title, summary: original.summary, time: original.time }]);
     await writePostActions(db, (await sourcePost("post", db))!, [{ eventId: "event", action: "amend", title: { zh: "未译修订" }, summary: null, time: null }]);
   });
-  await sql`UPDATE monitor_event_records SET title='{"zh":"配额调整事件"}'::jsonb,scope=${sql.json({ type: "selected_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: { zh: "仅特定用户" } })} WHERE monitor_id='codex' AND id='event'`;
+  await sql`UPDATE monitor_event_records SET title='{"zh":"配额调整事件"}'::jsonb,scope=${sql.json({ type: "selected_users", note: { zh: "仅特定用户" } })} WHERE monitor_id='codex' AND id='event'`;
   const event = (await listEvents()).events[0]!;
   assert.equal(event.updates.length, 0); assert.equal(event.actionCount, 2); assert.equal(event.sourcePostCount, 2);
   const posts = await listMonitorPosts({ q: "配额调整事件" });

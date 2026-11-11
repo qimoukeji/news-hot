@@ -261,7 +261,7 @@ export const ACCESS = {
 /** 这个部署自己的几处安排（选填）。 */
 export const DEPLOYMENT = {
   /** 所有业务及 cron 队列的白名单；null 开放全部，空数组全部停用。 */
-  queues: ["cron.monitor.tick", "cron.claude-reset.tick", "cron.grok-reset.tick", "cron.codex-reset.translate", "cron.claude-reset.translate", "cron.grok-reset.translate", "cron.reset-confirmations.check", "cron.reset-subscriptions.sweep", "reset-subscriptions.deliver"] as string[] | null,
+  queues: ["cron.monitor.tick", "cron.claude-reset.tick", "cron.grok-reset.tick", "cron.codex-reset.translate", "cron.claude-reset.translate", "cron.grok-reset.translate", "cron.reset-confirmations.check", "cron.reset-review.notify", "cron.reset-subscriptions.sweep", "reset-subscriptions.deliver"] as string[] | null,
   /** 启用的框架定时任务；框架和模块任务均须通过 queues 白名单。 */
   engineSchedules: [] as string[],
   /** 凭据分组文件（models.env、collectors.env……）默认放在哪个目录，相对仓库根目录；环境变量 AIHOT_CREDENTIALS_DIR 优先，都没有就只读环境变量。 */

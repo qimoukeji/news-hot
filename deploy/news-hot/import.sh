@@ -39,7 +39,7 @@ DEPLOY_DB_IMAGE=$(node "$tool" get "$bundle/release.json" dbId)
 [[ $(docker image inspect --format '{{.Id}}' "$DEPLOY_IMAGE") == "$(node "$tool" get "$bundle/release.json" appId)" ]] || exit 1
 docker image inspect "$DEPLOY_DB_IMAGE" > /dev/null
 dc() { docker compose -p news-hot --env-file "$NEWSHOT_ENV_FILE" -f "$release/deploy/news-hot/compose.yml" "$@"; }
-dc run --rm --no-deps --entrypoint node setup -e 'for (const [k,v] of Object.entries(process.env)) { if ((["COLLECT_ENABLED","MODEL_CALLS_ENABLED","WEBHOOK_PUSH_ENABLED","INDEXNOW_SUBMIT_ENABLED"].includes(k) || /^FEISHU_.*_ENABLED$/.test(k)) && v === "true") process.exit(1); }'
+dc run --rm --no-deps --entrypoint node setup -e 'for (const [k,v] of Object.entries(process.env)) { if ((["COLLECT_ENABLED","MODEL_CALLS_ENABLED","WEBHOOK_PUSH_ENABLED","SERVERCHAN_ENABLED","INDEXNOW_SUBMIT_ENABLED"].includes(k) || /^FEISHU_.*_ENABLED$/.test(k)) && v === "true") process.exit(1); }'
 started=false
 cleanup_failure() {
   result=$?

@@ -15,7 +15,7 @@ export const platforms = [
   { platform: "grok", product: "Grok", path: "/grok-reset", admin: "/admin/grok-reset", api: "/api/admin/grok-reset", list: "/api/v2/grok-resets" },
 ] as const;
 export type Product = typeof platforms[number];
-export const scope = { type: "paid_users", productCodes: ["product"], planCodes: ["pro"], quotaWindowCodes: ["weekly"], note: null } as const;
+export const scope = { type: "paid_users", note: null } as const;
 
 export function createMonitorFixture() {
   const requests: string[] = [];
@@ -38,7 +38,7 @@ export function createMonitorFixture() {
     typicalInterval: { value: 3.0625, unit: "day", sampleCount: 5 }, predictedResetTime: "2026-10-28T00:00:00Z" };
   const event = (product: Product): EventList["list"][number] => ({
     id: "event-1", type: state.type, status: state.status, publishedAt: at, title: localized(`${product.product} 官方活动`),
-    summary: localized("仅限 Pro 套餐，每周额度。"), time: state.status === "announced" && state.actionTimes ? state.actionTimes[0] : instant(at), scope: state.eventScope ?? { ...scope, productCodes: [...scope.productCodes], planCodes: [...scope.planCodes], quotaWindowCodes: [...scope.quotaWindowCodes], note: localized("仅限 Pro 用户") },
+    summary: localized("仅限 Pro 套餐，每周额度。"), time: state.status === "announced" && state.actionTimes ? state.actionTimes[0] : instant(at), scope: state.eventScope ?? { ...scope, note: localized("仅限 Pro 用户") },
     updates: [
       { id: "announce-action", action: "announce", invalidatesEvent: false, title: localized("额度活动预告"), summary: null, time: state.actionTimes ? state.actionTimes[0] : date(beijingDate(at)), publishedAt: state.actionPublishedAt?.[0] ?? at, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }] },
       { id: "confirm-action", title: localized(state.emptyConfirmation ? state.emptyConfirmationTitle : "额度活动状态确认"), summary: localized("以官方公告明确的活动结果为准。"), time: state.actionTimes?.[1] ?? instant(at), publishedAt: state.actionPublishedAt?.[1] ?? at,
@@ -48,7 +48,6 @@ export function createMonitorFixture() {
   });
   const overview = (product: Product): PlatformOverview => ({ platform: product.platform,
     sources: ["official", "other"].map((id, index) => ({ id, type: "official_social", name: localized(`官方账号 ${index + 1}`), url: `https://example.org/account-${index}` })),
-    catalog: { products: [{ code: "product", name: localized(product.product) }], plans: [{ code: "pro", name: localized("Pro") }], quotaWindows: [{ code: "weekly", name: localized("周额度") }] },
     statistics: { typicalInterval: state.typicalInterval, resetsLast30Days: state.type !== "bonus_credit" && state.status !== "cancelled" ? 1 : 0, cardsLast30Days: 0, bonusesLast30Days: state.type === "bonus_credit" && state.status !== "cancelled" ? 1 : 0 },
     hasAnnouncement: state.status === "announced", predictedResetTime: state.predictedResetTime, announcedResetTime: state.status === "announced" ? state.actionTimes ? state.actionTimes[0] : instant(at) : null, resetTime: state.resetTime !== undefined ? state.resetTime : state.status === "cancelled" ? null : state.status === "announced" ? "2026-10-20T16:30:00Z" : at,
   });
@@ -276,6 +275,9 @@ export function createMonitorFixture() {
       const rows = [...createdPosts.filter(row => row.platform === product.platform).map(row => row.post), linked, orphan].map(post => withAssociations(product, editedPost(product, post))).filter(post => {
         const day = new Date(Date.parse(post.publishedAt) + 8 * 3600_000).toISOString().slice(0, 10);
         const association = url.searchParams.get("association") ?? "all";
+        const q = url.searchParams.get("q")?.trim().toLowerCase(), filter = url.searchParams.get("filter");
+        if (q && ![post.id, ...Object.values(post.title ?? {}), ...Object.values(post.summary ?? {})].some(value => value.toLowerCase().includes(q))) return false;
+        if (filter && filter !== "all" && post.processingStatus !== filter) return false;
         return (association === "all" || (association === "linked" ? !!post.events?.length : !post.events?.length)) && ((url.searchParams.get("collectionFilter") ?? "normal") === "all" || (url.searchParams.get("collectionFilter") === "filtered" ? post.filteredOut && !post.actionCount : !post.filteredOut || !!post.actionCount)) && (!url.searchParams.get("from") || day >= url.searchParams.get("from")!) && (!url.searchParams.get("to") || day <= url.searchParams.get("to")!);
       });
       return send({ page: Number(url.searchParams.get("page") ?? 1), total: rows.length ? 12 : 0, totalPages: rows.length ? 2 : 0, pageSize: 10, rows });

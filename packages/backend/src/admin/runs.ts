@@ -7,7 +7,7 @@ import type { Heartbeat } from "../operations/heartbeat.ts";
 import { audit } from "../audit.ts";
 import { failureGroupSql, requeueFailed } from "../jobs/content.ts";
 import { groupingOverview, waitingSelectedNews } from "../operations/grouping.ts";
-import { serverModules } from "../modules.ts";
+import { ModuleRunResults, serverModules } from "../modules.ts";
 import { runStatistics } from "./run-statistics.ts";
 
 const STALE_HEARTBEAT_MS = 3 * 60_000;
@@ -15,7 +15,8 @@ const STALE_HEARTBEAT_MS = 3 * 60_000;
 type Runs = BeforeJson<AdminRuns>;
 
 export async function runsOverview(): Promise<Runs> {
-  const currentJobs = (await Promise.all(serverModules().flatMap((m) => m.admin?.currentJobs ? [m.admin.currentJobs()] : []))).flat();
+  const modules = serverModules();
+  const currentJobs = (await Promise.all(modules.flatMap((m) => m.admin?.currentJobs ? [m.admin.currentJobs()] : []))).flat();
   const [
     heartbeats,
     latest,
@@ -29,6 +30,7 @@ export async function runsOverview(): Promise<Runs> {
     errors,
     ingest,
     grouping,
+    moduleParts,
   ] = await Promise.all([
     sql<{ key: string; value: Heartbeat; updated_at: Date }[]>`SELECT key, value, updated_at FROM settings WHERE key LIKE 'heartbeat.%' ORDER BY key`,
     sql<Runs["jobs"]>`
@@ -73,7 +75,14 @@ export async function runsOverview(): Promise<Runs> {
       FROM articles WHERE processing_state = 'failed' AND discovered_at > now() - interval '30 days' GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 20`,
     sql<Runs["ingest"]>`SELECT client, kind, status, left(error, 200) AS error, summary, created_at FROM ingest_events ORDER BY created_at DESC, id DESC LIMIT 20`,
     waitingSelectedNews(),
+    Promise.all(modules.flatMap((m) => m.admin?.runs ? [m.admin.runs().then((part) => [m.name, part] as const)] : [])),
   ]);
+  const ownedJobs = new Set(moduleParts.flatMap(([, part]) => part instanceof ModuleRunResults ? part.jobs : []));
+  const ownedQueues = new Set([...ownedJobs].map(job => `cron.${job}`));
+  // Keep execution status in the shared tables; only the owning module projects the result.
+  const projectRun = <T extends { job: string; error: string | null; detail?: unknown }>(run: T) => ownedJobs.has(run.job)
+    ? { ...run, error: null, detail: null }
+    : { ...run, detail: runStatistics(run.detail) };
   // Articles waiting to retry after a passing provider problem (they are not failed).
   const [retrying] = await sql<{ n: number; next: Date | null }[]>`
     SELECT count(*)::int AS n, min(processing_retry_at) AS next FROM articles WHERE processing_state = 'new' AND processing_attempts > 0`;
@@ -86,10 +95,10 @@ export async function runsOverview(): Promise<Runs> {
       at: h.updated_at,
       alive: now - h.updated_at.getTime() < STALE_HEARTBEAT_MS,
     })),
-    jobs: latest.map(run => ({ ...run, detail: runStatistics(run.detail) })),
-    timeline: timeline.map(run => ({ ...run, detail: runStatistics(run.detail) })),
+    jobs: latest.map(projectRun),
+    timeline: timeline.map(projectRun),
     queues,
-    failedJobs,
+    failedJobs: failedJobs.map(job => ownedQueues.has(job.name) ? { ...job, last_output: null } : job),
     grouping: groupingOverview(grouping, now),
     lagging,
     receipts: { counts: Object.fromEntries(receipts.map((r) => [r.status, r.n])), issues: receiptIssues },
@@ -97,7 +106,7 @@ export async function runsOverview(): Promise<Runs> {
     errors,
     retrying: { count: retrying?.n ?? 0, next: retrying?.next ?? null },
     ingest,
-    modules: Object.fromEntries(await Promise.all(serverModules().flatMap((m) => (m.admin?.runs ? [m.admin.runs().then((part) => [m.name, part] as const)] : [])))),
+    modules: Object.fromEntries(moduleParts.map(([name, part]) => [name, part instanceof ModuleRunResults ? part.data : part])),
   };
 }
 

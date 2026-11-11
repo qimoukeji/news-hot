@@ -54,7 +54,7 @@ export async function offlinePlan(phase: OfflinePhase, requested?: unknown, db: 
 interface ApplyOptions { target: string; fingerprint: string; workerStopped: boolean }
 function assertOffline(options: ApplyOptions) {
   if (!options.workerStopped) throw new Error("Stop the API and workers before offline changes");
-  for (const key of ["COLLECT_ENABLED", "MODEL_CALLS_ENABLED", "WEBHOOK_PUSH_ENABLED", "FEISHU_CONTENT_PUSH_ENABLED", "FEISHU_INTERNAL_ENABLED", "INDEXNOW_SUBMIT_ENABLED"]) {
+  for (const key of ["COLLECT_ENABLED", "MODEL_CALLS_ENABLED", "WEBHOOK_PUSH_ENABLED", "SERVERCHAN_ENABLED", "FEISHU_CONTENT_PUSH_ENABLED", "FEISHU_INTERNAL_ENABLED", "INDEXNOW_SUBMIT_ENABLED"]) {
     if (process.env[key] === "true") throw new Error(`${key} must stay disabled for offline changes`);
   }
 }

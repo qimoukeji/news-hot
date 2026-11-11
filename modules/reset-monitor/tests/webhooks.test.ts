@@ -19,7 +19,7 @@ import { enqueuePublicV2 } from "../backend/public-v2-work.ts";
 import { createMonitorServer } from "../server.ts";
 import { properName, projectPublicV2 } from "../backend/public-v2.ts";
 import { loadActionInput, sourcePost, writePostActions, rowVersion } from "../backend/action-store.ts";
-import type { ActionDraft, EditorialText } from "../actions.ts";
+import type { ActionDraft, EditorialText, EditorialScope } from "../actions.ts";
 import { initializeWebhookBaselines, captureWebhookEvent, sweepConfirmationResults } from "../backend/webhook-events.ts";
 import { createSubscription, updateSubscription, listSubscriptions, rotateSubscriptionSecret,
   listWebhookDeliveries, retryWebhookDelivery, deliverWebhook, webhookSignature, webhookRetryDelays,
@@ -30,7 +30,7 @@ import { webhookPayloadSchema, type WebhookPlatform } from "../webhooks.ts";
 const definitions = [codex, claude, grok];
 const sourceAt = "2026-10-01T12:00:00Z";
 const eventId = "shared-event";
-const scope = { type: "all_users" as const, productCodes: [], planCodes: [], quotaWindowCodes: [], note: null };
+const scope = { type: "all_users" as const, note: null };
 
 beforeEach(async () => {
   installModules([]);
@@ -59,7 +59,7 @@ async function addEvent(definition = codex, ready = false) {
       summary: null, time: bt(sourceAt) }], { events: [{ id: eventId, type: "direct_reset", scope }] });
   }));
 }
-type ReviewPatch = { title?: EditorialText; summary?: EditorialText | null; time?: NonNullable<ActionDraft["time"]>; scope?: typeof scope | { type: "paid_users"; productCodes: string[]; planCodes: string[]; quotaWindowCodes: string[]; note: null } };
+type ReviewPatch = { title?: EditorialText; summary?: EditorialText | null; time?: NonNullable<ActionDraft["time"]>; scope?: EditorialScope };
 async function saveReview(definition = codex, patch: ReviewPatch = {}, db: Db = sql) {
   await db`UPDATE monitor_event_actions SET title=${db.json(properName("Synthetic reset completed"))}
     WHERE monitor_id=${definition.monitorId} AND event_id=${eventId}`;

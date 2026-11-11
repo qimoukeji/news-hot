@@ -227,7 +227,7 @@ test("removing the final source deletes the action and requests scope verificati
   assert.equal((await loadActionInput()).actions.length, 0); assert.deepEqual((await publicV2Snapshot()).events, []);
 }));
 test("event scope edits are independent of actions and appear in preview and audit", async () => inMonitor(codex, async () => {
-  await seed(); const scope = { type: "selected_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: { zh: "仅符合资格用户" } };
+  await seed(); const scope = { type: "selected_users", note: { zh: "仅符合资格用户" } };
   const before = (await loadActionInput()).actions;
   const preview = await review({ events: { update: [{ id: "event", scope }] } }, "event");
   assert.deepEqual(preview.changes[0]!.after!.scope, scope); assert.deepEqual((await loadActionInput()).actions, before);

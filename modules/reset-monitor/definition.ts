@@ -5,7 +5,6 @@ export const RESET_EVENT_KINDS = ["direct_reset", "reset_credit", "bonus_credit"
 export interface ResetMonitorAuthor {
   handle: string;
   name: string;
-  defaultProduct?: string;
 }
 export interface ResetMonitorCollectionConfig {
   /** Replies to other accounts; self-replies have their own switch. */
@@ -29,10 +28,8 @@ export function validateCollectionConfig(value: ResetMonitorCollectionConfig): R
 export interface ResetMonitorSiteConfig {
   publicV2?: import("./public-v2.ts").PublicV2Config;
   authors: readonly ResetMonitorAuthor[];
-  plans: readonly string[];
   collection: ResetMonitorCollectionConfig;
 }
-export interface ResetMonitorProductAlias { key: string; patterns: readonly string[] }
 
 export interface ResetMonitorWebDefinition {
   publicV2?: import("./public-v2.ts").PublicV2Config;
@@ -41,8 +38,6 @@ export interface ResetMonitorWebDefinition {
   product: string;
   organization: string;
   authors: readonly ResetMonitorAuthor[];
-  plans: readonly string[];
-  productAliases?: readonly ResetMonitorProductAlias[];
   authorName: string;
   pagePath: string;
   adminPath: string;

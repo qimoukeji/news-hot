@@ -96,7 +96,7 @@ test("each public field rejects operational wording even when every other field 
     if (field === "actionSummary") action.summary = text;
     if (field === "eventTitle") row.title = text;
     if (field === "eventSummary") row.summary = text;
-    if (field === "scope") row.scope = { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: text };
+    if (field === "scope") row.scope = { type: "all_users", note: text };
     input.editorials = { [row.id]: { status: "ready", version: editorialVersion(row, input), recordVersion: editorialRecordVersion(row) } };
     const event = projectPublicV2(input, codex).events[0]!;
     assert.equal(JSON.stringify(event).includes(phrase), false, `${language}/${field}: ${phrase}`);
@@ -114,7 +114,7 @@ test("each public field rejects operational wording even when every other field 
     "企業管理者が資格を確認したユーザーのみ受け取れます", "조직 관리자가 자격을 확인한 사용자만 받을 수 있습니다",
   ]) {
     const input = fixture(); input.actions[0]!.summary = properName(phrase);
-    input.events[0]!.scope = { type: "selected_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: properName(phrase) };
+    input.events[0]!.scope = { type: "selected_users", note: properName(phrase) };
     assert.equal(hasOperationalText(input.actions[0]!.summary), false);
     const event = projectPublicV2(input, codex).events[0]!;
     assert.deepEqual(event.updates[0]!.summary, input.actions[0]!.summary);

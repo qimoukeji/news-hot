@@ -79,11 +79,13 @@ function ListFilters({ posts }: { posts: boolean }) {
   const [from, setFrom] = useState(params.get("from") ?? "");
   const [to, setTo] = useState(params.get("to") ?? "");
   useEffect(() => { setReady(true); }, []);
-  return <Form method="get" action={adminPath} aria-busy={!ready} className={`mb-5 grid min-w-0 items-end gap-2 rounded-panel bg-surface p-4 ring-1 ring-line sm:gap-3 ${posts ? "grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,8rem)_minmax(0,8rem)_auto]" : "grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,15rem)_minmax(0,15rem)_auto]"}`} key={params.toString()}>
+  return <Form method="get" action={adminPath} aria-busy={!ready} className={`mb-5 grid min-w-0 items-end gap-2 rounded-panel bg-surface p-4 ring-1 ring-line sm:gap-3 ${posts ? "grid-cols-2 lg:grid-cols-4" : "grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,15rem)_minmax(0,15rem)_auto]"}`} key={params.toString()}>
     <fieldset disabled={!ready} className="contents">
     <input type="hidden" name="kind" value={posts ? "posts" : "events"} />
+    {posts && <div className="col-span-2 min-w-0"><Field label="搜索帖子"><Input type="search" name="q" defaultValue={params.get("q") ?? ""} placeholder="帖子 ID、标题或摘要" /></Field></div>}
     <Field label="开始日期"><Input type="date" name="from" value={from} onChange={e => setFrom(e.target.value)} max={to || undefined} /></Field>
     <Field label="结束日期"><Input type="date" name="to" value={to} onChange={e => setTo(e.target.value)} min={from || undefined} /></Field>
+    {posts && <Field label="识别状态"><Select name="filter" defaultValue={params.get("filter") ?? "all"}><option value="all">全部</option>{Object.entries(PROCESSING_STATUS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>}
     {posts && <Field label="关联状态"><Select name="association" defaultValue={params.get("association") ?? "all"}><option value="all">全部</option><option value="linked">已关联</option><option value="unlinked">无关联</option></Select></Field>}
     {posts && <Field label="采集记录"><Select name="collectionFilter" defaultValue={params.get("collectionFilter") ?? "normal"}><option value="normal">正常记录</option><option value="filtered">被过滤</option><option value="all">全部记录</option></Select></Field>}
     <div className="flex items-center gap-2 whitespace-nowrap sm:gap-3"><Button type="submit">查询</Button><ButtonLink tone="ghost" to={posts ? `${adminPath}?kind=posts` : adminPath}>重置</ButtonLink></div>

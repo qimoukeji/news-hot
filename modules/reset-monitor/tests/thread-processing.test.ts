@@ -30,8 +30,7 @@ function bodyFor(id: string, existingEventId: string | null = null): ActionRecog
       kind: "direct_reset", kindExplicit: true, action: id === "103" ? "confirm" : "announce", invalidatesEvent: false,
       real: true, role: "action", excerpt: post.text, title: local(`Reset ${id}`), summary: local(`Reset summary ${id}`),
       timeExcerpt: id === "102" ? "Oct 29 at 10:00 UTC" : null,
-      rawScope: { audienceSource: null, plans: null, audienceZh: null, productsZh: null },
-      scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null }, scopeExcerpt: null }] };
+      scope: { type: "unknown", note: null }, scopeExcerpt: null }] };
 }
 const inputs: ThreadRecognitionInput[] = [];
 let beforeReply: ((input: ThreadRecognitionInput) => Promise<void>) | null = null;
@@ -86,6 +85,7 @@ test("ABC form one recognition group and independent D forms another, with sourc
   await seed(["103", "104", "101", "102"]);
   const result = await processPending();
   assert.equal(result.processed, 4); assert.equal(result.groups, 2); assert.equal(result.modelCalls, 2);
+  assert.ok(inputs.every(input => Object.keys(input).sort().join(",") === "context,events,targets"));
   assert.deepEqual(inputs.map(input => input.targets.map(post => post.id)), [["101", "102", "103"], ["104"]]);
   const saved = await loadActionInput();
   assert.ok(saved.posts.every(post => post.processing_status === "processed"));
@@ -232,13 +232,13 @@ test("recognizable type conflicts and incomplete fields preserve the model actio
   await sql`UPDATE monitor_source_posts SET text=${excerpt} WHERE monitor_id='codex' AND id='101'`;
   await sql`UPDATE monitor_source_posts SET reply_to=${sql.json({ postId: "101", author })} WHERE monitor_id='codex' AND id='104'`;
   adjustOutput = (id, body) => id === "101" ? { actions: [{ ...body.actions[0]!, action: "confirm", excerpt, title: { zh: "发放重置次数" },
-    rawScope: { ...body.actions[0]!.rawScope, plans: "Pro, Team" }, scope: { ...body.actions[0]!.scope, type: "paid" } }] } : {};
+    scope: { ...body.actions[0]!.scope, type: "paid" } }] } : {};
   const result = await processPending();
   assert.equal(result.modelCalls, 1); assert.equal(result.schemaFailures, 1); assert.equal(result.failed, 0);
   assert.equal((await sourcePost("104"))!.processing_status, "processed");
   const post = (await sourcePost("101"))!;
   assert.equal(post.processing_status, "needs_attention");
-  assert.match(post.review_reason!, /动作套餐原文无法确认/); assert.match(post.review_reason!, /可兑换的重置次数/);
+  assert.match(post.review_reason!, /动作范围无法确认/); assert.match(post.review_reason!, /可兑换的重置次数/);
   const [event] = (await publicV2Snapshot()).events;
   assert.equal(event!.type, "direct_reset"); assert.equal(event!.status, "completed");
   assert.equal(event!.updates[0]!.title.zh, "发放重置次数");

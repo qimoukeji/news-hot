@@ -27,13 +27,13 @@ test("action time preserves precision and defaults to source publication time", 
 
 test("scope keeps explicit eligibility notes and never expands unknown users", () => {
   const input = fixture();
-  input.events[0]!.scope = { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: properName("Only accounts created before the stated cutoff") };
+  input.events[0]!.scope = { type: "all_users", note: properName("Only accounts created before the stated cutoff") };
   assert.deepEqual(read(input).events[0]!.scope.note, input.events[0]!.scope.note);
   input.events[0]!.scope.note = { zh: "仅限截止日前创建的账号" };
   assert.deepEqual(read(input).events, []);
   input.events[0]!.scope = { ...input.events[0]!.scope, type: "unknown", note: null };
   assert.equal(read(input).events[0]!.scope.type, "unknown");
-  assert.equal(read(input).events[0]!.scope.note!.en, "All users");
+  assert.equal(read(input).events[0]!.scope.note!.en, "Eligibility unspecified");
 });
 test("initial confirmation completes without an announcement", () => {
   const snapshot = read();

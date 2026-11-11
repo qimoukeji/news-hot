@@ -3,6 +3,7 @@ import { sql, type Db } from "@aihot/backend/db";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
 import { Conflict } from "@aihot/backend/audit";
 import { monitorId, monitor } from "./context.ts";
+import { captureReviewNotification, cancelReviewNotification } from "./review-notifications.ts";
 import {
   actionDraftSchema,
   defaultActionTime,
@@ -123,6 +124,7 @@ export async function markPostReview(id: string, reason: string, expectedVersion
       title=CASE WHEN ${!!content} THEN ${content ? tx.json(content.title) : null} ELSE title END,
       summary=CASE WHEN ${!!content} THEN ${content?.summary ? tx.json(content.summary) : null} ELSE summary END,updated_at=clock_timestamp()
       WHERE monitor_id=${monitorId()} AND id=${id} AND processing_status='pending'`;
+    await captureReviewNotification(tx, id);
     return true;
   };
   return db === sql ? sql.begin(save) : save(db);
@@ -132,24 +134,12 @@ export async function markPostFailure(id: string, expectedVersion: string, recei
     if (!await pendingPostVersion(id, expectedVersion, tx)) return false;
     await tx`UPDATE monitor_source_posts SET processing_status='failed',filtered_out=false,review_reason=${reason.slice(0, 1000)},model_receipt_id=coalesce(${receiptId ?? null},model_receipt_id),updated_at=clock_timestamp()
       WHERE monitor_id=${monitorId()} AND id=${id} AND processing_status='pending'`;
+    await captureReviewNotification(tx, id);
     return true;
   };
   return db === sql ? sql.begin(save) : save(db);
 }
 export function validateScope(scope: EditorialScope) {
-  const catalog = monitor().publicV2?.catalog;
-  if (!catalog) throw invalid("当前监控没有公开目录");
-  for (const [field, entries] of [
-    ["productCodes", catalog.products],
-    ["planCodes", catalog.plans],
-    ["quotaWindowCodes", catalog.quotaWindows],
-  ] as const) {
-    if (
-      new Set(scope[field]).size !== scope[field].length ||
-      scope[field].some((code) => !entries.some((entry) => entry.code === code))
-    )
-      throw invalid("影响范围含重复或未知的目录代码");
-  }
   if (scope.type === "selected_users" && !scope.note)
     throw invalid("特定用户必须填写适用条件");
 }
@@ -299,6 +289,8 @@ export async function saveAcceptedPost(
     const affected = await writePostActions(tx, post, input.actions, { events: input.events, standaloneFollowups: input.standaloneFollowups });
     const [linked] = await tx`SELECT 1 FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND sources @> ${tx.json([{ postId: id }])}::jsonb LIMIT 1`;
     await tx`UPDATE monitor_source_posts SET title=${tx.json(input.title)},summary=${input.summary ? tx.json(input.summary) : null},processing_status=${input.reviewReason ? "needs_attention" : "processed"},review_reason=${input.reviewReason?.slice(0, 1000) ?? null},model_receipt_id=${input.receiptId},filtered_out=${Boolean(input.filteredOut && !linked && !input.reviewReason)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${id}`;
+    if (input.reviewReason) await captureReviewNotification(tx, id);
+    else await cancelReviewNotification(tx, id);
     const [historical] = await tx`SELECT 1 FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${`recognition:historical:${id}`}`;
     await tx`SELECT set_config('aihot.suppress_monitor_notifications',${historical ? "true" : "false"},true)`;
     await enqueuePublicV2(tx, affected);

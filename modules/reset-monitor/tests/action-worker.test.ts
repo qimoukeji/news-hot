@@ -30,12 +30,11 @@ async function applyRecognition(postId: string, recognition: ActionRecognition, 
 type Claim = ActionRecognition["actions"][number];
 const local = (text: string) => ({ en: text, zh: text, "zh-Hant": text, ja: text, ko: text, ru: text, es: text });
 const at = "2026-10-23T12:00:00.000Z";
-const scope: Claim["scope"] = { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null };
+const scope: Claim["scope"] = { type: "all_users", note: null };
 function claim(text: string, patch: Partial<Claim> = {}): Claim {
   return { eventId: null, localEventKey: "new-1", existingActionId: null, kind: "direct_reset", kindExplicit: true,
     action: "confirm", invalidatesEvent: false, real: true, role: "action", excerpt: text, title: local("Usage reset"), summary: local("Usage restored."),
-    timeExcerpt: null, rawScope: { audienceSource: null, plans: null, audienceZh: null, productsZh: null },
-    scope: structuredClone(scope), scopeExcerpt: null, ...patch };
+    timeExcerpt: null, scope: structuredClone(scope), scopeExcerpt: null, ...patch };
 }
 function recognition(text: string, receiptId: number, actions = [claim(text)]): ActionRecognition {
   return { relevant: true, needsReview: false, title: local("Quota update"), summary: local("Quota update summary"), actions,
@@ -219,19 +218,23 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: r
   assert.equal(input.events.length, 0); assert.equal(input.actions.length, 0);
 });
 
-test("duplicate scope codes are normalized without losing the post or its action", async () => {
-  const post = await addPost(codex, "We reset monthly usage.");
-  const answer = recognition(post.text, 0, [claim(post.text, { scope: { ...scope, quotaWindowCodes: ["monthly", "monthly"] } })]);
-  answer.title = local("Monthly usage update"); answer.summary = local("A monthly reset was reported, but its scope needs review.");
+for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: unlisted products, plans and periods remain in the action summary`, async () => {
+  const excerpt = "We reset the fortnightly quota for Orion Studio on the Pilot plan.";
+  const post = await addPost(definition, `${excerpt} We also raised the five-hour limit.`);
+  const audience = { type: "selected_users" as const, note: local("Pilot users") };
+  const answer = recognition(post.text, 0, [claim(excerpt, { scope: audience, scopeExcerpt: "on the Pilot plan", summary: local(excerpt) })]);
+  answer.title = local("Fortnightly usage update"); answer.summary = local(post.text);
   answers.set(post.id, answer);
   const before = model.hits();
-  await inMonitor(codex, () => processPending());
-  const saved = (await inMonitor(codex, () => sourcePost(post.id)))!;
+  await inMonitor(definition, () => processPending());
+  const saved = (await inMonitor(definition, () => sourcePost(post.id)))!;
   assert.equal(saved.processing_status, "processed"); assert.equal(saved.review_reason, null);
   assert.deepEqual(saved.title, answer.title); assert.deepEqual(saved.summary, answer.summary);
-  const input = await inMonitor(codex, () => loadActionInput());
+  const input = await inMonitor(definition, () => loadActionInput());
   assert.equal(input.events.length, 1); assert.equal(input.actions.length, 1);
-  assert.deepEqual(input.events[0]!.scope!.quotaWindowCodes, ["monthly"]);
+  const [event] = (await inMonitor(definition, () => publicV2Snapshot())).events;
+  assert.deepEqual(event!.scope, audience);
+  assert.deepEqual(event!.updates.map(action => [action.action, action.summary?.en]), [["confirm", excerpt]]);
   const [receipt] = await sql`SELECT status FROM receipts WHERE id=${saved.model_receipt_id}`;
   assert.equal(receipt!.status, "completed"); assert.equal(model.hits() - before, 1);
 });
@@ -338,25 +341,30 @@ test("one post creates announce and confirm actions for one local event and disc
 });
 
 test("a repeated accepted action adds its source and does not overwrite accepted facts", async () => {
-  const first = await addPost(codex, "We reset usage.");
-  await inMonitor(codex, () => applyRecognition(first.id, recognition(first.text, first.modelReceiptId)));
+  const first = await addPost(codex, "We reset usage for Pilot users.");
+  const initialScope = { type: "selected_users" as const, note: local("Pilot users") };
+  await inMonitor(codex, () => applyRecognition(first.id, recognition(first.text, first.modelReceiptId,
+    [claim(first.text, { scope: initialScope, scopeExcerpt: "for Pilot users", summary: local(first.text) })])));
   const input = await inMonitor(codex, () => loadActionInput()), original = input.actions[0]!;
   const second = await addPost(codex, "We reset usage for everyone.", { publishedAt: "2026-10-23T13:00:00Z" });
   await inMonitor(codex, () => applyRecognition(second.id, recognition(second.text, second.modelReceiptId,
-    [claim(second.text, { eventId: original.event_id, localEventKey: null, existingActionId: original.id, title: local("New phrasing") })])));
+    [claim(second.text, { eventId: original.event_id, localEventKey: null, existingActionId: original.id,
+      title: local("New phrasing"), scope: { ...scope, note: local("All users") }, scopeExcerpt: "for everyone", summary: local(second.text) })])));
   const after = await inMonitor(codex, () => loadActionInput()), event = (await inMonitor(codex, () => publicV2Snapshot())).events[0]!;
   assert.equal(after.actions.length, 1); assert.deepEqual(after.actions[0]!.title, original.title);
+  assert.deepEqual(after.actions[0]!.summary, original.summary);
+  assert.deepEqual(event.scope, initialScope);
   assert.equal(after.actions[0]!.sequence, original.sequence);
   assert.equal(event.updates[0]!.sources.length, 2); assert.equal(event.updates[0]!.publishedAt, at);
 });
 
-test("valid facts survive review flags and catalog gaps while fabricated evidence and widened scope stay blocked", async () => {
+test("valid facts survive review flags while fabricated action or audience evidence stays blocked", async () => {
   const cases: Array<{ text: string; patch: Partial<Claim>; needsReview?: boolean; accepted: boolean; review: boolean }> = [
     { text: "We reset usage.", patch: {}, needsReview: true, accepted: true, review: true },
     { text: "We will reset usage.", patch: { excerpt: "We reset usage for everyone." }, accepted: false, review: true },
     { text: "We will reset usage soon.", patch: { action: "announce", timeExcerpt: "soon" }, accepted: true, review: false },
-    { text: "We reset usage for paid users.", patch: { rawScope: { audienceSource: "paid users", plans: null, audienceZh: "付费用户", productsZh: null }, scopeExcerpt: "paid users" }, accepted: false, review: true },
-    { text: "We reset usage.", patch: { scope: { ...scope, productCodes: ["unconfigured-product"] } }, accepted: true, review: false },
+    { text: "We reset usage for paid users.", patch: { scopeExcerpt: "for everyone" }, accepted: false, review: true },
+    { text: "We reset usage.", patch: {}, accepted: true, review: false },
   ];
   for (const value of cases) {
     const post = await addPost(codex, value.text), rec = recognition(value.text, post.modelReceiptId, [claim(value.text, value.patch)]);
@@ -494,7 +502,6 @@ test("event edits translate title, summary and scope independently of collection
     assert.equal(translated.scope!.note!.zh, "仅适用明确范围");
     assert.equal(Object.keys(translated.scope!.note!).length, 7);
     assert.equal(translated.withdrawn, true);
-    assert.deepEqual(translated.scope!.productCodes, edited.scope!.productCodes);
     assert.deepEqual((await publicV2Snapshot()).events, []);
   });
 });
@@ -864,7 +871,7 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: i
   const actionMetadata = ({ title: _title, summary: _summary, updated_at: _updated, ...action }: typeof after.actions[number]) => action;
   assert.deepEqual(after.actions.map(actionMetadata), before.actions.map(actionMetadata), "translation does not change the action sequence, sources, time or kind");
   assert.equal(after.events[0]!.type, before.events[0]!.type);
-  assert.deepEqual(after.events[0]!.scope!.productCodes, before.events[0]!.scope!.productCodes);
+  assert.equal(after.events[0]!.scope!.type, before.events[0]!.scope!.type);
   assert.equal(after.events[0]!.withdrawn, before.events[0]!.withdrawn);
   assert.deepEqual(await scheduled.run(), { enriched: 0 });
   assert.equal(model.hits() - calls, 7);

@@ -4,11 +4,10 @@ import { after, test } from "node:test";
 import { sql, closeDb } from "@aihot/backend/db";
 import { inMonitor } from "../backend/context.ts";
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
-import { loadActionInput, storeCollectedPost } from "../backend/action-store.ts";
-import { applyRecognitionGroup } from "../backend/assemble.ts";
+import { loadActionInput, rowVersion, storeCollectedPost } from "../backend/action-store.ts";
+import { applyOfflineRecognition, applyRecognitionGroup } from "../backend/assemble.ts";
 import { threadOutputSchema, type ActionRecognitionBody } from "../backend/recognize.ts";
 import { projectRawV2 } from "../backend/public-v2.ts";
-import { defaultScopeLabel } from "../backend/scope-labels.ts";
 import { reduceEvent } from "../actions.ts";
 
 const localized = (text: string) => ({ en: text, zh: text, "zh-Hant": text, ja: text, ko: text, ru: text, es: text });
@@ -26,9 +25,8 @@ test("a thread accepts available reset credits without treating their usage dead
     reviewReason: null, title: localized(postId === "805" ? "Reset credits available" : "Product feature"), summary: null,
     actions: postId === "805" ? [{ eventId: null, localEventKey: "card-issuance", existingActionId: null, kind: "reset_credit", kindExplicit: true,
       action: "confirm", invalidatesEvent: false, real: true, role: "action", excerpt: text, title: localized("Reset credits available"),
-      summary: localized("Pro and Team users receive one or two resets, usable by March 8."), timeExcerpt: "by March 8",
-      rawScope: { audienceSource: "Pro users; Team users", plans: ["Pro", "Team"], audienceZh: null, productsZh: null },
-      scope: { type: "unknown", productCodes: [], planCodes: ["pro", "team"], quotaWindowCodes: [], note: localized("Paid users") }, scopeExcerpt: "Pro users; Team users" }] : [] })) });
+      summary: localized("Pro users receive two resets and Team users receive one, usable by March 8."), timeExcerpt: "by March 8",
+      scope: { type: "selected_users", note: localized("Eligible subscribers") }, scopeExcerpt: text }] : [] })) });
   const before = await loadActionInput();
   const result = await applyRecognitionGroup(ids.map(id => before.posts.find(post => post.id === id)!), [], { ...before, events: [], actions: [] },
     { ...body, receiptId: receipt!.id, model: "synthetic", promptVersion: "synthetic", reused: false });
@@ -45,18 +43,13 @@ test("a thread accepts available reset credits without treating their usage dead
   assert.deepEqual(actions[0]!.time, { kind: "instant", at: new Date(publishedAt).toISOString() });
   assert.deepEqual(actions[0]!.sources, [{ postId: "805" }]);
   assert.match(actions[0]!.summary!.en!, /March 8/);
-  assert.deepEqual(event.scope!.planCodes, ["pro", "team"]);
+  assert.equal(event.scope!.type, "selected_users");
 }));
 
 type Claim = ActionRecognitionBody["actions"][number];
-const scopeCases: Array<{ name: string; patch: Partial<Claim>; reason: RegExp; verified?: boolean }> = [
-  { name: "invalid scope quotation", patch: { scopeExcerpt: "all Enterprise users",
-    rawScope: { audienceSource: "paid users on Pro", audienceZh: "付费 Pro 用户", productsZh: null, plans: ["Pro", "Enterprise"] } }, reason: /范围不在本帖中/ },
-  { name: "missing scope quotation", patch: { scopeExcerpt: null }, reason: /明确范围缺少来源引文/ },
-  { name: "conflicting audience mapping", patch: { scope: { type: "all_users", productCodes: [], planCodes: ["pro"], quotaWindowCodes: [], note: localized("All users") } },
-    reason: /公开范围与原帖明确限制不一致/ },
-  { name: "duplicate catalog mapping", patch: { scope: { type: "paid_users", productCodes: [], planCodes: ["pro", "pro"], quotaWindowCodes: [], note: localized("Paid users") } },
-    reason: /影响范围含重复的目录代码/ },
+const scopeCases: Array<{ name: string; patch: Partial<Claim>; reason: RegExp; verified: boolean }> = [
+  { name: "invalid scope quotation", patch: { scopeExcerpt: "all Enterprise users" }, reason: /范围不在本帖中/, verified: false },
+  { name: "a missing label for selected users", patch: { scope: { type: "selected_users", note: null } }, reason: /特定用户缺少范围说明/, verified: false },
   { name: "verified scope despite invalid action quotation", patch: { excerpt: "The model supplied a different issuance statement." },
     reason: /动作缺少本帖明确依据/, verified: true },
 ];
@@ -69,9 +62,8 @@ for (const [index, scenario] of scopeCases.entries()) test(`paid fallback preser
     VALUES(${postId},'synthetic','reset_monitor.claude.recognize','received') RETURNING id`;
   const claim: Claim = { eventId: null, localEventKey: postId, existingActionId: null, kind: "reset_credit", kindExplicit: true,
     action: "confirm", invalidatesEvent: false, real: true, role: "action", excerpt: text,
-    title: localized("Reset credits issued"), summary: localized("Reset credits issued."), timeExcerpt: null,
-    rawScope: { audienceSource: "paid users on Pro", audienceZh: "付费 Pro 用户", productsZh: null, plans: ["Pro"] },
-    scope: { type: "paid_users", productCodes: [], planCodes: ["pro"], quotaWindowCodes: [], note: defaultScopeLabel("paid_users") },
+    title: localized("Reset credits issued"), summary: localized("Reset credits were issued to paid users on Pro."), timeExcerpt: null,
+    scope: { type: "selected_users", note: localized("Eligible subscribers") },
     scopeExcerpt: "paid users on Pro", ...scenario.patch };
   const before = await loadActionInput();
   const body = threadOutputSchema([postId]).parse({ posts: [{ postId, relevant: true, needsReview: index === 0, reviewReason: index === 0 ? "模型范围需人工修订" : null,
@@ -91,19 +83,12 @@ for (const [index, scenario] of scopeCases.entries()) test(`paid fallback preser
   assert.deepEqual(actions[0]!.sources, [{ postId }]);
   assert.equal(actions[0]!.action, "confirm");
   assert.deepEqual(actions[0]!.time, { kind: "instant", at: new Date(publishedAt).toISOString() });
-  if (scenario.verified) {
-    assert.equal(event.scope!.type, "paid_users");
-    assert.deepEqual(event.scope!.planCodes, ["pro"]);
-  } else {
-    assert.deepEqual(event.scope, { type: "unknown", productCodes: [], planCodes: [], quotaWindowCodes: [], note: defaultScopeLabel("unknown") });
-    for (const summary of [event.summary, actions[0]!.summary]) for (const language of Object.keys(localized(""))) {
-      assert.match(summary![language as keyof typeof summary], /付费 Pro 用户/);
-      assert.doesNotMatch(summary![language as keyof typeof summary], /Enterprise/);
-    }
-  }
+  assert.deepEqual(event.scope, scenario.verified ? claim.scope : { type: "unknown", note: null });
+  assert.deepEqual(event.summary, claim.summary);
+  assert.deepEqual(actions[0]!.summary, claim.summary);
   const published = projectRawV2(after, claude).events.find(candidate => candidate.id === event.id)!;
   assert.ok(published, "reviewed model action stays publicly visible");
   assert.equal(published.status, "completed");
-  assert.deepEqual(published.scope, event.scope);
+  assert.equal(published.scope.type, event.scope!.type);
   assert.equal(published.updates[0]!.id, actions[0]!.id);
 }));

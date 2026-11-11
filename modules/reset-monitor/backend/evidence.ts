@@ -7,10 +7,34 @@ export function quotedInPost(excerpt: string, post: string): boolean {
   return parts.length > 0 && parts.every(part => loose(post).includes(part));
 }
 
-/** Live scope lists join separate literal audience spans with semicolons. Check every span. */
+export type TextSpan = { start: number; end: number };
+
+export function scopeText(text: string): string {
+  return text.normalize("NFKC").replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/https?:\/\/[^\s<>"']+/gi, url => " ".repeat(url.length));
+}
+
+export function literalPattern(text: string): string {
+  return text.trim().split(/\s+/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+}
+
+// English catalog names can touch Chinese or Japanese prose without a space.
+export const scopeWordChars = "\\p{Script=Latin}\\p{Script=Cyrillic}\\p{N}\\p{M}_";
+
+export function literalScopeSpans(excerpt: string, source: string): TextSpan[] {
+  const pattern = literalPattern(scopeText(excerpt));
+  if (!pattern) return [];
+  return [...source.matchAll(new RegExp(`(?<![${scopeWordChars}])${pattern}(?![${scopeWordChars}])`, "giu"))]
+    .map(match => ({ start: match.index, end: match.index + match[0].length }));
+}
+
+/** Scope quotes may compose literal spans, but may not discard symbols within them. */
+export function scopeQuoteSpans(excerpt: string, source: string): TextSpan[] {
+  const parts = excerpt.split(/[…;；]|\.\.\./).map(part => literalScopeSpans(part, source));
+  return parts.every(part => part.length) ? parts.flat() : [];
+}
+
 export function quotedScopeInPost(excerpt: string, post: string): boolean {
-  const parts = excerpt.split(/[;；]/);
-  return parts.length === 1 ? quotedInPost(excerpt, post) : parts.every(part => !!part.trim() && quotedInPost(part, post));
+  return scopeQuoteSpans(excerpt, scopeText(post)).length > 0;
 }
 
 /** Read literal counters only; the recognizer must still establish their event and meaning. */

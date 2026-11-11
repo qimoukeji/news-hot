@@ -1776,32 +1776,7 @@
                         "selected_users",
                         "unknown"
                       ],
-                      "description": "unknown means audience mapping is unresolved, not confirmed eligibility for everyone."
-                    },
-                    "productCodes": {
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "\\S"
-                      },
-                      "description": "Empty means no catalog product restriction can be applied; it does not confirm coverage of all products."
-                    },
-                    "planCodes": {
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "\\S"
-                      }
-                    },
-                    "quotaWindowCodes": {
-                      "type": "array",
-                      "items": {
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "\\S"
-                      }
+                      "description": "unknown means the audience is unverified and must not be interpreted as eligibility for everyone."
                     },
                     "note": {
                       "anyOf": [
@@ -1859,14 +1834,11 @@
                           "type": "null"
                         }
                       ],
-                      "description": "Concise localized audience label, such as All users or Paid users; actual eligibility and product restrictions remain in summaries."
+                      "description": "Concise localized audience label. Specific eligibility, products, plans, and quota periods are described in event and action summaries."
                     }
                   },
                   "required": [
                     "type",
-                    "productCodes",
-                    "planCodes",
-                    "quotaWindowCodes",
                     "note"
                   ],
                   "additionalProperties": false
@@ -2046,221 +2018,6 @@
                     ],
                     "additionalProperties": false
                   }
-                },
-                "catalog": {
-                  "type": "object",
-                  "properties": {
-                    "products": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "code": {
-                            "type": "string",
-                            "minLength": 1,
-                            "pattern": "\\S"
-                          },
-                          "name": {
-                            "type": "object",
-                            "properties": {
-                              "en": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "zh": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "zh-Hant": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "ja": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "ko": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "ru": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "es": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              }
-                            },
-                            "required": [
-                              "en",
-                              "zh",
-                              "zh-Hant",
-                              "ja",
-                              "ko",
-                              "ru",
-                              "es"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "code",
-                          "name"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "plans": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "code": {
-                            "type": "string",
-                            "minLength": 1,
-                            "pattern": "\\S"
-                          },
-                          "name": {
-                            "type": "object",
-                            "properties": {
-                              "en": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "zh": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "zh-Hant": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "ja": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "ko": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "ru": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "es": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              }
-                            },
-                            "required": [
-                              "en",
-                              "zh",
-                              "zh-Hant",
-                              "ja",
-                              "ko",
-                              "ru",
-                              "es"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "code",
-                          "name"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "quotaWindows": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "code": {
-                            "type": "string",
-                            "minLength": 1,
-                            "pattern": "\\S"
-                          },
-                          "name": {
-                            "type": "object",
-                            "properties": {
-                              "en": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "zh": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "zh-Hant": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "ja": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "ko": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "ru": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              },
-                              "es": {
-                                "type": "string",
-                                "minLength": 1,
-                                "pattern": "\\S"
-                              }
-                            },
-                            "required": [
-                              "en",
-                              "zh",
-                              "zh-Hant",
-                              "ja",
-                              "ko",
-                              "ru",
-                              "es"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "required": [
-                          "code",
-                          "name"
-                        ],
-                        "additionalProperties": false
-                      }
-                    }
-                  },
-                  "required": [
-                    "products",
-                    "plans",
-                    "quotaWindows"
-                  ],
-                  "additionalProperties": false
                 },
                 "statistics": {
                   "type": "object",
@@ -2528,7 +2285,6 @@
               "required": [
                 "platform",
                 "sources",
-                "catalog",
                 "statistics",
                 "hasAnnouncement",
                 "predictedResetTime",

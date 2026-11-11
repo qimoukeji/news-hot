@@ -5,7 +5,7 @@ import { shutdownSignal } from "@aihot/backend/lib/shutdown";
 import { BudgetExceededError, ReceiptBusyError, completeReceipt, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
 import { ModelOutputError } from "@aihot/backend/providers/llm";
 import { modelFor } from "@aihot/backend/editorial/models";
-import { loadActionInput, markPostFailure, markPostReview, rowVersion, StalePostWork } from "./action-store.ts";
+import { loadActionInput, lockActionRecords, markPostFailure, markPostReview, rowVersion, StalePostWork } from "./action-store.ts";
 import { applyRecognitionGroup } from "./assemble.ts";
 import { monitorId, authorHandles } from "./context.ts";
 import { buildThreadGroups, type ThreadGroup } from "./thread-groups.ts";
@@ -85,6 +85,8 @@ export async function processPending(limit = Infinity): Promise<{ processed: num
   async function removeWork(key: string) { await sql`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${key}`; }
   async function review(posts: SourcePostRow[], reason: string, receiptId?: number) {
     await sql.begin(async db => {
+      // A transition can take the shared notification lock; acquire every affected post first.
+      await lockActionRecords(db, [], [], posts.map(post => post.id));
       for (const post of posts) if (await markPostReview(post.id, reason, rowVersion(post), receiptId, db)) { result.processed++; result.reviewed++; }
     });
   }
@@ -123,6 +125,7 @@ export async function processPending(limit = Infinity): Promise<{ processed: num
           result.modelCalls += calls!.n;
         }
         await sql.begin(async db => {
+          await lockActionRecords(db, [], [], group.targets.map(post => post.id));
           const detail = error.validationIssues.map(issue => `${issue.path} (${issue.code})`).join("；");
           const reason = `模型响应未通过识别组结构校验${detail ? `：${detail}` : ""}`;
           for (const post of group.targets) if (await markPostFailure(post.id, rowVersion(post), error.receiptId ?? undefined, db, reason)) result.failed++;
@@ -133,6 +136,7 @@ export async function processPending(limit = Infinity): Promise<{ processed: num
       if (recognition) throw error; // Database failure: reuse the received answer and exact work revisions.
       let marked = 0;
       await sql.begin(async db => {
+        await lockActionRecords(db, [], [], group.targets.map(post => post.id));
         for (const post of group.targets) if (await markPostFailure(post.id, rowVersion(post), undefined, db)) marked++;
       });
       if (!marked) { await removeWork(key); return; }

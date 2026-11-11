@@ -84,11 +84,11 @@ test("minute worker generates independent overviews once per facts version and u
 
 test("an unknown scope's fallback audience label is not sent as an official eligibility fact", async () => inMonitor(codex, async () => {
   await seed("confirm");
-  const scope = { type: "unknown", productCodes: [], planCodes: ["pro"], quotaWindowCodes: [], note: properName("All users") };
+  const scope = { type: "unknown", note: properName("All users"), planCodes: ["old-plan"] };
   await sql`UPDATE monitor_event_records SET scope=${sql.json(scope)} WHERE monitor_id='codex' AND id='event'`;
   await sql`UPDATE monitor_event_actions SET summary=${sql.json(properName("Pro users and Team users receive reset credits."))} WHERE monitor_id='codex' AND event_id='event'`;
   assert.equal((await processEventOverviews()).overviews, 1);
-  assert.equal(inputs[0].scope.type, "unknown"); assert.equal(inputs[0].scope.note, null);
+  assert.deepEqual(inputs[0].scope, { type: "unknown", note: null });
   assert.match(inputs[0].actions[0].summary.en, /Pro users and Team users/);
   assert.deepEqual((await loadActionInput()).events[0]!.scope, scope, "model input filtering does not change the saved scope");
 }));
@@ -163,7 +163,7 @@ test("completing scope translations preserves the event text edited for the same
   await seed(); const row = (await loadActionInput()).events[0]!;
   await updateMonitorEvent(row.id, { version: rowVersion(row), patch: {
     title: { zh: "本轮额度活动概述" }, summary: null,
-    scope: { type: "selected_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: { zh: "符合活动条件的账户" } },
+    scope: { type: "selected_users", note: { zh: "符合活动条件的账户" } },
   } }, "reviewer");
   assert.deepEqual(await processPublicV2Pending(), { enriched: 1 });
   assert.equal((await publicV2Snapshot()).events[0]!.title.zh, "本轮额度活动概述");
@@ -240,7 +240,7 @@ for (const edit of ["none", "action", "scope"] as const) test(`a full bundle wit
   await seed(); await processEventOverviews(); await complete();
   const bundle = await exportPublicV2([codex]), reviews = bundle.monitors[0]!.reviews;
   if (edit === "action") reviews.find(review => review.kind === "action")!.editorial.summary = properName("Corrected activity detail");
-  if (edit === "scope") reviews.find(review => review.kind === "event")!.editorial.scope = { type: "paid_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: properName("Paid users") };
+  if (edit === "scope") reviews.find(review => review.kind === "event")!.editorial.scope = { type: "paid_users", note: properName("Paid users") };
   const preview = await previewPublicV2(bundle, [codex]);
   assert.equal(preview.snapshots[0]!.events[0]!.status, "completed"); assert.equal(preview.snapshots[0]!.events[0]!.summary, null);
   assert.notEqual(preview.snapshots[0]!.events[0]!.title.en, "Whole activity: announced");

@@ -35,8 +35,7 @@ function claim(excerpt: string, patch: Partial<Claim> = {}): Claim {
   return { eventId: null, localEventKey: "first-round", existingActionId: null, kind: "reset_credit", kindExplicit: true,
     action: "announce", invalidatesEvent: false, real: true, role: "action", excerpt,
     title: localized("Banked reset"), summary: localized("A banked reset is planned."), timeExcerpt: null,
-    rawScope: { audienceSource: null, audienceZh: null, productsZh: null, plans: null },
-    scope: { type: "unknown", productCodes: [], planCodes: [], quotaWindowCodes: [], note: localized("All users") }, scopeExcerpt: null, ...patch };
+    scope: { type: "unknown", note: null }, scopeExcerpt: null, ...patch };
 }
 function body(actions: Claim[], relevant = true): ActionRecognitionBody {
   return { relevant, needsReview: false, title: localized("Quota update"), summary: null, actions };
@@ -96,10 +95,10 @@ async function seed(posts: Fixture[], relation?: "reply" | "quote") {
     quotedPost: post.id === secondRound.id && relation === "quote" ? { id: firstRound.id, author, publishedAt: firstRound.at, text: firstRound.text,
       relation: "quote", url: `https://x.com/${author}/status/${firstRound.id}` } : null });
 }
-async function acceptOriginal(post = original) {
+async function acceptOriginal(post = original, patch?: Partial<Claim>) {
   await seed([post]);
   const saved = (await sourcePost(post.id))!;
-  await applyOfflineRecognition(saved.id, body([claim(post.text)]), saved.version);
+  await applyOfflineRecognition(saved.id, body([claim(post.text, patch)]), saved.version);
   const input = await loadActionInput();
   return { event: input.events.find(event => input.actions.some(action => action.event_id === event.id && action.sources.some(source => source.postId === post.id)))!,
     action: input.actions.find(action => action.sources.some(source => source.postId === post.id))! };
@@ -119,7 +118,6 @@ function assertHistory(input: ActionInput) {
   ]);
   assert.equal(secondActions[0]!.time, null, "the remaining round has no invented date or source-time fallback");
   assert.equal(second.scope!.type, "unknown");
-  assert.deepEqual(second.scope!.productCodes, []);
   assert.deepEqual(reduceEvent(first, input)!.confirmedTime, { kind: "instant", at: firstRound.at });
   assert.deepEqual(reduceEvent(second, input)!.confirmedTime, { kind: "instant", at: secondRound.at });
   assert.ok(input.posts.every(post => post.processing_status === "processed"));
@@ -221,14 +219,17 @@ test("two pending rounds attached to the same numbered source remain genuinely a
   assertIndependentReview(before, after, secondRound.id, ["confirm"]);
 }));
 
-test("a remaining round does not borrow the previous round's audience, schedule or author default product", async () => inMonitor({
-  ...codex, defaultProductForAuthor: () => "Codex",
-}, async () => {
-  const initial = await acceptOriginal();
-  assert.ok(initial.event.scope!.productCodes.length > 0);
+test("a remaining round does not borrow the previous round's audience or schedule", async () => inMonitor(codex, async () => {
+  const audience = "affected subscribers", timeExcerpt = "tomorrow at 6pm UTC";
+  const first = { ...original, text: "We will grant banked resets to affected subscribers tomorrow at 6pm UTC." };
+  const initial = await acceptOriginal(first, {
+    scope: { type: "selected_users", note: localized("Affected subscribers") }, scopeExcerpt: audience, timeExcerpt,
+  });
+  assert.equal(initial.event.scope!.type, "selected_users");
+  assert.notEqual(initial.action.time, null);
   await seed([firstRound]); await processPending();
   const input = await loadActionInput(), next = input.events.find(event => event.id !== initial.event.id)!;
-  assert.equal(next.scope!.type, "unknown"); assert.deepEqual(next.scope!.productCodes, []);
+  assert.deepEqual(next.scope, { type: "unknown", note: null });
   assert.equal(reduceEvent(next, input)!.time, null);
   assert.deepEqual(input.events.find(event => event.id === initial.event.id)!.scope, initial.event.scope);
 }));

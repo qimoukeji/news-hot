@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { sql, type Db } from "@aihot/backend/db";
-import { stableJson } from "@aihot/backend/lib/ids";
 import { completeReceipt } from "@aihot/backend/providers/receipts";
 import { monitor, isAuthor } from "./context.ts";
 import { sourcePost, loadActionInput, saveAcceptedPost, markPostReview, markPostFailure, StalePostWork, lockActionRecords, rowVersion, type ActionDraft, type EventWrite } from "./action-store.ts";
-import { actionEvidence, quotedInPost, quotedScopeInPost, confirmsCompletedAction, bankedRoundCounts } from "./evidence.ts";
+import { actionEvidence, quotedInPost, confirmsCompletedAction, bankedRoundCounts } from "./evidence.ts";
 export { quotedInPost } from "./evidence.ts";
-import { recognizedScope, scopeSummary } from "./recognition-scope.ts";
-import { defaultScopeLabel } from "./scope-labels.ts";
+import { recognizedScope } from "./recognition-scope.ts";
 import { relatedContextEvents, uniqueContextEvent, uniqueRoundContextEvent } from "./context-association.ts";
 import { defaultActionTime, reduceEvent, type ActionKind, type ActionInput, type SourcePostRow } from "../actions.ts";
 import { hasExplicitFutureIssuance, isUsageTime, resolveActionTime } from "./public-v2-time.ts";
@@ -17,14 +15,6 @@ import { postContext, needsReplyContext } from "./post-context.ts";
 export interface Applied {
   eventIds: string[];
   notify: Array<{ eventId: string; action: ActionKind; postId: string }>;
-}
-
-function policyProposition(claim: ActionRecognition["actions"][number]): Proposition {
-  return {
-    kind: claim.kind, kindExplicit: claim.kindExplicit, action: claim.action,
-    real: claim.real, role: claim.role, eventId: claim.eventId, excerpt: claim.excerpt,
-    timeExcerpt: claim.timeExcerpt, scope: claim.rawScope,
-  };
 }
 
 function explicitLifecycle(claim: ActionRecognition["actions"][number]) {
@@ -151,16 +141,15 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
       claim.eventId = contextual.id;
       claim.localEventKey = null;
     }
-    const proposition = policyProposition(claim);
     const target = claim.eventId ? input.events.find(event => event.id === claim.eventId) : undefined;
     if (target && followup && recognition.needsReview && contextual?.id !== target.id) { reasons.push("待复核的已有事件关联缺少唯一原帖关系"); return; }
     if (target && ["announce", "confirm"].includes(claim.action) && !/\b(?:reset(?:s|ting)?|banked|quota|credits?|usage|limits?)\b|重置|额度|額度/i.test(claim.excerpt) && contextual?.id !== target.id) {
       reasons.push("泛指动作与目标事件缺少唯一可核验的上下文关联"); return;
     }
-    const exclusion = !monitor().eventKinds.includes(claim.kind) ? "此监控未启用该类型" : monitor().excludeProposition?.(proposition, text,
+    const exclusion = !monitor().eventKinds.includes(claim.kind) ? "此监控未启用该类型" : monitor().excludeProposition?.(claim, text,
       { trustedEventKinds: target ? [target.type] : [] });
     if (exclusion) { if (paidBaseline && claim.real) reasons.push(exclusion); return; }
-    const evidence = actionEvidence(proposition, context, acceptedClaims);
+    const evidence = actionEvidence(claim, context, acceptedClaims);
     if (!claim.real || evidence === "related") return;
     if (evidence !== "action" || !quotedInPost(claim.excerpt, text)) {
       reasons.push("动作缺少本帖明确依据"); return;
@@ -183,15 +172,6 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     if (claim.action === "confirm" && !target && !samePostEvent && claim.kind !== "bonus_credit" && !/\b(?:resets?|restored?|banked)\b|重置|恢复额度|恢復額度/i.test(claim.excerpt)) {
       reasons.push("独立确认缺少明确额度动作对象"); return;
     }
-    if (claim.scopeExcerpt && !quotedScopeInPost(claim.scopeExcerpt, text)) { reasons.push("范围不在本帖中"); return; }
-    const scopeLiteral = [claim.rawScope.audienceSource, claim.rawScope.productsZh, ...(claim.rawScope.plans ?? [])].filter(Boolean);
-    if (scopeLiteral.length && !claim.scopeExcerpt) { reasons.push("明确范围缺少来源引文"); return; }
-    const inherited = (target ? events.get(target.id)?.scope ?? target.scope : null) ?? (claim.localEventKey ? events.get(localEvents.get(claim.localEventKey) ?? "")?.scope : null);
-    const remainingRound = claim.action === "announce" && !claim.eventId && round !== null;
-    const resolvedScope = recognizedScope(claim, text, post.author, inherited, !remainingRound);
-    if (resolvedScope.issue) { reasons.push(resolvedScope.issue); return; }
-    claim.scope = resolvedScope.scope;
-    if (claim.scope.type === "unknown" || claim.scope.productCodes.length === 0 || /\bhourly\b/i.test(claim.scopeExcerpt ?? claim.excerpt)) claim.summary = scopeSummary(claim);
     if (claim.eventId && (!target || target.withdrawn || target.type !== claim.kind || reduceEvent(target, input)?.status === "cancelled")) { reasons.push("事件关联不存在、已取消或类型冲突"); return; }
     if (post.reply_to && target && !/\b(?:reset(?:s|ting)?|banked|quota|credits?|usage|limits?)\b|重置|额度|額度/i.test(claim.excerpt)) {
       const linked = new Set(input.actions.filter(action => action.event_id === target.id).flatMap(action => action.sources.map(source => source.postId)));
@@ -232,19 +212,20 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     if (resolvedTime.issue) { reasons.push(resolvedTime.issue); return; }
     const time = resolvedTime.time;
     const prior = claim.existingActionId ? input.actions.find(action => action.id === claim.existingActionId)! : null;
-    // A repeated fact only adds a source; a new scope requires an explicit new fact or review.
-    if (prior && claim.scopeExcerpt && stableJson(claim.scope) !== stableJson(target!.scope)) {
-      reasons.push("重复事实不能修改事件影响范围"); return;
-    }
-    if (!prior) {
-      if (!target && !events.has(eventId)) events.set(eventId, { id: eventId, type: claim.kind, title: claim.title, summary: claim.summary, scope: claim.scope });
-      else if (claim.scopeExcerpt) events.set(eventId, { ...(events.get(eventId) ?? { id: eventId }), scope: claim.scope });
+    // A repeated fact only adds a source; changing an accepted audience requires a sourced amendment.
+    const initial = !target && !events.has(eventId);
+    const updatesScope = claim.action === "amend" && !claim.invalidatesEvent && claim.scopeExcerpt !== null && claim.scope.type !== "unknown";
+    if (!prior && (initial || updatesScope)) {
+      const { scope, issue } = recognizedScope(claim, text);
+      if (issue) { reasons.push(issue); return; }
+      if (initial) events.set(eventId, { id: eventId, type: claim.kind, title: claim.title, summary: claim.summary, scope });
+      else events.set(eventId, { ...(events.get(eventId) ?? { id: eventId }), scope });
     }
     if (claim.localEventKey) localEvents.set(claim.localEventKey, eventId);
     drafts.push(prior ? { id: prior.id, eventId, action: prior.action, title: prior.title,
       summary: prior.summary, time: prior.time, invalidatesEvent: prior.invalidates_event }
       : { eventId, action: claim.action, title: claim.title, summary: claim.summary, time, invalidatesEvent: claim.invalidatesEvent });
-    acceptedClaims.push(proposition);
+    acceptedClaims.push(claim);
   }
   for (const claim of recognition.actions) {
     const count = drafts.length, before = reasons.length;
@@ -262,28 +243,15 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     const future = claim.action === "confirm" && quotedInPost(claim.excerpt, text)
       && hasExplicitFutureIssuance(claim.excerpt, { text, published_at: post.published_at });
     if (issue) reasons.push(issue);
-    let summary = claim.summary;
     if (initial) {
-      const scope = claim.scopeExcerpt && quotedScopeInPost(claim.scopeExcerpt, text) ? recognizedScope(claim, text, post.author) : null;
-      if (scope?.issue) reasons.push(scope.issue);
-      else if (claim.scopeExcerpt && !scope) reasons.push("范围不在本帖中");
-      else if (!claim.scopeExcerpt && [claim.rawScope.audienceSource, claim.rawScope.productsZh, ...(claim.rawScope.plans ?? [])].some(Boolean)) reasons.push("明确范围缺少来源引文");
-      if (!scope || scope.issue || scope.scope.type === "unknown" || !scope.scope.productCodes.length) {
-        const audienceVerified = !!claim.rawScope.audienceSource && quotedScopeInPost(claim.rawScope.audienceSource, text);
-        summary = scopeSummary({ ...claim, excerpt: quotedInPost(claim.excerpt, text) ? claim.excerpt : "", scopeExcerpt: scope ? claim.scopeExcerpt : null, rawScope: {
-          audienceSource: audienceVerified ? claim.rawScope.audienceSource : null,
-          audienceZh: audienceVerified ? claim.rawScope.audienceZh ?? claim.rawScope.audienceSource : null,
-          productsZh: claim.rawScope.productsZh && quotedScopeInPost(claim.rawScope.productsZh, text) ? claim.rawScope.productsZh : null,
-          plans: claim.rawScope.plans?.filter(plan => quotedInPost(plan, text)) ?? null,
-        } });
-      }
-      events.set(eventId, { id: eventId, type: claim.kind, title: claim.title, summary,
-        scope: scope && !scope.issue ? scope.scope : { type: "unknown", productCodes: [], planCodes: [], quotaWindowCodes: [], note: defaultScopeLabel("unknown") } });
+      const scope = recognizedScope(claim, text);
+      if (scope.issue) reasons.push(scope.issue);
+      events.set(eventId, { id: eventId, type: claim.kind, title: claim.title, summary: claim.summary, scope: scope.scope });
       if (claim.action === "progress" || claim.action === "amend") standaloneFollowups.add(eventId);
     }
     if (key) localEvents.set(key, eventId);
     if (claim.localEventKey && !proposed) localEvents.set(claim.localEventKey, eventId);
-    drafts.push({ eventId, action: claim.action, title: claim.title, summary,
+    drafts.push({ eventId, action: claim.action, title: claim.title, summary: claim.summary,
       time: issue || future ? defaultActionTime(claim.action, post.published_at) : time, invalidatesEvent: claim.invalidatesEvent });
   }
   if ((!paidBaseline && blockedPost) || (!drafts.length && (recognition.needsReview || reasons.length))) {

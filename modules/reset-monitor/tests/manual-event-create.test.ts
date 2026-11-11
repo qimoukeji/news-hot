@@ -19,7 +19,7 @@ import { properName, publicV2Snapshot } from "../backend/public-v2.ts";
 
 const definitions = [codex, claude, grok];
 const previousAdmin = config.devAdmin;
-const scope = { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null } as const;
+const scope = { type: "all_users", note: null } as const;
 beforeEach(async () => {
   config.devAdmin = null;
   installModules(definitions.map(createMonitorServer));

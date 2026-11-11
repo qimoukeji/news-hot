@@ -43,7 +43,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$temp/bin/curl"
 chmod +x "$temp/bin/"*
 export PATH="$temp/bin:$PATH" TEST_APP_ID=$app_id
 export COLLECT_ENABLED=false MODEL_CALLS_ENABLED=false WEBHOOK_PUSH_ENABLED=false INDEXNOW_SUBMIT_ENABLED=false
-export FEISHU_CONTENT_PUSH_ENABLED=false FEISHU_INTERNAL_ENABLED=false
+export FEISHU_CONTENT_PUSH_ENABLED=false FEISHU_INTERNAL_ENABLED=false SERVERCHAN_ENABLED=false
 
 fixture() {
   root=$temp/$1
@@ -97,4 +97,21 @@ if bash "$temp/tools/rehearse.sh" "$sha" "$root/source.dump" "$root/files.tar.gz
 fi
 ! grep -q ' up -d db' "$TEST_LOG"
 echo 'PASS: enabled Webhook push stops rehearsal before database start'
-echo '3 import/rehearsal scenarios passed; no real Docker, HTTP, or database operations ran'
+fixture serverchan_import
+export WEBHOOK_PUSH_ENABLED=false SERVERCHAN_ENABLED=true
+if run_import; then echo 'Enabled ServerChan push permitted import' >&2; exit 1; fi
+! grep -q ' up -d db' "$TEST_LOG"
+[[ ! -e $root/shared/initialized ]]
+echo 'PASS: enabled ServerChan push stops import before database start'
+
+mkdir -p "$root/releases/$sha"
+cp -R "$source/". "$root/releases/$sha/"
+cp "$bundle/release.json" "$root/releases/$sha/release.json"
+: > "$TEST_LOG"
+if bash "$temp/tools/rehearse.sh" "$sha" "$root/source.dump" "$root/files.tar.gz" "$root/source-audit.json" > "$root/output" 2>&1; then
+  echo 'Enabled ServerChan push permitted rehearsal' >&2
+  exit 1
+fi
+! grep -q ' up -d db' "$TEST_LOG"
+echo 'PASS: enabled ServerChan push stops rehearsal before database start'
+echo '5 import/rehearsal scenarios passed; no real Docker, HTTP, or database operations ran'

@@ -15,7 +15,7 @@ function snapshot(): ResetSnapshot {
 }
 function event(id: string, time: string): ResetEvent {
   return { id, type: "direct_reset", status: "completed", time: bt(time), publishedAt: "2026-10-01T00:00:00Z",
-    title: properName(id), summary: null, scope: { type: "all_users", note: properName("All users"), productCodes: [], planCodes: [], quotaWindowCodes: [] },
+    title: properName(id), summary: null, scope: { type: "all_users", note: properName("All users") },
     updates: [{ id: `${id}-update`, action: "confirm", invalidatesEvent: false, publishedAt: "2026-10-01T00:00:00Z", time: bt(time), title: properName("Reset completed"), summary: properName("Reset completed"),
       sources: [{ postId: "post-"+id, sourceId: "x-account:thsottiaux", url: `https://example.test/${id}` }] }] };
 }
@@ -203,4 +203,5 @@ test("response contracts reject old top-level metadata and invalid pagination", 
   const overview = { schemaVersion: 2, generatedAt: data.generatedAt, platforms: [platform] };
   assert.equal(overviewSchema.safeParse(overview).success, true);
   assert.equal(overviewSchema.safeParse({ ...overview, platforms: [{ ...platform, events: [] }] }).success, false);
+  assert.equal(overviewSchema.safeParse({ ...overview, platforms: [{ ...platform, catalog: {} }] }).success, false);
 });

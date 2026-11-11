@@ -299,7 +299,7 @@ export interface AdminRuns {
   errors: Array<{ error: string; n: number; last: Timestamp; example: string }>;
   retrying: { count: number; next: Timestamp | null };
   ingest: Array<{ client: string; kind: string; status: string; error: string | null; summary: unknown; created_at: Timestamp }>;
-  /** Each module's part of the page, under its name (what its server module's admin.runs returns). */
+  /** Each module's run panel data, under its name. */
   modules: Record<string, unknown>;
 }
 

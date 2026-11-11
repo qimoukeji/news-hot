@@ -2,7 +2,6 @@ import "../../../tests/standalone.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolveEventExpression } from "@aihot/reset-monitor/backend/public-v2-time";
-import { quotaScope } from "../scope-policy.ts";
 
 const parse = (text: string, at = "2026-10-10T12:00:00Z") => resolveEventExpression(text, { text, published_at: at }, true, text);
 
@@ -36,13 +35,4 @@ test("source clocks are literal and zero-padding does not change their meaning",
       assert.deepEqual(parse(`Oct 10 at ${sourceClock} UTC`), { kind: "instant", at: `2026-10-10T${clock}:00Z` });
   }
   assert.deepEqual(parse("Oct 10 between 06:00 and 09:30 UTC"), { kind: "range", from: "2026-10-10T06:00:00Z", through: "2026-10-10T09:30:00Z" });
-});
-
-test("Claude quota policy distinguishes five-hour, weekly and unknown scopes", () => {
-  for (const source of ["5h usage", "five-hour limits", "5-hour limits", "五小时额度", "5 小時限額"])
-    assert.equal(quotaScope({ audienceSource: source, productsZh: null }), "five_hour", source);
-  for (const source of ["weekly limits", "week quota", "7-day usage", "周额度", "每週限額"])
-    assert.equal(quotaScope({ audienceSource: null, productsZh: source }), "weekly", source);
-  assert.equal(quotaScope({ audienceSource: "Max", productsZh: "Claude" }), null);
-  assert.equal(quotaScope({ audienceSource: "5h and weekly limits", productsZh: null }), "five_hour+weekly");
 });

@@ -355,7 +355,7 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 ### 增量采集与运行
 
-账号、默认产品、套餐、公开目录与 collection 在 `site/reset-monitors.ts`。主帖始终开启，includeReplies（回复他人）、includeSelfReplies（自回复）与 resetOnly 分别控制，三个平台可独立修改；本站 includeSelfReplies=true，其余两项为 false；关键词按字面 OR 查询，模型复用现有调用确认三类额度事件及其后续消息。英文忽略大小写、不自动扩展词形，中文按包含匹配；启用过滤时词表非空。“All done”等未命中关键词的相关短回复可能遗漏，模型无法补回。
+账号、显示名与 collection 在 `site/reset-monitors.ts`。主帖始终开启，includeReplies（回复他人）、includeSelfReplies（自回复）与 resetOnly 分别控制，三个平台可独立修改；本站 includeSelfReplies=true，其余两项为 false；关键词按字面 OR 查询，模型复用现有调用确认三类额度事件及其后续消息。英文忽略大小写、不自动扩展词形，中文按包含匹配；启用过滤时词表非空。“All done”等未命中关键词的相关短回复可能遗漏，模型无法补回。
 
 两个回复开关均关闭时只采主帖；只开 includeReplies 时加采回复他人，只开 includeSelfReplies 时加采自回复，两者都开时加采全部回复。仅采配置账号自己发布的内容，不采其他人的回复；纯转推排除，引用帖保留。第三方查询负责回复类别筛选，本地不重复判断，目标账号缺失不丢弃帖子。reply_to 保存供应商提供的父帖 ID 和账号，引用对象保留自身回复关系；上下文先复用本轮响应和当前监控已存材料，缺失时按明确父帖或引用 ID 付费补采，不抓整个评论区。明确无关且无需复核的帖子保留 filtered_out，后台默认隐藏未关联帖子，可切换“采集记录”查看、人工保留或作为动作来源；文案编辑不解除过滤。
 
@@ -379,9 +379,45 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 Webhook 扫描每分钟维护比较基线及待发任务，仅在 `WEBHOOK_PUSH_ENABLED=true` 时投递，首次内容须符合当前动作契约。转换清理旧格式待发内容后不补发历史通知；普通停用订阅、安全阀关闭及恢复行为见[订阅协议](reset-monitor-webhooks.md)。生产转换、通知和公开部署分别按授权执行。
 
-### 产品配置
+### 帖子人工核对通知
 
-Codex、Claude、Grok 统一支持直接重置、重置卡和奖励额度。初始账号、默认产品和产品专属规则分别见 [Codex](../modules/codex-reset/README.md)、[Claude](../modules/claude-reset/README.md)、[Grok](../modules/grok-reset/README.md)。新监控使用共享表并由 `monitor_id` 复合关系隔离，不复制业务实现或另建产品表。
+使用 Server酱 Turbo 的微信通道，在其控制台完成微信绑定并获取 Turbo SendKey。后端从环境变量或凭据目录的 `integrations.env` 读取 `SERVERCHAN_SENDKEY`，只在 `SERVERCHAN_ENABLED=true` 且凭据齐全时启用。SendKey 不写入代码、日志或 Git。本系统默认独占该 SendKey 的免费额度；其他程序共用会减少实际可用额度。
+
+独立分钟任务 `cron.reset-review.notify` 已加入本站白名单，不依赖采集、模型和读者订阅开关，不需要 schema 迁移。worker 在注册任务前核对开关，首次启用建立起点，只通知之后新进入 `needs_attention` 或 `failed` 的帖子。历史定点修复和关闭期间的帖子不产生通知资格。
+
+停用时先停止全部 worker，将 worker 的 `SERVERCHAN_ENABLED` 设为 `false`，再在同一部署的后端运行环境执行 `node modules/reset-monitor/scripts/disable-review-notifications.ts --worker-stopped`。直接运行时可以在 `node` 后加 `--env-file=.env` 载入本环境配置。此命令持久作废旧待发资格，不发送通知；重新启用前也须完成这一步，即使关闭期间没有启动 worker。若已经以关闭配置启动 worker，启动检查也会登记停用。再次启用后旧待发不补发。
+
+三平台合计按北京时间每天最多 5 次发送尝试，失败及中断导致的未知结果计次；明确未发起请求的取消不占额度。单帖单次，不汇总、不催办；当天超额及跨日未发送永久跳过。同帖退出异常后再次进入可以重新通知，编辑和翻译不触发。已发起的请求保留结果，失败、超时和未知均不重试。后台“运行”的人工核对通知模块显示发送、失败、未知、取消和跳过数量，以及近期需要查看的轮次。
+
+通知只发送固定原因及原帖和后台链接，详细原因须由管理员登录后台查看。开发与测试保持 `SERVERCHAN_ENABLED=false`；实现、测试不代表授权配置真实凭据、打开推送或部署。
+
+### 平台配置
+
+Codex、Claude、Grok 统一支持直接重置、重置卡和奖励额度。初始账号、采集规则和平台专属事件规则分别见 [Codex](../modules/codex-reset/README.md)、[Claude](../modules/claude-reset/README.md)、[Grok](../modules/grok-reset/README.md)。新监控使用共享表并由 `monitor_id` 复合关系隔离，不复制业务实现或另建产品表。
+
+### 影响范围契约切换
+
+事件 `scope` 只保留 `type`、`note`，总览移除 `catalog`。产品、套餐、额度周期和具体资格保存在已有七语言事件摘要及动作摘要中，不新增表或列。保留 v2 路径和 Webhook `schemaVersion=2`，但字段精简是不兼容变更，`news-hot` 与 `when-reset` 及其他接收方须在同一窗口切换。新 API 和 worker 启动会检查旧字段及旧通知基线，未完成清理时拒绝启动。
+
+先在旧契约下只读盘点，命令只生成指定的新文件，不更改数据库、不调用模型或发送通知：
+
+```bash
+node --env-file=.env modules/reset-monitor/scripts/scope-cutover.ts --inventory .data/scope-inventory.json
+```
+
+清单列出需要核对的旧代码、现有摘要、动作及来源链接，以及在途识别、待发回调、待发布变化和接收方数量，不输出订阅密钥或回调地址。人工核对每个事件的原帖与已有摘要；资格必须保存在对应动作的完整七语言摘要中，已有文案写清就保留，缺失时补进对应动作摘要，不能根据旧代码推断完整资格或重跑历史识别。有来源事件仍要求有来源动作保留资格；只有无来源确认的事件允许使用经核对的确认摘要，保留 sources=[]，不补造来源或作为官方事实送模型。复制 `reviewTemplate` 为 `.data/scope-reviewed.json`，每项核对后设 `reviewed=true`；需要补充时填写 `actions:[{id,summary}]`，也可同时填写事件 `summary`。仅补事件摘要不能应用，后续官方概述仍只从有来源动作生成。不能省略、重复或增加清单以外的事件；来源或资格有歧义的条目先人工核对。
+
+仍用旧代码处理待发、发送中 Webhook、已收到的识别响应，以及 `unpublishedEvents` 中尚未进入旧通知基线的真实变化；无法处理的项列给管理员，不直接丢弃或改成新格式重发。停止全部 API、worker 和其他写入方后，重新盘点并核对最终清单，制作当前完整备份并验证可恢复，之后才可在获得数据修改授权时应用：
+
+```bash
+node --env-file=.env modules/reset-monitor/scripts/scope-cutover.ts --apply .data/scope-reviewed.json --worker-stopped --database-backup .data/scope-before.dump
+```
+
+应用前保持采集、模型、Webhook、Server酱、飞书和 IndexNow 安全阀关闭。备份核验可用 `--verification-database-env SCOPE_VERIFY_DATABASE_URL` 指定隔离验证库环境变量名，不在命令中公开连接串。工具在单事务内加锁、核验清单指纹；写入期间有变化、存在待发回调、在途识别、待发布变化或未配置平台旧记录时拒绝操作。旧格式指纹只在离线工具中重建并与原基线比较，不在运行接口或通知中兼容旧格式。
+
+操作删除事件范围 JSON 中的 `productCodes`、`planCodes`、`quotaWindowCodes`，仅写入人工批准的摘要补充；保留事件、动作、来源、业务时间、付费回执、订阅及已发通知。比较基线按新投影重建，保留修订号，不产生 `updated` 或历史补发。旧失败回调保留审计记录，不能在新契约下重试；若需处理，切换前由管理员在旧契约下核对。没有有效旧字段的记录不须逐条修改，但旧基线仍需切换。
+
+隔离演练及两仓联调通过后再执行已授权的发布，并核对历史摘要、总览统计及新事件签名回调。回滚使用切换前的完整备份及对应旧代码一起恢复，不能只切回旧代码读取已清理的数据。执行数据修改、真实通知、推送和部署仍须分别获得授权。
 
 ## 离线重建重置监控
 
@@ -391,6 +427,6 @@ Codex、Claude、Grok 统一支持直接重置、重置卡和奖励额度。初�
 
 ## 开发环境的监控自动翻译
 
-用户明确开启后，只在开发 worker 的启动进程中设置 `MODEL_CALLS_ENABLED=true`，保持 `COLLECT_ENABLED=false`、`WEBHOOK_PUSH_ENABLED=false`、`FEISHU_*_ENABLED=false`、`INDEXNOW_SUBMIT_ENABLED=false`；API 和页面进程保持模型关闭。启动配置不得把模型开关重新硬编码为 false；可以使用该进程的启动参数或环境覆盖，无需修改 `.env`。使用现有监控模型、付费回执和预算控制，不另建翻译服务。
+用户明确开启后，只在开发 worker 的启动进程中设置 `MODEL_CALLS_ENABLED=true`，保持 `COLLECT_ENABLED=false`、`WEBHOOK_PUSH_ENABLED=false`、`SERVERCHAN_ENABLED=false`、`FEISHU_*_ENABLED=false`、`INDEXNOW_SUBMIT_ENABLED=false`；API 和页面进程保持模型关闭。启动配置不得把模型开关重新硬编码为 false；可以使用该进程的启动参数或环境覆盖，无需修改 `.env`。使用现有监控模型、付费回执和预算控制，不另建翻译服务。
 
 保存事件、动作和帖子的文案后，下一分钟翻译任务补齐 en、zh、zh-Hant、ja、ko、ru、es，并在版本仍一致时提交；编辑状态和业务字段不随翻译改变。读取页面不会调用模型。后台显示与公开接口可能受最长 60 秒缓存影响，完整译文到齐后公开展示和现有通知基线按原规则更新；开发环境不打开真实推送。

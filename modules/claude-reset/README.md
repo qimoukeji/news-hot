@@ -1,6 +1,8 @@
 # Claude 额度动态
 
-跟踪配置账号的 Claude 额度重置、重置卡和一次性奖励额度，以动作时间线展示当前状态、适用范围和原帖链接。初始账号为 [@ClaudeDevs](https://x.com/ClaudeDevs)，账号、产品和套餐在 `site/reset-monitors.ts`。页面、模块和任务标识保留，通用实现使用[共享重置监控引擎](../reset-monitor/README.md)。
+跟踪配置账号的 Claude 额度重置、重置卡和一次性奖励额度，以动作时间线展示当前状态、适用范围和原帖链接。初始账号为 [@ClaudeDevs](https://x.com/ClaudeDevs)，账号、显示名和采集规则在 `site/reset-monitors.ts`。页面、模块和任务标识保留，通用实现使用[共享重置监控引擎](../reset-monitor/README.md)。
+
+影响范围只保留 `scope.type` 和七语言 `scope.note`，表示简短的用户范围；unknown 表示“适用范围未明确”，不能当作所有用户。产品、套餐、额度周期和具体资格只保存在已有七语言事件摘要与动作摘要中，由模型按原帖事实识别，不维护名称、代码、目录、别名、作者默认产品或映射校验。普通补来源不改写已有事实，明确变化用有来源的新动作表达；真实冲突仍需复核。
 
 ## 运行与识别
 
@@ -27,7 +29,7 @@
 | `/admin/claude-reset` | 事件列表与帖子列表两个 tab，默认事件列表；帖子包含已关联与未关联记录，只保留北京时间日期范围筛选，各自分页 |
 | `/admin/claude-reset/events/:id` | 事件详情及动作、来源管理 |
 | `/admin/claude-reset/posts/:id/review` | 帖子处理、动作及来源复核 |
-| `/api/v2/overview` | 三平台来源、目录、统计和最近事件时间 |
+| `/api/v2/overview` | 三平台来源、统计和最近事件时间 |
 | `/api/v2/claude-resets` | 事件列表及完整动作 `updates` |
 | MCP `get_claude_resets`（带站点前缀） | 同一 v2 投影的文本和结构化数据 |
 

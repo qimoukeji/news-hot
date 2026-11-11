@@ -1,41 +1,30 @@
 import { validateCollectionConfig, type ResetMonitorSiteConfig } from "@aihot/reset-monitor/definition";
-import { RESET_MONITOR_V2 } from "./reset-monitor-v2.ts";
 
 /** Public, credential-free configuration. Restart API and worker after changes. */
 export const RESET_MONITORS = {
   codex: {
     collection: { includeReplies: false, includeSelfReplies: true, resetOnly: false, keywords: ["reset", "resets", "resetting", "banked", "credit", "credits", "重置", "额度", "額度"] },
-    publicV2: RESET_MONITOR_V2.codex,
+    publicV2: { platform: "codex" },
     authors: [{ handle: "thsottiaux", name: "Tibo" }],
-    plans: ["Plus", "Pro", "Business", "Enterprise"],
   },
   claude: {
     collection: { includeReplies: false, includeSelfReplies: true, resetOnly: false, keywords: ["reset", "resets", "resetting", "banked", "credit", "credits", "重置", "额度", "額度"] },
-    publicV2: RESET_MONITOR_V2.claude,
+    publicV2: { platform: "claude-code" },
     authors: [{ handle: "ClaudeDevs", name: "ClaudeDevs" }],
-    plans: ["Free", "Pro", "Max", "Team", "Enterprise"],
   },
   grok: {
     collection: { includeReplies: false, includeSelfReplies: true, resetOnly: false, keywords: ["reset", "resets", "resetting", "banked", "credit", "credits", "重置", "额度", "額度"], maxPagesPerRun: 5 },
-    publicV2: RESET_MONITOR_V2.grok,
-    authors: [{ handle: "bot", name: "Grok Bot", defaultProduct: "Grok Bot" },
-      { handle: "grok", name: "Grok", defaultProduct: "Grok 普通额度" }],
-    plans: [],
+    publicV2: { platform: "grok" },
+    authors: [{ handle: "bot", name: "Grok Bot" }, { handle: "grok", name: "Grok" }],
   },
 } satisfies Record<string, ResetMonitorSiteConfig>;
 
 export function validateResetMonitorConfig(config: ResetMonitorSiteConfig): ResetMonitorSiteConfig {
-
   if (!config.authors.length || config.authors.some(author => !/^[A-Za-z0-9_]{1,15}$/.test(author.handle)
-    || !author.name.trim() || author.defaultProduct !== undefined && !author.defaultProduct.trim()
-    )
+    || !author.name.trim())
     || new Set(config.authors.map(author => author.handle.toLowerCase())).size !== config.authors.length) {
     throw new Error("Invalid X monitor authors");
   }
-  if (config.plans.some(plan => !plan.trim()) || new Set(config.plans.map(plan => plan.toLowerCase())).size !== config.plans.length) {
-    throw new Error("Invalid reset monitor plans");
-  }
-
   validateCollectionConfig(config.collection);
   return config;
 }

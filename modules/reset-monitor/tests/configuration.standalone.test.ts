@@ -5,38 +5,26 @@ import { RESET_MONITORS, validateResetMonitorConfig } from "@aihot/site/reset-mo
 import { RESET_EVENT_KINDS } from "../definition.ts";
 import { buildResetMonitorPrompt } from "../prompt.ts";
 import { excludeNonEvent } from "../backend/recognition-policy.ts";
-import { productForAuthor, scopeConflicts, quotaScope, plansFromScopeLabel } from "../backend/scope-policy.ts";
 import type { Proposition } from "../backend/recognize.ts";
 import codex from "../../codex-reset/definition.ts";
 import claude from "../../claude-reset/definition.ts";
 import grok from "../../grok-reset/definition.ts";
 import { excludeProposition as excludeClaude } from "../../claude-reset/recognition-policy.ts";
 import { buildPrompt as buildCodexPrompt } from "../../codex-reset/prompt.ts";
-import { backendDefinition as grokBackend } from "../../grok-reset/backend-definition.ts";
-import { inMonitor } from "../backend/context.ts";
 
 const proposition = (excerpt: string, kind: Proposition["kind"] = "direct_reset"): Proposition => ({
   kind, kindExplicit: true, action: "confirm", real: true, eventId: null, excerpt, timeExcerpt: null,
-  scope: { audienceSource: null, audienceZh: null, productsZh: null, plans: null },
 });
-const scope = (productsZh: string, plans: string[] | null = null) => ({ audienceSource: null, audienceZh: null, productsZh, plans });
 
-test("the three monitors share event kinds and configure authors, plans and defaults without credentials", () => {
+test("the three monitors share event kinds and configure authors without credentials", () => {
   for (const definition of [codex, claude, grok]) {
     assert.equal(definition.eventKinds, RESET_EVENT_KINDS);
     assert.deepEqual(definition.authors, RESET_MONITORS[definition.monitorId as keyof typeof RESET_MONITORS].authors);
     assert.equal("collection" in definition, false, "browser definition must not carry collection policy");
   }
-  assert.equal(productForAuthor(grok.authors, "@BOT"), "Grok Bot");
-  assert.equal(productForAuthor([{ handle: "Another", name: "Other", defaultProduct: "New Product" }], "another"), "New Product");
-  inMonitor({ ...grokBackend, authors: [{ handle: "Another", name: "Other", defaultProduct: "New Product" }] }, () => {
-    assert.equal(grokBackend.defaultProductForAuthor!("another"), "New Product");
-    assert.equal(grokBackend.defaultProductForAuthor!("bot"), null);
-  });
   const collection = RESET_MONITORS.codex.collection;
-  assert.throws(() => validateResetMonitorConfig({ collection, authors: [{ handle: "one", name: "One" }, { handle: "ONE", name: "Two" }], plans: [] }), /Invalid X/);
-  assert.throws(() => validateResetMonitorConfig({ collection, authors: [], plans: [] }), /Invalid X/);
-  assert.throws(() => validateResetMonitorConfig({ collection, authors: [{ handle: "one", name: "One" }], plans: ["Plan", "plan"] }), /Invalid reset monitor plans/);
+  assert.throws(() => validateResetMonitorConfig({ collection, authors: [{ handle: "one", name: "One" }, { handle: "ONE", name: "Two" }] }), /Invalid X/);
+  assert.throws(() => validateResetMonitorConfig({ collection, authors: [] }), /Invalid X/);
 });
 
 test("platform collection defaults are independent and keyword validation rejects empty enabled filters", () => {
@@ -62,13 +50,11 @@ test("platform collection defaults are independent and keyword validation reject
   }
 });
 
-test("prompt generation uses configured authors, products and plans with one action contract", () => {
-  const configured = { ...codex, authors: [{ handle: "NewOfficial", name: "New Name", defaultProduct: "New Product" }], plans: ["Custom"] };
+test("prompt generation uses configured authors with one action contract", () => {
+  const configured = { ...codex, authors: [{ handle: "NewOfficial", name: "New Name" }] };
   const prompt = buildCodexPrompt(configured);
   assert.match(prompt, /@NewOfficial/);
   assert.match(prompt, /New Name/);
-  assert.match(prompt, /New Product/);
-  assert.match(prompt, /Custom/);
   assert.doesNotMatch(prompt, /@thsottiaux|16:30–21:30/);
   assert.match(prompt, /bonus_credit/);
   assert.match(prompt, /OK fine/);
@@ -102,18 +88,4 @@ test("a daily compensation policy retains its explicitly timed first card grant,
   assert.match(excludeNonEvent({ ...proposition("We will give one banked reset for every day you don't have access.", "reset_credit"), action: "announce", role: "action" })!, /日常/);
   assert.match(excludeNonEvent({ ...proposition("Your usage limits reset automatically every day."), real: true, role: "action" })!, /日常/);
   assert.match(excludeNonEvent({ ...proposition("Your banked reset restores usage every day automatically.", "reset_credit"), real: true, role: "action" })!, /日常/);
-});
-
-test("shared scopes distinguish explicit products and plans and preserve quota action evidence", () => {
-  assert.ok(scopeConflicts(scope("Grok Bot"), scope("Grok 普通额度"), grok.productAliases));
-  assert.equal(scopeConflicts(scope("Grok Bot 和 Grok"), scope("Grok Bot"), grok.productAliases), false);
-  assert.ok(scopeConflicts(scope("Claude Code"), scope("Claude"), claude.productAliases));
-  assert.ok(scopeConflicts(scope("Codex", ["Plus"]), scope("Codex", ["Pro"]), codex.productAliases));
-  assert.equal(scopeConflicts(scope("Codex", ["Pro"]), scope("ChatGPT Work", ["pro"]), codex.productAliases), false);
-  assert.equal(quotaScope(scope("Claude"), { excerpt: "We reset 5-hour usage and we doubled weekly limits", kind: "direct_reset" }), "five_hour");
-  assert.equal(quotaScope(scope("Claude weekly"), { excerpt: "One-time cloud session credit", kind: "bonus_credit" }), null);
-  assert.equal(plansFromScopeLabel("all paid subscriptions", codex.plans), null);
-  assert.equal(plansFromScopeLabel("business accounts (all paid users)", codex.plans), null);
-  assert.deepEqual(plansFromScopeLabel("Plus, Pro", codex.plans), ["Plus", "Pro"]);
-  assert.deepEqual(plansFromScopeLabel("Plan A", []), ["Plan A"]);
 });

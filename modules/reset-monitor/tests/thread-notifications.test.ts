@@ -23,7 +23,7 @@ for (const incomplete of [false, true]) test(`historical group establishes a not
   }
   const first = await post("101", "2026-10-28T01:00:00Z");
   await sql.begin(db => writePostActions(db, first, [{ eventId: "event", action: "announce", title: properName("Reset planned"), summary: null, time: bt("2026-10-28") }],
-    { events: [{ id: "event", type: "direct_reset", title: properName("Quota event"), summary: null, scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null } }] }));
+    { events: [{ id: "event", type: "direct_reset", title: properName("Quota event"), summary: null, scope: { type: "all_users", note: null } }] }));
   await initializeWebhookBaselines([codex]);
   if (incomplete) await sql`UPDATE monitor_event_records SET title='{"zh":"未完成翻译"}'::jsonb WHERE monitor_id='codex' AND id='event'`;
   const historical = await post("102", "2026-10-28T02:00:00Z");

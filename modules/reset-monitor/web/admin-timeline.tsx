@@ -9,12 +9,12 @@ import { EventActionRow, EventCardFrame } from "./components/EventCard.tsx";
 import { ActionDialog } from "./action-dialog.tsx";
 
 export function EventTimeline({ event, controls }: { event: AdminTimelineEvent; controls: ReactNode }) {
-  const { adminPath, publicV2 } = useMonitor();
+  const { adminPath } = useMonitor();
   const [expanded, setExpanded] = useState(true);
   const timelineId = useId();
   const [dialog, setDialog] = useState<{ actionId?: string } | null>(null);
   const revalidator = useRevalidator();
-  return <><EventCardFrame event={event} catalog={publicV2?.catalog} eventId={event.id}
+  return <><EventCardFrame event={event} eventId={event.id}
     title={<Link className="hover:text-accent" to={`${adminPath}/events/${encodeURIComponent(event.id)}`}>{text(event.title) || "标题待处理"}</Link>}
     footer={<>
       <span className="mr-auto text-[12px] text-ink-4">{event.actionCount} 个动作 · {event.sourcePostCount} 条来源帖 · <span className="num">{stamp(event.latestAt)}</span></span>

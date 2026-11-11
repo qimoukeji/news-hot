@@ -25,7 +25,7 @@ test("one review command combines independent new events, actions, sources and r
   const commands = buildAssociationCommands(additions, ["old-action"], "current-post");
   assert.deepEqual(commands.events.create, [
     { localKey: "event-new-event-a", type: "direct_reset", title: { zh: "First event" }, summary: { zh: "Original summary" },
-      scope: { type: "unknown", productCodes: [], planCodes: [], quotaWindowCodes: [], note: { zh: "Paid users" } } },
+      scope: { type: "unknown", note: { zh: "Paid users" } } },
     { localKey: "event-new-event-b", type: "bonus_credit", title: { zh: "Second event" }, summary: null },
   ]);
   assert.deepEqual(commands.actions.create, [

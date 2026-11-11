@@ -6,6 +6,7 @@ import { normalizeTweet } from "./providers/twitterapi.ts";
 import { tweetText, type Tweet } from "./providers/collectors.ts";
 import { embeddedQuote, replyTarget } from "./post-policy.ts";
 import { storeCollectedPost, lockActionRecords } from "./action-store.ts";
+import { cancelReviewNotification } from "./review-notifications.ts";
 import { verifyActionBackup } from "./backup.ts";
 import type { ActionRow, EventRow, SourcePostRow } from "../actions.ts";
 
@@ -163,8 +164,11 @@ export async function applyThreadRepair(options: ThreadRepairOptions, fingerprin
       author: post.user.screen_name, publishedAt: post.tweet_created_at,
       url: `https://x.com/${post.user.screen_name}/status/${post.id_str}`, text: tweetText(post),
       quotedPost: embeddedQuote(post)[0] ?? null, replyTo: replyTarget(post), receiptId, contextOnly }, tx);
-    for (const id of plan.changes.requeue) await tx`UPDATE monitor_source_posts SET processing_status='pending',review_reason=NULL,updated_at=clock_timestamp()
-      WHERE monitor_id=${monitorId()} AND id=${id} AND processing_status='needs_attention'`;
+    for (const id of plan.changes.requeue) {
+      await tx`UPDATE monitor_source_posts SET processing_status='pending',review_reason=NULL,updated_at=clock_timestamp()
+        WHERE monitor_id=${monitorId()} AND id=${id} AND processing_status='needs_attention'`;
+      await cancelReviewNotification(tx, id);
+    }
     for (const id of plan.targetPostIds.filter(id => !plan.changes.preserved.includes(id))) await tx`INSERT INTO monitor_state(monitor_id,key,value)
       VALUES(${monitorId()},${`recognition:historical:${id}`},'{"suppressNotifications":true}'::jsonb)
       ON CONFLICT(monitor_id,key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()`;

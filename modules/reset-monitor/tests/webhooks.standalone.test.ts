@@ -17,12 +17,16 @@ const payload: WebhookPayload = {
     summary: null, time: bt("2026-10-19T04:00:00Z"),
     updates: [{ id: "action-1", action: "confirm", invalidatesEvent: false, title: { en:"Confirmed", zh:"已确认", "zh-Hant":"已確認", ja:"確認済み", ko:"확인됨", ru:"Подтверждено", es:"Confirmado" }, publishedAt: "2026-10-19T04:00:00Z", time: bt("2026-10-18"), summary: null,
       sources: [{ postId:"source-post", sourceId: "x-account:claudeai", url: "https://x.com/claudeai/status/source-post" }] }],
-    scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null },
+    scope: { type: "all_users", note: null },
   },
 };
 
 test("webhook contract preserves all v2 languages and limits withdrawal to a null event", () => {
   assert.deepEqual(webhookPayloadSchema.parse(payload), payload);
+  for (const field of ["productCodes", "planCodes", "quotaWindowCodes"]) {
+    const event = { ...payload.event!, scope: { ...payload.event!.scope, [field]: [] } };
+    assert.equal(webhookPayloadSchema.safeParse({ ...payload, event }).success, false, field);
+  }
   for (const time of ["2026-10-18", "2026-10-19T04:00:00Z", "2026-10-19T04:00:00Z/2026-10-19T05:00:00Z"]) {
     const event = structuredClone(payload.event)!;
     assert.equal(webhookPayloadSchema.safeParse({ ...payload, event: { ...event, updates: [{ ...event.updates[0], time }] } }).success, false, "scalar action times are rejected");

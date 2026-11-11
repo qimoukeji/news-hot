@@ -36,4 +36,4 @@ export type ReviewPreview = {
   orderChanges: Array<{ eventId: string; before: string[]; after: string[] }>;
   lastSourceRemovals: Array<{ actionId: string; eventId: string; message: string }>;
 };
-export const emptyScope = (): Scope => ({ type: "unknown", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null });
+export const emptyScope = (): Scope => ({ type: "unknown", note: null });

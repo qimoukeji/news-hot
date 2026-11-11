@@ -1,5 +1,6 @@
 import { stableJson } from "@aihot/backend/lib/ids";
 import { z } from "zod";
+import { cancelReviewNotification } from "./review-notifications.ts";
 import { sql, type Db } from "@aihot/backend/db";
 import { audit, Conflict } from "@aihot/backend/audit";
 import { monitorId, monitor, auditAction, auditSubject } from "./context.ts";
@@ -289,6 +290,7 @@ async function submit(origin: Origin, value: unknown, actor: string) {
     if (origin.kind === "post" && (planned.command.post || planned.completesPost)) {
       const post = planned.after.posts.find(post => post.id === origin.id)!;
       await db`UPDATE monitor_source_posts SET title=${post.title ? db.json(post.title) : null},summary=${post.summary ? db.json(post.summary) : null},processing_status=${post.processing_status},review_reason=${post.review_reason},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${origin.id}`;
+      if (planned.completesPost) await cancelReviewNotification(db, origin.id);
     }
     await audit(actor, auditAction("review"), auditSubject(origin.kind, origin.id), planned.command.reason,
       { post: origin.kind === "post" ? auditPost(state.posts.find(post => post.id === origin.id)) : null, events: planned.changes.map(change => ({ id: change.eventId, before: change.before })), actions: planned.actionChanges.map(change => ({ id: change.actionId, before: change.before })) },

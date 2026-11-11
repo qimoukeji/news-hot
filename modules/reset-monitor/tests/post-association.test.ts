@@ -113,7 +113,7 @@ for (const definition of definitions) test(`${definition.monitorId}: a Chinese-o
     const beforeReceipts = await sql`SELECT id FROM receipts`;
     const preview = await associate("review", {
       events: { create: [{ localKey: "new", type: "direct_reset", title: { zh: "人工核实的重置" }, summary: { zh: "额度已重置" },
-        scope: { type: "unknown", productCodes: [], planCodes: [], quotaWindowCodes: [], note: { zh: "所有用户" } } }] },
+        scope: { type: "unknown", note: { zh: "所有用户" } } }] },
       actions: { create: [{ localKey: "first", eventKey: "new", ...fact(), title: { zh: "重置已生效" }, summary: { zh: "额度已生效" } }] },
       sources: { add: [{ actionKey: "first", postId: "review" }] },
     });
@@ -121,8 +121,8 @@ for (const definition of definitions) test(`${definition.monitorId}: a Chinese-o
     const input = await loadActionInput(), event = (await publicV2Snapshot()).events.find(event => event.id === input.events[0]!.id)!;
     assert.ok(event, "the manual event must not disappear while title/summary translation is disabled");
     assert.equal(event.scope.type, "unknown");
-    assert.equal(event.scope.note!.zh, "所有用户");
-    assert.equal(event.scope.note!.en, "All users");
+    assert.equal(event.scope.note!.en, "Eligibility unspecified");
+    assert.equal(event.scope.note!.zh, "适用范围未明确");
     assert.deepEqual(input.events[0]!.scope!.note, { zh: "所有用户" }, "reading must not persist generated labels");
     assert.equal((await sourcePost("review"))!.processing_status, "processed");
     assert.deepEqual(await sql`SELECT id FROM receipts`, beforeReceipts);

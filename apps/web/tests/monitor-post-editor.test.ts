@@ -20,6 +20,60 @@ async function fillNew(page: Page, title: string) {
   await dialog.getByLabel("原文", { exact: true }).fill("Private original source text");
 }
 
+for (const product of platforms) for (const status of ["needs_attention", "failed"] as const) test(`${product.product}: ${status} notification links find linked posts and preserve search through filtering, paging and editing`, async () => {
+  fixture.state.processingStatus = status;
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const requestsStart = fixture.requests.length;
+  try {
+    await page.goto(`${web.origin}${product.admin}?kind=posts&q=post-1&filter=${status}&collectionFilter=all&page=2`);
+    const card = page.locator('[data-monitor-post="post-1"]');
+    await expect(card).toBeVisible();
+    await expect(card.getByText("已关联", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-monitor-post="post-3"]')).toHaveCount(0);
+    await expect(page.getByLabel("搜索帖子", { exact: true })).toHaveValue("post-1");
+    await expect(page.getByLabel("识别状态", { exact: true })).toHaveValue(status);
+    assert.deepEqual(await page.getByLabel("识别状态", { exact: true }).locator("option").evaluateAll(options => options.map(option => ({ value: option.getAttribute("value"), label: option.textContent }))), [
+      { value: "all", label: "全部" }, { value: "pending", label: "待识别" }, { value: "processed", label: "已处理" }, { value: "needs_attention", label: "待处理" }, { value: "failed", label: "处理失败" },
+    ]);
+    const assertForwarded = (pageNumber: string) => {
+      const request = new URL(fixture.requests.slice(requestsStart).filter(path => path.startsWith(product.api + "/posts?")).at(-1)!, web.origin);
+      for (const [name, value] of Object.entries({ q: "post-1", filter: status, collectionFilter: "all", page: pageNumber })) assert.equal(request.searchParams.get(name), value);
+      return request;
+    };
+    assertForwarded("2");
+    await page.getByLabel("开始日期", { exact: true }).fill("2026-10-23");
+    await page.getByLabel("结束日期", { exact: true }).fill("2026-10-23");
+    await page.getByLabel("关联状态", { exact: true }).selectOption("linked");
+    await page.getByRole("button", { name: "查询", exact: true }).click();
+    await expect(page).toHaveURL(/association=linked/);
+    assert.equal(new URL(page.url()).searchParams.has("page"), false);
+    await expect(card).toBeVisible();
+    const filtered = assertForwarded("1");
+    for (const [name, value] of Object.entries({ from: "2026-10-23", to: "2026-10-23", association: "linked" })) assert.equal(filtered.searchParams.get(name), value);
+    await page.getByRole("link", { name: "下一页", exact: true }).click();
+    await expect(page).toHaveURL(/page=2/);
+    await page.reload();
+    await expect(card).toBeVisible();
+    assertForwarded("2");
+    await expect(page.getByLabel("搜索帖子", { exact: true })).toHaveValue("post-1");
+    await expect(page.getByLabel("识别状态", { exact: true })).toHaveValue(status);
+    await expect(page.getByLabel("采集记录", { exact: true })).toHaveValue("all");
+    const url = page.url();
+    await card.getByRole("button", { name: "编辑", exact: true }).click();
+    await editDialog(page).getByLabel("标题（中文）", { exact: true }).fill("核对中的帖子");
+    await editDialog(page).getByRole("button", { name: "保存", exact: true }).click();
+    await expect(editDialog(page)).toHaveCount(0);
+    await expect(card.getByRole("heading", { name: "核对中的帖子", exact: true })).toBeVisible();
+    await expect(page).toHaveURL(url);
+    assertForwarded("2");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.getByRole("link", { name: "重置", exact: true }).click();
+    await expect(page.getByLabel("搜索帖子", { exact: true })).toHaveValue("");
+    await expect(page.getByLabel("识别状态", { exact: true })).toHaveValue("all");
+    await expect(page.locator('[data-monitor-post]')).toHaveCount(2);
+  } finally { await page.close(); }
+});
+
 for (const product of platforms) test(`${product.product}: post association filter combines dates, resets pagination and preserves paging filters`, async () => {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   try {
@@ -123,12 +177,14 @@ test("editing uses the latest post row version, retains failed input and reloads
     await expect(editDialog(page).getByLabel("标题（中文）", { exact: true })).toHaveValue("保留的标题");
     failSave = false; fixture.state.previewConflict = true;
     await editDialog(page).getByRole("button", { name: "保存", exact: true }).click();
+    const reloadButton = editDialog(page).getByRole("button", { name: "重新读取", exact: true });
+    await expect(reloadButton).toBeVisible();
     await expect(editDialog(page).getByRole("button", { name: "保存", exact: true })).toBeDisabled();
     await expect(editDialog(page).getByLabel("标题（中文）", { exact: true })).toHaveValue("保留的标题");
     const reads = fixture.requests.filter(path => path === "/api/admin/codex-reset/posts/post-1").length;
     fixture.state.previewConflict = false;
     holdReload = true;
-    await editDialog(page).getByRole("button", { name: "重新读取", exact: true }).click();
+    await reloadButton.click();
     await expect(editDialog(page).getByRole("status")).toHaveText("正在读取帖子…");
     await expect(editDialog(page).getByLabel("标题（中文）", { exact: true })).toHaveCount(0);
     await expect.poll(() => !!releaseReload).toBe(true);

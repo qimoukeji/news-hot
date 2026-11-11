@@ -11,7 +11,8 @@ try {
   const definition = RESET_MONITOR_BACKENDS.find(definition => definition.monitorId === values.platform);
   if (!definition || !values.receipts || !values.targets) throw new Error("Select --platform, comma-separated --receipts and --targets");
   if (process.env.COLLECT_ENABLED === "true" || process.env.MODEL_CALLS_ENABLED === "true"
-    || process.env.WEBHOOK_PUSH_ENABLED === "true" || process.env.FEISHU_CONTENT_PUSH_ENABLED === "true") throw new Error("Keep collection, models and real notifications disabled during repair");
+    || process.env.WEBHOOK_PUSH_ENABLED === "true" || process.env.SERVERCHAN_ENABLED === "true"
+    || process.env.FEISHU_CONTENT_PUSH_ENABLED === "true") throw new Error("Keep collection, models and real notifications disabled during repair");
   const options = { receiptIds: values.receipts.split(",").map(Number), targetPostIds: values.targets.split(",") };
   await inMonitor(definition, async () => {
     if (values.apply) {

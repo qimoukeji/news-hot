@@ -9,11 +9,7 @@ export interface ResetMonitorBackendDefinition extends ResetMonitorDefinition {
   prompt: string;
   buildPrompt?: (definition: ResetMonitorBackendDefinition) => string;
   promptVersion: string;
-  plans: readonly string[];
-  defaultProductForAuthor?: (author: string) => string | null;
-  scopeConflicts?: (a: Proposition["scope"], b: Proposition["scope"]) => boolean;
   requireCrossAuthorEvidence?: boolean;
-  quotaScope?: (scope: { audienceSource: string | null; productsZh: string | null }, evidence?: { excerpt: string; kind: Proposition["kind"] }) => string | null;
   excludeProposition?: (proposition: Proposition, sourceText: string, association?: { trustedEventKinds: readonly Proposition["kind"][] }) => string | null;
   names: {
     tick: string;

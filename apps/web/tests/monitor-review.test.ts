@@ -115,8 +115,10 @@ for (const kind of ["events", "posts"]) test(`${kind} list applies its date rang
   try {
     await page.goto(`${web.origin}/admin/codex-reset?kind=${kind}`);
     const form = page.locator("form").filter({ has: page.getByRole("button", { name: "查询", exact: true }) });
-    await expect(form.locator('input:not([type="hidden"])')).toHaveCount(2);
-    await expect(form.locator("select")).toHaveCount(kind === "posts" ? 2 : 0);
+    await expect(form.locator('input[type="date"]')).toHaveCount(2);
+    await expect(form.getByLabel("搜索帖子", { exact: true })).toHaveCount(kind === "posts" ? 1 : 0);
+    await expect(form.getByLabel("识别状态", { exact: true })).toHaveCount(kind === "posts" ? 1 : 0);
+    await expect(form.locator("select")).toHaveCount(kind === "posts" ? 3 : 0);
     await page.getByLabel("开始日期", { exact: true }).fill("2026-10-24");
     await page.getByLabel("结束日期", { exact: true }).fill("2026-10-24");
     await page.getByRole("button", { name: "查询", exact: true }).click();
@@ -229,7 +231,7 @@ test("event editor preserves ordinary text fields and sends no reason", async ()
     await expect(dialog).toHaveCount(0);
     const write = fixture.writes[0]!;
     assert.equal("reason" in write.body, false);
-    assert.deepEqual(write.body.patch, { title: { zh: "人工确定的显示标题" }, summary: { zh: "调整后的中文摘要" }, scope: { type: "paid_users", productCodes: ["product"], planCodes: ["pro"], quotaWindowCodes: ["weekly"], note: { zh: "仅限 Pro 用户的每周额度" } } });
+    assert.deepEqual(write.body.patch, { title: { zh: "人工确定的显示标题" }, summary: { zh: "调整后的中文摘要" }, scope: { type: "paid_users", note: { zh: "仅限 Pro 用户的每周额度" } } });
     await page.goto(`${web.origin}/admin/codex-reset`);
     await page.getByRole("link", { name: "下一页", exact: true }).click();
     await expect(page).toHaveURL(/page=2/);

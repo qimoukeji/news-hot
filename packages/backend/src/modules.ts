@@ -130,6 +130,8 @@ export interface SitemapEntry {
  * that made the change and, given one, inside its transaction.
  */
 export interface EngineHooks {
+  /** The worker is about to register consumers; reconcile state that must precede any queued work. */
+  workerStarting: () => Promise<void>;
   /**
    * An article's public content changed; a former event is included when its membership moved.
    * `reduced`: something public is now shown less, as publication judged it (`PublishResult`).
@@ -203,6 +205,16 @@ export interface ModuleMigrationCheck {
   migration: string;
   /** Read-only verification; throw to prevent any pending DDL or the guarded statement from committing. */
   verify: (db: Pick<Db, "unsafe">) => Promise<void>;
+}
+
+/** A module's runs panel may take over displaying its own jobs from the generic runs table. */
+export class ModuleRunResults<T> {
+  readonly jobs: readonly string[];
+  readonly data: T;
+  constructor(jobs: readonly string[], data: T) {
+    this.jobs = jobs;
+    this.data = data;
+  }
 }
 
 export interface ServerModule {

@@ -43,7 +43,8 @@ export async function openEvents(before: Date, context: ContextInput[], savedInp
       const first = input.posts.filter(post => sourceIds.includes(post.id)).sort((a, b) => new Date(a.published_at).getTime() - new Date(b.published_at).getTime())[0];
       return { id: event.id, kind: event.type, status: event.status,
         publishedAt: event.publishedAt, author: first?.author, title: event.title.en, summary: event.summary?.en ?? null,
-        time: event.time, scope: event.scope.note?.en ?? null, sourcePostIds: sourceIds,
+        time: event.time, scope: { type: event.scope.type, note: event.scope.type === "unknown" ? null : event.scope.note?.en ?? null },
+        sourcePostIds: sourceIds,
         actions: eventActions.map(action => ({ id: action.id, action: action.action, invalidatesEvent: action.invalidates_event, sequence: action.sequence,
           title: readable(action.title) ?? "", summary: readable(action.summary) })) };
     });

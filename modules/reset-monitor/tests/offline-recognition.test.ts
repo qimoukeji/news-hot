@@ -17,8 +17,8 @@ function response(excerpt = "We reset usage for everyone."): ActionRecognitionBo
   return { relevant: true, needsReview: false, title: localized("Quota update"), summary: null,
     actions: [{ eventId: null, localEventKey: "new-1", existingActionId: null, kind: "direct_reset", kindExplicit: true,
       action: "confirm", invalidatesEvent: false, real: true, role: "action", excerpt, title: localized("Usage reset"), summary: null,
-      timeExcerpt: null, rawScope: { audienceSource: null, plans: null, audienceZh: null, productsZh: null },
-      scope: { type: "all_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: localized("All users") }, scopeExcerpt: null }] };
+      timeExcerpt: null,
+      scope: { type: "unknown", note: null }, scopeExcerpt: null }] };
 }
 async function post(text = "We reset usage for everyone.", replyTo: { postId: string | null; author: string | null } | null = null) {
   const id = randomUUID();
@@ -78,51 +78,6 @@ test("offline fabricated excerpts remain visible for review", async () => inMoni
   assert.equal((await loadActionInput()).events.length, 0);
 }));
 
-test("a concise paid-user note preserves the original product and paid-only scope", async () => inMonitor(codex, async () => {
-  const source = "We reset usage for all paid ChatGPT accounts.";
-  const saved = await post(source), answer = response(source), claim = answer.actions[0]!;
-  claim.rawScope = { audienceSource: "all paid ChatGPT accounts", audienceZh: "所有 ChatGPT 付费账号", productsZh: "ChatGPT", plans: null };
-  claim.scope = { type: "paid_users", productCodes: ["chatgpt"], planCodes: [], quotaWindowCodes: [], note: { ...localized("Paid users"), zh: "付费用户" } };
-  claim.scopeExcerpt = "all paid ChatGPT accounts";
-  await applyOfflineRecognition(saved.id, answer, saved.version);
-  assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
-  const event = (await publicV2Snapshot()).events[0]!;
-  assert.deepEqual(event.scope, claim.scope);
-  assert.equal((await sourcePost(saved.id))!.text, source);
-}));
-
-test("a paid-user label for multiple paid plans retains every exact plan code", async () => inMonitor(codex, async () => {
-  const source = "We reset usage for all Plus and Pro users.";
-  const saved = await post(source), answer = response(source), claim = answer.actions[0]!;
-  claim.rawScope = { audienceSource: "all Plus and Pro users", audienceZh: "所有 Plus 和 Pro 用户", productsZh: null, plans: ["Plus", "Pro"] };
-  claim.scope = { type: "all_users", productCodes: [], planCodes: ["plus", "pro"], quotaWindowCodes: [], note: { ...localized("Paid users"), zh: "付费用户" } };
-  claim.scopeExcerpt = "all Plus and Pro users";
-  await applyOfflineRecognition(saved.id, answer, saved.version);
-  assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
-  const scope = (await publicV2Snapshot()).events[0]!.scope;
-  assert.deepEqual({ ...scope, note: claim.scope.note }, claim.scope);
-  assert.equal(scope.note!.zh, "付费用户");
-}));
-
-test("a short paid-user label requires selected eligibility to remain in the action summary", async () => inMonitor(codex, async () => {
-  const source = "We reset usage for eligible paid users who signed up before 8pm PT.";
-  for (const keepCondition of [true, false]) {
-    const saved = await post(source), answer = response(source), claim = answer.actions[0]!;
-    const condition = "PT 晚上 8 点前注册的付费用户";
-    claim.rawScope = { audienceSource: "eligible paid users who signed up before 8pm PT", audienceZh: condition, productsZh: null, plans: null };
-    claim.scope = { type: "selected_users", productCodes: [], planCodes: [], quotaWindowCodes: [], note: { ...localized("Paid users"), zh: "付费用户" } };
-    claim.scopeExcerpt = "eligible paid users who signed up before 8pm PT";
-    claim.summary = keepCondition ? { ...localized("Usage was reset for paid users who signed up before 8pm PT."), zh: `已为${condition}重置额度。` } : null;
-    await applyOfflineRecognition(saved.id, answer, saved.version);
-    assert.equal((await sourcePost(saved.id))!.processing_status, keepCondition ? "processed" : "needs_attention");
-  }
-  const [event] = (await publicV2Snapshot()).events;
-  assert.equal(event!.scope.note!.zh, "付费用户");
-  assert.equal(event!.summary, null, "event overview is pending");
-  assert.match(event!.updates[0]!.summary!.zh, /PT 晚上 8 点前注册的付费用户/);
-  assert.equal((await loadActionInput()).events.length, 1);
-}));
-
 test("plural resets explicitly propagated can confirm, while a future reset remains review", async () => inMonitor(codex, async () => {
   const completed = await post("Resets all propagated. Have a fantastic weekend.");
   await applyOfflineRecognition(completed.id, response("Resets all propagated."), completed.version);
@@ -134,58 +89,15 @@ test("plural resets explicitly propagated can confirm, while a future reset rema
   assert.equal((await loadActionInput()).events.length, 1);
 }));
 
-test("a completed reset-card grant uses verified usage instructions for weekly and monthly scope without making the grant future", async () => inMonitor(codex, async () => {
-  const grant = "We have added a banked reset to everyone's account.";
-  for (const cycle of ["weekly", "monthly"]) for (const mode of ["offline", "online"]) {
-    const text = `${grant} You can apply the reset in the desktop app or on web and it will replenish the ${cycle} usage for you.`;
-    const saved = await post(text), answer = response(grant), action = answer.actions[0]!;
-    action.kind = "reset_credit";
-    action.scope.quotaWindowCodes = [cycle];
-    action.scopeExcerpt = text;
-    if (mode === "offline") await applyOfflineRecognition(saved.id, answer, saved.version);
-    else {
-      const [receipt] = await sql<{ id: number }[]>`INSERT INTO receipts(logical_key,service,purpose,subject,status,response)
-        VALUES(${randomUUID()},'synthetic',${`${codex.names.purposePrefix}.recognize`},${`x:${saved.id}`},'received','{}'::jsonb) RETURNING id`;
-      await applyRecognition(saved.id, { ...answer, receiptId: receipt!.id, model: "synthetic", promptVersion: "synthetic" }, saved.version);
-      assert.equal((await sql`SELECT status FROM receipts WHERE id=${receipt!.id}`)[0]!.status, "completed");
-    }
-    assert.equal((await sourcePost(saved.id))!.processing_status, "processed", `${mode} ${cycle}`);
-    const event = (await publicV2Snapshot()).events.find(event => event.updates.some(update => update.sources.some(source => source.postId === saved.id)))!;
-    assert.equal(event.type, "reset_credit");
-    assert.equal(event.status, "completed");
-    assert.deepEqual(event.time, bt(at));
-    assert.deepEqual(event.scope.quotaWindowCodes, [cycle]);
-  }
-}));
-
-test("an adjacent five-hour limit increase cannot supply the reset card's quota cycle", async () => inMonitor(codex, async () => {
-  const grant = "We have added one banked reset to every account.";
-  const text = `We increased five-hour usage limits by 20%. ${grant}`;
-  const saved = await post(text), answer = response(grant), action = answer.actions[0]!;
-  action.kind = "reset_credit";
-  action.scope.quotaWindowCodes = ["five-hour"];
-  action.scopeExcerpt = text;
-  await applyOfflineRecognition(saved.id, answer, saved.version);
-  assert.equal((await sourcePost(saved.id))!.processing_status, "needs_attention");
-  assert.match((await sourcePost(saved.id))!.review_reason!, /范围/);
-  assert.equal((await loadActionInput()).events.length, 0);
-
-  const correct = await post(text);
-  action.scope.quotaWindowCodes = [];
-  await applyOfflineRecognition(correct.id, answer, correct.version);
-  assert.equal((await sourcePost(correct.id))!.processing_status, "processed");
-  assert.deepEqual((await publicV2Snapshot()).events[0]!.scope.quotaWindowCodes, []);
-}));
-
-test("quoted usage instructions cannot replace the outer post's own scope evidence", async () => inMonitor(codex, async () => {
-  const grant = "We have added one banked reset to every account.", borrowed = "This reset replenishes weekly usage.";
+test("a quoted post cannot establish the outer action's audience", async () => inMonitor(codex, async () => {
+  const grant = "We have added one banked reset to every account.", borrowed = "Only affected subscribers are eligible.";
   const saved = await post(grant);
   await sql`UPDATE monitor_source_posts SET quoted_post=${sql.json({ id: "quoted-scope", author: "another_author", relation: "quote",
     text: borrowed, publishedAt: at, url: "https://x.com/another_author/status/quoted-scope" })},updated_at=clock_timestamp()
     WHERE monitor_id=${codex.monitorId} AND id=${saved.id}`;
   const answer = response(grant), action = answer.actions[0]!;
   action.kind = "reset_credit";
-  action.scope.quotaWindowCodes = ["weekly"];
+  action.scope = { type: "selected_users", note: localized("Affected subscribers") };
   action.scopeExcerpt = borrowed;
   await applyOfflineRecognition(saved.id, answer, (await sourcePost(saved.id))!.version);
   assert.equal((await sourcePost(saved.id))!.processing_status, "needs_attention");

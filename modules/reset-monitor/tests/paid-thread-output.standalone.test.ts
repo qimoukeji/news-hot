@@ -8,8 +8,7 @@ const claim = {
   kind: "direct_reset", kindExplicit: true, action: "confirm", role: "action", real: true, invalidatesEvent: false,
   eventId: null, localEventKey: "new-1", existingActionId: null, excerpt: "We reset quotas.", title, summary: null,
   timeExcerpt: null, scopeExcerpt: null,
-  rawScope: { audienceSource: null, audienceZh: null, productsZh: null, plans: null },
-  scope: { type: "unknown", productCodes: [], planCodes: [], quotaWindowCodes: [], note: null },
+  scope: { type: "unknown", note: null },
 };
 const unrelated = (postId: string) => ({ postId, title, summary: null, relevant: false, needsReview: false, reviewReason: null, actions: [] });
 const related = (postId: string, ...actions: unknown[]) => ({ ...unrelated(postId), relevant: true, actions });
@@ -31,7 +30,6 @@ test("paid parsing repairs formatting without changing valid results or loosenin
 test("missing title and unknown scope go to review without erasing the supported action or the next post", () => {
   const damaged = { ...related("101", {
     ...claim, title: { zh: title.zh }, scope: { ...claim.scope, type: "paid" },
-    rawScope: { ...claim.rawScope, plans: "Pro, Max", productsZh: "Codex" }, scopeExcerpt: "Codex",
   }), title: null, needsReview: true, reviewReason: "已有疑问" };
   const clean = related("102", { ...claim, localEventKey: "new-2" });
   const result = paidThreadOutputSchema(input("101", "102")).parse({ posts: [damaged, clean] });
@@ -42,7 +40,7 @@ test("missing title and unknown scope go to review without erasing the supported
   assert.match(repaired.reviewReason!, /已有疑问.*动作范围无法确认.*动作标题不完整.*帖子标题不完整/);
   assert.ok(repaired.title.en);
   assert.deepEqual(repaired.actions[0], {
-    ...claim, title: { ...repaired.title, zh: title.zh }, rawScope: { ...claim.rawScope, productsZh: "Codex" }, scopeExcerpt: "Codex",
+    ...claim, title: { ...repaired.title, zh: title.zh }, scopeExcerpt: null,
   });
 });
 
@@ -63,7 +61,7 @@ test("unverified associations are passed to the saving layer without inventing a
   const facts = input("101", "102");
   const event = (id: string): ThreadRecognitionInput["events"][number] => ({
     id, kind: "direct_reset", status: "completed", publishedAt: material(id).publishedAt, title: title.zh,
-    summary: null, time: null, scope: null, sourcePostIds: [], actions: [],
+    summary: null, time: null, scope: { type: "unknown", note: null }, sourcePostIds: [], actions: [],
   });
   facts.events = [event("event-a"), { ...event("event-b"), actions: [{
     id: "action-b", action: "confirm", sequence: 1, invalidatesEvent: false, title: title.zh, summary: null,

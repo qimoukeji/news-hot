@@ -131,9 +131,12 @@ export async function retryWebhookDelivery(subscriptionId: string, deliveryId: s
   return sql.begin(async tx => {
     const [sub] = await tx`SELECT id,enabled,generation FROM monitor_webhook_subscriptions WHERE id=${subscriptionId} FOR SHARE`;
     if (!sub) return null;
-    const [row] = await tx`SELECT id,status,generation FROM monitor_webhook_deliveries WHERE id=${deliveryId} AND subscription_id=${subscriptionId} FOR UPDATE`;
+    const [row] = await tx`SELECT d.id,d.status,d.generation,n.payload FROM monitor_webhook_deliveries d
+      JOIN monitor_webhook_notifications n ON n.id=d.notification_id
+      WHERE d.id=${deliveryId} AND d.subscription_id=${subscriptionId} FOR UPDATE OF d`;
     if (!row) return null;
     if (!sub.enabled || row.status !== "failed" || row.generation !== sub.generation) throw new Conflict("仅可重发当前启用订阅的失败投递");
+    if (!webhookPayloadSchema.safeParse(row.payload).success) throw new Conflict("旧格式通知仅保留投递记录，不能按新格式重发");
     await tx`UPDATE monitor_webhook_deliveries SET status='pending',attempts=0,next_attempt_at=now(),last_status=NULL,last_error=NULL,updated_at=now()
       WHERE id=${deliveryId}`;
     await queueWebhookDelivery(tx,deliveryId);

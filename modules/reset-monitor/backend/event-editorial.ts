@@ -38,7 +38,8 @@ export function officialEditorialInput(row: EventRow, input: ActionInput) {
   const officialInput = { ...input, actions: input.actions.filter(action => action.sources.length > 0) };
   const official = reduceEvent(row, officialInput);
   if (!official) return null;
-  return { type: row.type, scope: row.scope?.type === "unknown" ? { ...row.scope, note: null } : row.scope, status: official.status, time: official.time,
+  const scope = row.scope && { type: row.scope.type, note: row.scope.type === "unknown" ? null : row.scope.note };
+  return { type: row.type, scope, status: official.status, time: official.time,
     actions: official.actions.map(({ action, publishedAt }) => ({
       action: action.action, invalidatesEvent: action.invalidates_event, sequence: action.sequence,
       title: action.title, summary: action.summary, time: action.time, publishedAt,

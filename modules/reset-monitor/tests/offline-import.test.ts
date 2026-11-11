@@ -24,7 +24,7 @@ const at = "2026-10-10T12:00:00.000Z", text = "We reset usage.", account = "thso
 type Recognition = NonNullable<Extract<OfflineBundle["sources"][number], { status: "observed" }>["recognition"]>;
 function recognized(): Recognition {
   return { relevant: true, needsReview: false, title: properName("Usage reset"), summary: properName("Usage restored"), actions: [{ eventId: null, localEventKey: "new-1", existingActionId: null, kind: "direct_reset" as const, kindExplicit: true, action: "confirm" as const, invalidatesEvent: false, real: true, role: "action" as const, excerpt: text, title: properName("Usage reset"), summary: properName("Usage restored"), timeExcerpt: null,
-    rawScope: { audienceSource: null, plans: null, audienceZh: null, productsZh: null }, scope: { type: "all_users" as const, productCodes: [], planCodes: [], quotaWindowCodes: [], note: properName("All users") }, scopeExcerpt: null }] };
+    scope: { type: "all_users" as const, note: properName("All users") }, scopeExcerpt: null }] };
 }
 
 test("offline bundles reject duplicate identifiers, mismatched X authors and missing original fields", () => {
@@ -135,9 +135,7 @@ test("historical author trust is limited to observed sources in this monitor and
   function reset(sourceText: string, reference?: string): Recognition {
     const result = recognized(), action = result.actions[0]!;
     action.excerpt = sourceText;
-    action.rawScope.productsZh = "Grok";
-    action.scope.productCodes = ["grok"];
-    action.scopeExcerpt = sourceText;
+    if (!reference) action.scopeExcerpt = "everyone";
     if (reference) {
       action.eventId = `source:${reference}`;
       action.existingActionId = `source:${reference}`;

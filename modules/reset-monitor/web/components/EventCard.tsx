@@ -1,28 +1,23 @@
 import type { ReactNode } from "react";
 import { Badge } from "@aihot/web/components/ui/Badge";
-import type { PlatformOverview } from "../../public-v2.ts";
 import type { AdminEvent, AdminTimelineAction, Scope } from "../admin-types.ts";
 import { ACTION, KIND, STATUS, stamp, text } from "./format.ts";
 
-function scopeText(scope: Scope | null, catalog?: PlatformOverview["catalog"]) {
-  const note = text(scope?.note);
-  if (note) return note;
+function scopeText(scope: Scope | null) {
   if (!scope) return "适用范围未说明";
-  const names = (codes: string[], entries = catalog?.plans ?? []) => codes.map(code => text(entries.find(entry => entry.code === code)?.name) || code);
-  return [
-    { all_users: "所有用户", paid_users: "付费用户", selected_users: "部分用户", unknown: "所有用户" }[scope.type],
-    ...names(scope.planCodes, catalog?.plans), ...names(scope.quotaWindowCodes, catalog?.quotaWindows),
-  ].filter(Boolean).join(" · ");
+  const note = text(scope.note).trim();
+  if (scope.type === "unknown" && (!note || /^(所有用户|All users|适用范围未明确|Eligibility unspecified)$/i.test(note))) return "适用范围未说明";
+  return note || { all_users: "所有用户", paid_users: "付费用户", selected_users: "部分用户", unknown: "适用范围未说明" }[scope.type];
 }
 
 type CardEvent = Pick<AdminEvent, "type" | "status" | "time" | "title" | "summary" | "scope"> & { withdrawn?: boolean };
-export function EventCardFrame({ event, catalog, title, footer, children, eventId }: {
-  event: CardEvent; catalog?: PlatformOverview["catalog"]; title?: ReactNode; footer?: ReactNode; children: ReactNode; eventId?: string;
+export function EventCardFrame({ event, title, footer, children, eventId }: {
+  event: CardEvent; title?: ReactNode; footer?: ReactNode; children: ReactNode; eventId?: string;
 }) {
   return <article className="min-w-0 rounded-card border border-line bg-surface p-4 sm:p-5" data-monitor-event={eventId} aria-label={eventId ? `事件：${text(event.title) || "标题待处理"}` : undefined}>
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
       <span className="text-accent">{KIND[event.type]}</span>
-      <span className="text-ink-4">{scopeText(event.scope, catalog)}</span>
+      <span className="text-ink-4">{scopeText(event.scope)}</span>
       <span className={event.status === "completed" ? "text-ok-ink" : "text-ink-3"}>{event.status ? STATUS[event.status] : "缺少有效初始动作"}</span>
       {event.withdrawn && <Badge tone="hot">已撤回</Badge>}
       <span className="num ml-auto text-ink-4">{stamp(event.time)}</span>

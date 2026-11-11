@@ -27,7 +27,7 @@ test("site schedule reconciliation previews, removes retired execution work and 
   installModules(SERVER_MODULES);
   process.env.MODEL_CALLS_ENABLED = "false";
   config.modelCallsEnabled = false;
-  const expected = ["cron.claude-reset.tick", "cron.grok-reset.tick", "cron.monitor.tick", "cron.reset-confirmations.check", "cron.reset-subscriptions.sweep"];
+  const expected = ["cron.claude-reset.tick", "cron.grok-reset.tick", "cron.monitor.tick", "cron.reset-confirmations.check", "cron.reset-review.notify", "cron.reset-subscriptions.sweep"];
   assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), expected);
   const collectEnabled = process.env.COLLECT_ENABLED;
   const modelCallsEnabled = config.modelCallsEnabled;

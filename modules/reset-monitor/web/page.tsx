@@ -27,7 +27,7 @@ export function createPublicPage(profile: ResetMonitorWebProfile) {
 
 function EventCard({ event, overview }: { event: EventList["list"][number]; overview: PlatformOverview }) {
   const sources = new Map(overview.sources.map(source => [source.id, source]));
-  return <EventCardFrame event={event} catalog={overview.catalog}>
+  return <EventCardFrame event={event}>
     <ol className="mt-4 space-y-4 border-t border-line pt-4" aria-label="事件动作">
       {event.updates.map(update => <EventActionRow key={update.id} action={update}>
             <ul className="max-w-[40%] shrink-0 space-y-1 text-right text-[12px] leading-5">

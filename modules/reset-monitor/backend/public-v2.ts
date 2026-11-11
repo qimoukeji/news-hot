@@ -26,7 +26,7 @@ import {
   type EditorialScope,
 } from "../actions.ts";
 import { loadActionInput } from "./action-store.ts";
-import { completeStandardScopeLabel, defaultScopeLabel, scopeReadyForPublication } from "./scope-labels.ts";
+import { completeStandardScopeLabel, publicScopeLabel, scopeReadyForPublication } from "./scope-labels.ts";
 import { editorialReady } from "./event-editorial.ts";
 import { accountStatusSummary, quotaStatusTitle, cleanEventText } from "../public-text.ts";
 export type PublicV2Input = ActionInput;
@@ -38,25 +38,9 @@ const byId = <T extends { id: string }>(a: T, b: T) =>
 export function publicV2Scope(
   scope?: EditorialScope | null,
 ): ResetEvent["scope"] {
-  const value = scope ?? {
-    type: "all_users",
-    productCodes: [],
-    planCodes: [],
-    quotaWindowCodes: [],
-    note: null,
-  };
-  const type = value.type;
-  if (translated(value.note)) return { ...value, type, note: value.note };
-  if (type === "selected_users") {
-    if (!translated(value.note))
-      throw new Error("Selected users require translated eligibility");
-    return { ...value, type, note: value.note };
-  }
-  return {
-    ...value,
-    type,
-    note: completeStandardScopeLabel(value.note) ?? defaultScopeLabel(type),
-  };
+  const { type, note } = scope ?? { type: "unknown", note: null };
+  if (type === "selected_users" && !translated(note)) throw new Error("Selected users require translated eligibility");
+  return { type, note: publicScopeLabel(type, completeStandardScopeLabel(note)) };
 }
 const languages = ["en", "zh", "zh-Hant", "ja", "ko", "ru", "es"] as const;
 const unlinkedSummary = {
@@ -354,7 +338,6 @@ export function projectRawV2(
     platform: config.platform,
     generatedAt: new Date(now).toISOString(),
     sources: [...sourceMap.values()],
-    catalog: config.catalog,
     events,
     predictedResetTime: predictedTime(resetTime, typical?.value ?? null),
     hasAnnouncement: latest?.status === "announced",

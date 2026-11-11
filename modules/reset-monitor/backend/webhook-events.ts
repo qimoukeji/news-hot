@@ -9,14 +9,17 @@ import { queueWebhookDelivery } from "./webhooks.ts";
 import { inferredConfirmation } from "./confirmation.ts";
 import { lockActionRecords } from "./action-store.ts";
 import { scopeReadyForPublication } from "./scope-labels.ts";
+import { threadRecognitionVersion } from "./recognize.ts";
 
-const initializedKey = "webhook:source-less-confirmations:v1";
+export const legacyScopeBaselineKey = "webhook:source-less-confirmations:v1";
+export const retiredScopeFields = ["productCodes", "planCodes", "quotaWindowCodes"] as const;
+const initializedKey = "webhook:scope-text:v1";
 const eventKey = (id: string) => `webhook:event:${id}`;
 interface Baseline {
   revision: number; fingerprint: string | null; withdrawn: boolean; notified: boolean; historicalPending?: boolean;
 }
 
-function readyEvent(row: PublicV2EventRow, input: PublicV2Input, now = Date.now()): WebhookPayload["event"] {
+export function readyEvent(row: PublicV2EventRow, input: PublicV2Input, now = Date.now()): WebhookPayload["event"] {
   if (row.withdrawn) return null;
   const reduced = reduceEvent(row, input);
   if (!reduced || reduced.actions.some(({ action }) => action.sources.length > 0 && (!translated(action.title) || action.summary && !translated(action.summary)))) return null;
@@ -29,6 +32,38 @@ function readyEvent(row: PublicV2EventRow, input: PublicV2Input, now = Date.now(
 async function saveBaseline(db: Db, id: string, value: Baseline) {
   await db`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${eventKey(id)},${db.json(value as never)})
     ON CONFLICT(monitor_id,key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()`;
+}
+
+export async function assertScopeCutoverComplete(db: Db = sql) {
+  const [result] = await db<{ blocked: boolean }[]>`SELECT
+    EXISTS (SELECT 1 FROM monitor_event_records WHERE scope ?| ${[...retiredScopeFields]}::text[])
+    OR EXISTS (SELECT 1 FROM monitor_state WHERE key=${legacyScopeBaselineKey})
+    OR EXISTS (SELECT 1 FROM monitor_state WHERE starts_with(key,'recognition:pending:')
+      AND value->>'promptVersion' IS DISTINCT FROM ${threadRecognitionVersion})
+    OR EXISTS (SELECT 1 FROM monitor_webhook_deliveries d JOIN monitor_webhook_notifications n ON n.id=d.notification_id
+      WHERE d.status IN ('pending','sending') AND (n.payload->'event'->'scope') ?| ${[...retiredScopeFields]}::text[]) AS blocked`;
+  if (result?.blocked) throw new Error("Complete the reviewed reset-monitor scope cutover before starting the new contract");
+}
+
+/** Offline format switch: keep revision, visibility and delivery history; never dispatch here. */
+export async function rebaseScopeWebhookHistory(db: Db, input: PublicV2Input, now: number) {
+  if (!monitor().publicV2) return;
+  await lockWebhookMonitor(db);
+  const [old] = await db`SELECT 1 FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${legacyScopeBaselineKey}`;
+  if (!old) return; // A fresh monitor still uses normal initialization.
+  const stored = await db<{ key: string; value: Baseline }[]>`SELECT key,value FROM monitor_state
+    WHERE monitor_id=${monitorId()} AND starts_with(key,'webhook:event:')`;
+  const baselines = new Map(stored.map(row => [row.key, row.value]));
+  for (const row of input.events) {
+    const before = baselines.get(eventKey(row.id));
+    const event = readyEvent(row, input, now);
+    if (event && before && !before.withdrawn && (before.fingerprint || before.historicalPending)) {
+      await saveBaseline(db, row.id, { ...before, fingerprint: sha256(stableJson(event)), historicalPending: false });
+    }
+  }
+  await db`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${initializedKey},'{"initialized":true}'::jsonb)
+    ON CONFLICT(monitor_id,key) DO NOTHING`;
+  await db`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=${legacyScopeBaselineKey}`;
 }
 
 /** Serialize initial baseline and publication across API and worker processes without locking event rows. */
