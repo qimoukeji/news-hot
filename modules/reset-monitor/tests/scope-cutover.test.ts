@@ -154,6 +154,27 @@ test("an unpublished business change blocks rebasing rather than swallowing its 
   assert.equal(baseline!.value.revision, 4);
 });
 
+test("cutover applies a reviewed audience correction while retaining quota detail in the action summary and suppressing replay", async () => {
+  await queueOld("failed");
+  await sql`UPDATE monitor_event_records SET scope=scope || ${sql.json({ type: "all_users", note: properName("Pro $500 users · weekly quota") })}`;
+  await saveOldFingerprint();
+  const inventory = await overview();
+  assert.equal(inventory.events[0]!.scope.note?.en, "Pro $500 users · weekly quota");
+  const reviewed = { monitorId: "codex", eventId: event, reviewed: true, actions: [{ id: "legacy-confirm", summary }] };
+  await assert.rejects(apply({ fingerprint: inventory.fingerprint, events: [{ ...reviewed,
+    scope: { type: "selected_users", note: null } }] }), /complete audience label/);
+  const scope = { type: "selected_users", note: properName("Eligible subscribers") };
+  await apply({ fingerprint: inventory.fingerprint, events: [{ ...reviewed, scope }] });
+  const input = await inMonitor(codex, () => loadActionInput());
+  const published = projectPublicV2(input, codex, Date.parse(at) + 1).events[0]!;
+  assert.deepEqual(published.scope, scope);
+  assert.deepEqual(published.updates[0]!.summary, summary);
+  await sweepConfirmationResults([codex], Date.parse(at) + 1);
+  assert.equal((await sql`SELECT id FROM monitor_webhook_notifications`).length, 1);
+  const [baseline] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key=${`webhook:event:${event}`}`;
+  assert.equal(baseline!.value.revision, 4);
+});
+
 test("ready historical content is rebased before the first real post-cutover update", async () => {
   await queueOld("failed");
   await sql`UPDATE monitor_state SET value=value || '{"historicalPending":true,"fingerprint":null}'::jsonb

@@ -7,7 +7,7 @@ import { closeDb, sql, type Db } from "@aihot/backend/db";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
 import { RESET_MONITOR_BACKENDS } from "@aihot/site/reset-monitor-backends";
 import { editorialScopeSchema, reduceEvent, type EventRow, type ActionInput } from "../actions.ts";
-import { localizedTextSchema } from "../public-v2.ts";
+import { localizedTextSchema, scopeSchema } from "../public-v2.ts";
 import { loadActionInput } from "../backend/action-store.ts";
 import { verifyActionBackup } from "../backend/backup.ts";
 import { inMonitor, type ResetMonitorBackendDefinition } from "../backend/context.ts";
@@ -20,6 +20,8 @@ const reviewSchema = z.strictObject({
   events: z.array(z.strictObject({
     monitorId: z.string().min(1), eventId: z.string().min(1), reviewed: z.literal(true),
     summary: localizedTextSchema.optional(),
+    scope: scopeSchema.refine(scope => scope.type !== "selected_users" || scope.note !== null,
+      "Selected users require a complete audience label").optional(),
     actions: z.array(z.strictObject({ id: z.string().min(1), summary: localizedTextSchema })).optional(),
   })),
 });
@@ -89,6 +91,7 @@ export async function inventoryScopeCutover(db: Db, definitions: readonly ResetM
   const state = await snapshot(db, definitions);
   const events = state.monitors.flatMap(({ definition, input }) => input.events.filter(requiresReview).map(row => ({
     monitorId: definition.monitorId, eventId: row.id, legacy: legacyFields(row), title: row.title, summary: row.summary,
+    scope: { type: row.scope!.type, note: row.scope!.note },
     actions: input.actions.filter(action => action.event_id === row.id).map(action => ({ id: action.id, title: action.title,
       summary: action.summary, urls: action.sources.flatMap(({ postId }) => input.posts.find(post => post.id === postId)?.url ?? []) })),
   })));
@@ -125,7 +128,7 @@ export async function executeScopeCutover(db: Db, definitions: readonly ResetMon
       const { type, note } = editorialScopeSchema.parse(remaining);
       const completeNote = completeStandardScopeLabel(note);
       const normalizedNote = type === "unknown" && completeNote ? publicScopeLabel(type, completeNote) : note;
-      const scope = { type, note: normalizedNote };
+      const scope = entry?.scope ?? { type, note: normalizedNote };
       const summary = entry?.summary ?? row.summary;
       const eventActions = before.actions.filter(action => action.event_id === row.id);
       const corrections = entry?.actions ?? [];
