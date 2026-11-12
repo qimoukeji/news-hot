@@ -9,15 +9,12 @@ import {
   businessTimeBoundary,
   compareBusinessTime,
   eventOrderTime,
-  normalizePublicTime,
   type ResetSnapshot,
   type ResetEvent,
-  type EventTime,
   type PublicTime,
 } from "../public-v2.ts";
 import {
   reduceEvent,
-  defaultActionTime,
   translated,
   type ActionInput,
   type EventRow,
@@ -188,14 +185,14 @@ export function publicV2ActionTitle(
   ) as ResetEvent["title"];
 }
 
-export function timeBoundary(time: EventTime | null): string | null {
-  return time === null || time.kind === "unknown" ? null : businessTimeBoundary(time);
+export function timeBoundary(time: PublicTime): string {
+  return businessTimeBoundary(time);
 }
 function exactTime(event: { time: PublicTime }): number | null {
   return event.time?.kind === "instant" ? Date.parse(event.time.at) : null;
 }
-function eventDate(event: { time: PublicTime }): string | null {
-  return event.time === null ? null : event.time.kind === "date" ? event.time.date : beijingDate(businessTimeBoundary(event.time));
+function eventDate(event: { time: PublicTime }): string {
+  return beijingDate(businessTimeBoundary(event.time));
 }
 function medianInterval(events: Array<{ time: PublicTime }>) {
   const times = events
@@ -264,7 +261,7 @@ export function projectRawV2(
           action: action.action,
           invalidatesEvent: action.invalidates_event,
           publishedAt,
-          time: normalizePublicTime(action.time ?? defaultActionTime(action.action, publishedAt)),
+          time: action.time,
           title: action.sources.length === 0 ? { ...publicV2ActionTitle(definition.product, row.type, action.action), ...action.title } : translated(action.title)
             ? action.title
             : publicV2ActionTitle(definition.product, row.type, action.action),
@@ -324,7 +321,7 @@ export function projectRawV2(
     const eligible = completed.filter(event => event.type === type);
     return eligible.filter((event) => {
       const date = eventDate(event);
-      return date !== null && date >= since && date <= today;
+      return date >= since && date <= today;
     }).length;
   };
   const typical = medianInterval(

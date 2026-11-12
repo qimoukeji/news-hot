@@ -15,7 +15,7 @@ export function monitorOpenApi() {
     "/api/v2/overview": {
       get: {
         summary: "Quota monitor overview",
-        description: "resetTime and predictedResetTime are UTC ISO timestamps or null. hasAnnouncement distinguishes an active announcement from no announcement; announcedResetTime is a BusinessTime object, or null when the announcement has no published schedule. Unknown schedules do not use the statistical prediction or trigger inferred confirmation. Inferred confirmations use an explicit announcement expiry boundary as an instant. Expired predictions retain their original timestamp.",
+        description: "resetTime and predictedResetTime are UTC ISO timestamps or null. When hasAnnouncement is true, announcedResetTime is the active announcement's saved BusinessTime; otherwise it is null. Inferred confirmations use the saved instant, deadline or range end as an instant. Expired predictions retain their original timestamp.",
         responses: { "200": response("Overview") },
       },
     },
@@ -25,7 +25,7 @@ export function monitorOpenApi() {
       get: {
         summary: `${id} events with accepted actions and all source links`,
         description:
-              "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Each event has its own current overview. Known business times are structured objects: instant {at}, date {date,timeZone}, range {from,through}, or deadline {at}. An announcement and its announced event may have time=null when no schedule is published; unknown times use publishedAt only for sorting and date filtering. Instant timestamps use UTC and date precision is preserved. Publication timestamps remain ISO strings. Dates are never padded with an assumed clock time. Individual quota status remains subject to the account display.",
+              "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Event and action time are required saved values: instant {at}, range {from,through}, or deadline {at}. Business timestamps use UTC; publishedAt separately records source publication or source-free action creation. Individual quota status remains subject to the account display.",
         parameters: [
           {
             name: "from",

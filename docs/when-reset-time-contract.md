@@ -4,12 +4,11 @@ news-hot 保留 `/api/v2/overview`、`/api/v2/<平台>-resets`、`schemaVersion:
 
 ## 字段与校验
 
-`event.time`、`updates[].time` 和总览 `announcedResetTime` 的已知值使用以下 BusinessTime 对象类型；预告时间未知时 event.time 和 announce 的 time 可为 null，其他动作 time 非空。总览 hasAnnouncement 区分无预告与预告时间未公布，announcedResetTime 可空。`resetTime`、`predictedResetTime` 仅接受 UTC ISO 8601 时间字符串或 null，不再使用对象。
+`event.time` 与 `updates[].time` 必填，使用以下三个 BusinessTime 分支。`announcedResetTime` 有预告时为该预告 time，无预告时为 null；hasAnnouncement 与之保持一致。`resetTime`、`predictedResetTime` 仍为 UTC ISO 字符串或 null。消费者直接读取，不补时间或转换旧格式。
 
 ```ts
 type BusinessTime =
   | { kind: "instant"; at: string }
-  | { kind: "date"; date: string; timeZone: string }
   | { kind: "range"; from: string; through: string }
   | { kind: "deadline"; at: string };
 
@@ -31,16 +30,16 @@ type OverviewTimes = {
 }
 ```
 
-BusinessTime 严格验证四个分支及字段，拒绝 unknown、额外字段、非法日期、非法 IANA 时区、倒置区间及标量字符串。总览两个单点字段拒绝对象、纯日期、非 UTC 偏移与超过九位小数秒；不提供兼容模式。时间戳含完整年份及 UTC 时区，保留小数秒。`publishedAt`、`generatedAt`、Webhook 的 `occurredAt` 仍是 ISO 字符串；动作顺序仍按 publishedAt 倒序、同时间 ID 升序。
+BusinessTime 严格验证三个分支与字段，拒绝 date、unknown、null、额外字段、非法时刻、倒置区间和标量字符串。时间戳以 Z 结尾，最多九位小数秒；resetTime、predictedResetTime 拒绝对象。publishedAt、generatedAt、occurredAt 仍为 ISO 字符串。
 
 ## 页面与日历
 
 - 语言与展示时区独立选择，时刻使用 `Intl.DateTimeFormat(locale, { timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })` 格式化。
-- 日期直接展示 date 的年月日，不把它解析为访客时区的午夜，不补造具体时刻；当来源 timeZone 与展示时区不同时注明来源时区。
-- 区间保留起止时间；截止时间按用户语言展示“之前”或等价文字。日期没有倒计时的精确目标，deadline 也不能当成已经发生的时刻。
-- 日历使用同一个所选时区请求列表。instant/deadline 按 at 归日，range 按 from 归日，date 保留 date 字段；time=null 按 publishedAt 归日，但不把发布时间当作承诺发生时间。API 决定事件顺序、范围和统计，客户端不重新推算。
-- hasAnnouncement=true 时展示公开预告；announcedResetTime=null 显示“时间未公布”，不使用 predictedResetTime。没有预告才展示统计预估。未知预告时间不参与到时自动确认。
-- news-hot 自动确认将 instant/deadline 的 at、range 的 through、date 当天北京时间18点保存为新的 instant 业务时间，原始预告不改；客户端直接消费结果，不自行补造时刻或改变事件状态。
+- 业务时间已在 news-hot 写入时规范化：日期与星期追加 18:00 UTC；无时间预告追加发帖日期 18:00 UTC，首次处理过点取 23:59；异常时间取发帖日期 18:00 UTC 并待处理。客户端不再接收纯日期对象。
+- 区间保留起止时间，截止按用户语言展示之前；deadline 不能当作已发生时刻。
+- 日历使用所选时区请求列表；instant/deadline 按 at 归日，range 按 from 归日。API 决定顺序、范围和统计，客户端不重新推算。
+- hasAnnouncement=true 时直接展示 announcedResetTime；无预告才显示 predictedResetTime。
+- news-hot 将 instant/deadline 的 at、range 的 through 保存为自动确认 instant；待处理来源阻断推定。有来源官方确认使用确认帖发布时间。客户端直接消费，不改变状态。
 - 总览 resetTime 是最新有效确认的单一生效时刻，最新记录不能确定时刻时返回 null；predictedResetTime 是该点加典型间隔，过期保留原值并提示，不滚动日期或重算预测。
 
 ## Webhook 与缓存
@@ -53,4 +52,4 @@ BusinessTime 严格验证四个分支及字段，拒绝 unknown、额外字段�
 
 ## 接入验收
 
-覆盖三平台、七语言、所选时区、跨年、跨日、小数秒、四种时间对象、未知预告时间、hasAnnouncement 与可空总览、无来源确认、多来源动作、ETag/304及新游标；核验列表和Webhook严格契约一致，切换语言不改变时区，切换时区不改变纯日期，区间和deadline不会退化成精确发生时刻。使用本地合成数据验收，不发送真实通知。
+覆盖三平台、七语言、所选时区、跨年、跨日、小数秒、三种时间对象、hasAnnouncement 与仅无预告时为空的 announcedResetTime、无来源及多来源确认、ETag/304 和新游标；拒绝 date/null/unknown 的事件或动作 time。列表和 Webhook 契约一致，客户端不重新补时间或改变状态。使用本地合成数据，不发送真实通知。

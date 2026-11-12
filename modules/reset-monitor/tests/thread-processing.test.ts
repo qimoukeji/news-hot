@@ -216,7 +216,7 @@ test("a confirmation flagged by fact checks is visible and can be corrected on t
   assert.match((await sourcePost("101"))!.review_reason!, /尚未|预期|未来/);
   const detail = (await monitorPostDetail("101"))!;
   const command = { version: detail.version, versions: detail.versions, reason: "核对原帖发放日期", completeProcessing: true,
-    actions: { update: [{ id: action!.id, action: "announce", time: { kind: "date", date: "2026-11-12", timeZone: "UTC" }, title: local("Planned reset credits"), summary: null }] } };
+    actions: { update: [{ id: action!.id, action: "announce", time: { kind: "instant", at: "2026-11-12T18:00:00Z" }, title: local("Planned reset credits"), summary: null }] } };
   const preview = (await previewMonitorReview("101", command))!;
   await submitMonitorReview("101", { ...command, previewToken: preview.previewToken }, "reviewer");
   const corrected = (await publicV2Snapshot()).events[0]!;

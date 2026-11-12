@@ -11,6 +11,6 @@ export function bt(value: string | BusinessTime | null): BusinessTime | null {
     return { kind: "range", from: from!, through: through! };
   }
   return value.length === 10
-    ? { kind: "date", date: value, timeZone: "Asia/Shanghai" }
+    ? { kind: "instant", at: `${value}T18:00:00Z` }
     : { kind: "instant", at: value };
 }

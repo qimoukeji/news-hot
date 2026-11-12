@@ -31,15 +31,15 @@ test("inferred confirmation uses the exact plan boundary without truncating nano
   assert.deepEqual(inferredConfirmationTime({ kind: "deadline", at: "2026-11-02T13:42:26.123456789+08:00" }), { kind: "instant", at });
 });
 
-test("business time is a strict four-kind contract and rejects all old scalar forms", () => {
+test("business time is a strict three-kind contract and rejects all old scalar forms", () => {
   const valid: BusinessTime[] = [
     { kind: "instant", at: "2026-12-31T23:59:59.123456789Z" },
-    { kind: "date", date: "2028-02-29", timeZone: "America/Los_Angeles" },
     { kind: "range", from: "2026-11-02T01:00:00Z", through: "2026-11-02T01:00:00.000000001Z" },
     { kind: "deadline", at: "2026-11-02T18:00:00+08:00" },
   ];
   for (const value of valid) assert.deepEqual(businessTimeSchema.parse(value), value);
   for (const value of [
+    { kind: "date", date: "2028-02-29", timeZone: "America/Los_Angeles" },
     null, "2026-11-02", "2026-11-02T05:42:26Z", "2026-11-02T01:00:00Z/2026-11-02T02:00:00Z", "11月02日 13:42:26", { kind: "unknown" },
     { kind: "date", date: "2026-02-30", timeZone: "UTC" },
     { kind: "date", date: "2026-11-02", timeZone: "Invalid/Zone" },
@@ -56,8 +56,6 @@ test("UTC conversion keeps nanosecond precision, interval bounds and deadline me
   assert.deepEqual(normalizePublicTime({ kind: "range", from: "2026-11-02T09:00:00.123456789+08:00", through: "2026-11-02T10:00:00.987654321+08:00" }),
     { kind: "range", from: "2026-11-02T01:00:00.123456789Z", through: "2026-11-02T02:00:00.987654321Z" });
   assert.deepEqual(normalizePublicTime({ kind: "deadline", at: "2026-11-02T18:00:00+08:00" }), { kind: "deadline", at: "2026-11-02T10:00:00Z" });
-  const date = { kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" } as const;
-  assert.deepEqual(normalizePublicTime(date), date);
 });
 
 test("business-time validation rejects unsupported precision and malformed interval endpoints without throwing", () => {
@@ -76,12 +74,8 @@ test("business-time validation rejects unsupported precision and malformed inter
   }
 });
 
-test("sorting uses source-local midnight for dates and distinguishes sub-millisecond instants", () => {
-  const beijing = { kind: "date", date: "2026-11-02", timeZone: "Asia/Shanghai" } as const;
-  const pacific = { ...beijing, timeZone: "America/Los_Angeles" };
-  assert.equal(businessTimeBoundary(beijing), "2026-11-01T16:00:00Z");
-  assert.equal(businessTimeBoundary(pacific), "2026-11-02T08:00:00Z");
-  assert.equal(compareBusinessTime(beijing, pacific), -1);
+test("sorting distinguishes sub-millisecond instants and uses interval starts", () => {
+  assert.equal(businessTimeBoundary({ kind: "range", from: "2026-11-02T01:00:00Z", through: "2026-11-03T01:00:00Z" }), "2026-11-02T01:00:00Z");
   assert.equal(compareBusinessTime({ kind: "instant", at: "2026-11-02T00:00:00.000000001Z" }, { kind: "instant", at: "2026-11-02T00:00:00.000000002Z" }), -1);
 });
 
@@ -99,11 +93,7 @@ test("nested list and snapshot validation reports invalid business times without
   }
 });
 
-test("future-date checks use the source zone independently from the Beijing inference cutoff", () => {
-  const date = { kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" } as const;
-  assert.equal(isFutureBusinessTime(date, "2026-11-02T00:00:00Z"), true);
-  assert.equal(isFutureBusinessTime(date, "2026-11-02T08:00:00Z"), false);
-  assert.equal(isFutureBusinessTime({ ...date, timeZone: "Asia/Shanghai" }, "2026-11-02T00:00:00Z"), false);
+test("future-time checks preserve sub-millisecond precision", () => {
   const at = "2026-11-02T00:00:00Z";
   assert.equal(isFutureBusinessTime({ kind: "instant", at: "2026-11-02T00:00:00.000000001Z" }, at), true);
   assert.equal(isFutureBusinessTime({ kind: "deadline", at }, at), false);
@@ -123,16 +113,16 @@ test("inference waits for the first full millisecond after a fractional instant 
   }
 });
 
-test("date confirmation stays at Beijing 18:00 while the original date and zone remain public", () => {
+test("a normalized announcement confirms at its saved UTC boundary", () => {
   const input = fixture();
   input.actions[0]!.action = "announce";
-  const plan = { kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" } as const;
+  const plan = { kind: "instant", at: "2026-11-02T18:00:00Z" } as const;
   input.actions[0]!.time = plan;
-  const boundary = Date.parse("2026-11-02T10:00:00Z");
+  const boundary = Date.parse("2026-11-02T18:00:00Z");
   assert.equal(inferenceBoundary(plan), boundary);
   assert.equal(inferredConfirmation(input.events[0]!, input, boundary - 1), null);
   const confirmation = inferredConfirmation(input.events[0]!, input, boundary)!;
-  assert.deepEqual(confirmation.time, { kind: "instant", at: "2026-11-02T10:00:00Z" });
+  assert.deepEqual(confirmation.time, { kind: "instant", at: "2026-11-02T18:00:00Z" });
   const snapshot = projectPublicV2(input, codex, boundary);
   assert.deepEqual(snapshot.announcedResetTime, plan);
   assert.deepEqual(snapshot.events[0]!.time, plan);
@@ -140,16 +130,34 @@ test("date confirmation stays at Beijing 18:00 while the original date and zone 
   input.actions.push(confirmation);
   const completed = projectPublicV2(input, codex, boundary);
   assert.deepEqual(completed.events[0]!.time, confirmation.time);
-  assert.equal(completed.resetTime, "2026-11-02T10:00:00Z");
+  assert.equal(completed.resetTime, "2026-11-02T18:00:00Z");
   assert.deepEqual(completed.events[0]!.updates.find(update => update.action === "announce")!.time, plan);
   assert.equal(eventUpdateSchema.safeParse({ ...snapshot.events[0]!.updates[0], time: "2026-11-02" }).success, false);
-  assert.equal(platformOverviewSchema.safeParse({ ...snapshot, announcedResetTime: "11月02日 18:00:00" }).success, false);
+  const { events: _events, schemaVersion: _version, generatedAt: _generatedAt, ...overview } = snapshot;
+  assert.equal(platformOverviewSchema.safeParse(overview).success, true);
+  assert.equal(platformOverviewSchema.safeParse({ ...overview, announcedResetTime: "11月02日 18:00:00" }).success, false);
+  assert.equal(platformOverviewSchema.safeParse({ ...overview, announcedResetTime: null }).success, false);
+  assert.equal(platformOverviewSchema.safeParse({ ...overview, hasAnnouncement: false }).success, false);
 });
 
-test("recognition preserves a source's date zone and deadline without converting them to a clock or instant", () => {
+test("calendar dates and weekdays without a source zone both infer at 18:00 UTC", () => {
+  for (const text of ["11 月 12 日重置", "周四重置", "Reset on Nov 12", "Reset on Thursday"]) {
+    const { time, issue } = resolveActionTime({ action: "announce", invalidatesEvent: false, timeExcerpt: text },
+      { text, published_at: "2026-11-11T12:00:00Z" });
+    assert.equal(issue, null);
+    assert.deepEqual(time, { kind: "instant", at: "2026-11-12T18:00:00Z" });
+    const input = fixture();
+    Object.assign(input.actions[0]!, { action: "announce", time });
+    assert.equal(inferredConfirmation(input.events[0]!, input, Date.parse("2026-11-12T17:59:59.999Z")), null);
+    const result = inferredConfirmation(input.events[0]!, input, Date.parse("2026-11-12T18:00:00Z"));
+    assert.deepEqual(result?.time, { kind: "instant", at: "2026-11-12T18:00:00Z" });
+  }
+});
+
+test("recognition normalizes calendar dates and preserves explicit deadlines", () => {
   const date = resolveActionTime({ action: "announce", invalidatesEvent: false, timeExcerpt: "Nov 2, 2026 PT" },
     { text: "We will reset usage on Nov 2, 2026 PT.", published_at: "2026-10-31T12:00:00Z" });
-  assert.deepEqual(date, { time: { kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" }, issue: null });
+  assert.deepEqual(date, { time: { kind: "instant", at: "2026-11-02T18:00:00Z" }, issue: null });
   const deadline = resolveActionTime({ action: "announce", invalidatesEvent: false, timeExcerpt: "before Nov 2, 2026 at 3pm UTC" },
     { text: "We will reset usage before Nov 2, 2026 at 3pm UTC.", published_at: "2026-10-31T12:00:00Z" });
   assert.deepEqual(deadline, { time: { kind: "deadline", at: "2026-11-02T15:00:00Z" }, issue: null });

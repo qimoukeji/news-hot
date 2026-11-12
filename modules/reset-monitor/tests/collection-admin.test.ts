@@ -56,7 +56,7 @@ test("collection filters hide only unbound filtered records and keep pagination 
   for (let index = 0; index < 12; index++) await post(`filtered-${index}`, true);
   await post("normal"); await post("attention", false, "needs_attention");
   const source = (await post("linked", true))!;
-  await sql.begin(db => writePostActions(db, source, [{ eventId: "event", action: "confirm", title: properName("Confirmed"), summary: null, time: null }], { events: [{ id: "event", type: "bonus_credit" }] }));
+  await sql.begin(db => writePostActions(db, source, [{ eventId: "event", action: "confirm", title: properName("Confirmed"), summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }], { events: [{ id: "event", type: "bonus_credit" }] }));
   assert.equal((await sourcePost("linked"))!.filtered_out, false);
   assert.equal((await listMonitorEntries()).total, 3);
   const first = await listMonitorEntries({ collectionFilter: "filtered" }), second = await listMonitorEntries({ collectionFilter: "filtered", page: 2 });
@@ -98,7 +98,7 @@ test("explicit retention clears only filtering and ordinary editorial changes pr
 
 test("manual source association clears filters without changing recognition status", async () => inMonitor(codex, async () => {
   const first = (await post("initial"))!;
-  await sql.begin(db => writePostActions(db, first, [{ eventId: "event", action: "confirm", title: properName("Confirmed"), summary: null, time: null }], { events: [{ id: "event", type: "direct_reset" }] }));
+  await sql.begin(db => writePostActions(db, first, [{ eventId: "event", action: "confirm", title: properName("Confirmed"), summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }], { events: [{ id: "event", type: "direct_reset" }] }));
   const action = (await loadActionInput()).actions[0]!;
   await post("filtered", true, "failed");
   await review("filtered", { sources: { add: [{ actionId: action.id, postId: "filtered" }] } });
@@ -132,7 +132,7 @@ test("recognized unrelated posts can be hidden but existing or new action source
   await saveAcceptedPost(hidden.id, { title: properName("Unrelated"), summary: null, actions: [], receiptId: await receipt(), expectedVersion: hidden.version, filteredOut: true });
   assert.equal((await sourcePost(hidden.id))!.filtered_out, true);
   const accepted = (await post("accepted", false, "pending"))!;
-  await saveAcceptedPost(accepted.id, { title: properName("Accepted"), summary: null, actions: [{ eventId: "event", action: "confirm", title: properName("Confirmed"), summary: null, time: null }], events: [{ id: "event", type: "reset_credit" }], receiptId: await receipt(), expectedVersion: accepted.version, filteredOut: true });
+  await saveAcceptedPost(accepted.id, { title: properName("Accepted"), summary: null, actions: [{ eventId: "event", action: "confirm", title: properName("Confirmed"), summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }], events: [{ id: "event", type: "reset_credit" }], receiptId: await receipt(), expectedVersion: accepted.version, filteredOut: true });
   assert.equal((await sourcePost(accepted.id))!.filtered_out, false);
   await sql`UPDATE monitor_source_posts SET processing_status='pending' WHERE monitor_id='codex' AND id=${accepted.id}`;
   const again = (await sourcePost(accepted.id))!;

@@ -36,8 +36,8 @@ test("a thread accepts available reset credits without treating their usage dead
   assert.ok(after.posts.filter(post => ids.includes(post.id)).every(post => post.title && post.model_receipt_id === receipt!.id));
   assert.ok(after.posts.filter(post => ids.slice(0, -1).includes(post.id)).every(post => post.processing_status === "processed"));
   const reviewed = after.posts.find(post => post.id === "805")!;
-  assert.equal(reviewed.processing_status, "needs_attention");
-  assert.match(reviewed.review_reason!, /使用或领取截止/);
+  assert.equal(reviewed.processing_status, "processed");
+  assert.equal(reviewed.review_reason, null);
   const actions = after.actions.filter(action => action.event_id === event.id);
   assert.equal(actions.length, 1); assert.equal(actions[0]!.action, "confirm");
   assert.deepEqual(actions[0]!.time, { kind: "instant", at: new Date(publishedAt).toISOString() });

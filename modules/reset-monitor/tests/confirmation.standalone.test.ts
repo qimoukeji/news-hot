@@ -11,7 +11,7 @@ import { backendDefinition as codex } from "../../codex-reset/backend-definition
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
 const now = Date.parse("2026-10-27T08:00:00Z"), plan = "2026-10-26T08:00:00Z";
-function announced(time: string | null = plan) {
+function announced(time: string = plan) {
   const input = fixture(); Object.assign(input.actions[0]!, { action: "announce", time: bt(time) }); return input;
 }
 for (const definition of [codex, claude, grok]) for (const type of ["direct_reset", "reset_credit", "bonus_credit"] as const) test(`${definition.monitorId}/${type}: persisted empty-source confirmations complete the shared public timeline once`, () => {
@@ -36,7 +36,7 @@ for (const definition of [codex, claude, grok]) for (const type of ["direct_rese
   assert.deepEqual(snapshot.resetTime, "2026-10-27T06:00:00Z"); assert.equal(input.actions.length, 2);
 });
 
-test("instant, Beijing-date and interval plans generate exactly at their boundaries", () => {
+test("instant and interval plans generate exactly at their boundaries", () => {
   for (const time of [plan, "2026-10-26", "2026-10-26T08:00:00Z/2026-10-27T08:00:00Z"]) {
     const input = announced(time), boundary = inferenceBoundary(bt(time));
     assert.equal(inferredConfirmation(input.events[0]!, input, boundary - 1), null);
@@ -44,11 +44,11 @@ test("instant, Beijing-date and interval plans generate exactly at their boundar
     assert.deepEqual(action.time, inferredConfirmationTime(bt(time))); assert.deepEqual(action.sources, []);
     input.actions.push(action); assert.equal(inferredConfirmation(input.events[0]!, input, boundary + 60_000), null);
   }
-  assert.equal(inferenceBoundary(bt("2026-10-26")), Date.parse("2026-10-26T10:00:00Z"));
+  assert.equal(inferenceBoundary(bt("2026-10-26")), Date.parse("2026-10-26T18:00:00Z"));
 });
 
-test("unknown plans, progress, review conflicts and withdrawal block automatic completion", () => {
-  const input = announced(null);
+test("future plans, progress, review conflicts and withdrawal block automatic completion", () => {
+  const input = announced("2026-10-28T18:00:00Z");
   assert.equal(inferredConfirmation(input.events[0]!, input, now), null);
   input.actions[0]!.time = bt(plan); input.posts[0]!.processing_status = "needs_attention";
   assert.equal(inferredConfirmation(input.events[0]!, input, now), null);
@@ -59,8 +59,8 @@ test("unknown plans, progress, review conflicts and withdrawal block automatic c
   input.events[0]!.withdrawn = true; assert.equal(inferredConfirmation(input.events[0]!, input, inferenceBoundary(bt("2026-10-28"))), null);
 });
 
-for (const time of [null, "2026-10-15T12:00:00Z", "2026-10-15", "2026-10-15T10:00:00Z/2026-10-15T12:00:00Z"] as const)
-  test(`ordinary amendments preserve the ${time ?? "unknown"} announcement plan`, () => {
+for (const time of ["2026-10-15T18:00:00Z", "2026-10-15T12:00:00Z", "2026-10-15", "2026-10-15T10:00:00Z/2026-10-15T12:00:00Z"] as const)
+  test(`ordinary amendments preserve the ${time} announcement plan`, () => {
     const input = announced(time), before = reduceEvent(input.events[0]!, input)!, basis = announcementBasis(input.events[0]!, input)!;
     const publishedAt = "2026-10-11T17:00:00Z";
     addAction(input, "eligibility-correction", "amend", publishedAt, { time: defaultActionTime("amend", publishedAt) });
@@ -72,8 +72,7 @@ for (const time of [null, "2026-10-15T12:00:00Z", "2026-10-15", "2026-10-15T10:0
     const update = snapshot.events[0]!.updates.find(update => update.action === "amend")!;
     assert.deepEqual(update.time, bt("2026-10-12T10:00:00.000Z")); assert.equal(update.publishedAt, new Date(publishedAt).toISOString());
     assert.deepEqual(snapshot.announcedResetTime, before.announcedTime);
-    if (time === null) assert.equal(inferredConfirmation(input.events[0]!, input, Date.parse("2027-01-01T00:00:00Z")), null);
-    else assert.deepEqual(inferredConfirmation(input.events[0]!, input, inferenceBoundary(bt(time)))!.time, inferredConfirmationTime(bt(time)));
+    assert.deepEqual(inferredConfirmation(input.events[0]!, input, inferenceBoundary(bt(time)))!.time, inferredConfirmationTime(bt(time)));
   });
 
 test("an amendment's explicit business time cannot reschedule a promise or resume a paused plan", () => {
@@ -107,7 +106,7 @@ test("new plans and cancellation invalidate prior unsourced confirmations withou
   assert.equal(projectPublicV2(input, codex, now).events[0]!.updates.filter(update => !update.sources.length).length, 2);
 });
 
-test("dates and intervals confirm at a point while their original announcements remain intact", () => {
+test("saved instants and intervals confirm at a point while their original announcements remain intact", () => {
   for (const time of ["2026-10-26", "2026-10-26T08:00:00Z/2026-10-27T08:00:00Z"]) {
     const input = announced(time); input.actions.push(inferredConfirmation(input.events[0]!, input, now)!);
     const snapshot = projectPublicV2(input, codex, now);

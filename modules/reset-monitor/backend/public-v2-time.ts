@@ -1,14 +1,18 @@
 import { Temporal } from "@js-temporal/polyfill";
-import type { EventTime, BusinessTime } from "../public-v2.ts";
-import { serializeEventTime, isFutureBusinessTime } from "../public-v2.ts";
+import type { BusinessTime } from "../public-v2.ts";
+import { normalizePublicTime, isFutureBusinessTime } from "../public-v2.ts";
 import { defaultActionTime, type ActionDraft } from "../actions.ts";
 import { quotedInPost } from "./evidence.ts";
 type PublicV2PostRow = { text: string; published_at: Date | string };
+/** Intermediate source precision is resolved before anything is written. */
+export type ParsedTime = BusinessTime | { kind: "date"; date: string; timeZone: string } | { kind: "unknown" };
 
 const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 const namedClock = (text: string) => text.replace(/\bmidnight\b/gi, "12am").replace(/\bnoon\b/gi, "12pm");
 const monthPattern = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sept?(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)";
 const datePattern = `(?:${monthPattern}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s+\\d{4})?|\\d{4}-\\d{2}-\\d{2})`;
+const clockText = "\\d{1,2}(?::\\d{2}(?::\\d{2}(?:\\.\\d{1,9})?)?)?\\s*(?:am|pm)?";
 const zoneToken = "(?:(?:UTC|GMT)\\s*[+-]\\s*\\d{1,2}(?::?\\d{2})?(?![\\d:])|(?:UTC|GMT)(?!\\s*[+-])|[A-Za-z_]+/[A-Za-z_]+(?:/[A-Za-z_]+)?|(?:Pacific|Eastern)(?:\\s+(?:Standard|Daylight))?\\s+Time|PST|PDT|PT|EST|EDT|ET|CST|CDT|CT|MST|MDT|MT|BST|IST|JST|KST|CET|CEST)";
 const zonePattern = new RegExp(`\\b${zoneToken}(?![\\w/+:\\d-])`, "gi");
 const zones: Record<string, string> = {
@@ -49,19 +53,10 @@ function sourceZone(expression: string, postText: string, activityText: string) 
   }
   return { timeZone: "UTC", zoneBasis: "publication" as const };
 }
-function dateZone(zone: string) {
-  const offset = /^([+-])(\d{2}):(\d{2})$/.exec(zone);
-  if (!offset) return zone;
-  if (offset[3] !== "00") return null;
-  const hours = Number(offset[2]);
-  const name = hours === 0 ? "UTC" : `Etc/GMT${offset[1] === "+" ? "-" : "+"}${hours}`;
-  try { new Intl.DateTimeFormat("en", { timeZone: name }); return name; } catch { return null; }
-}
-
 /** Private provenance: never append this information to reader-facing localized text. */
 export interface TimeResolution {
   field: "claimDeadline" | "expiresAt";
-  time: EventTime;
+  time: ParsedTime;
   postId: string;
   excerpt: string;
   activityAnchor: string;
@@ -96,28 +91,29 @@ function resolveSingleSourceTime(expression: string, context: SourceTimeContext)
     }
     const date = Temporal.PlainDate.from({ year, month, day }, { overflow: "reject" });
     const remainder = expression.slice(match.index + match[0].length);
-    const clock = /^\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(remainder);
-    let time: EventTime;
+    const clock = /^\s*(?:at\s+)?(\d{1,2})(?::(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?\s*(am|pm)?\b(?![:\d]|\.\d)/i.exec(remainder);
+    let time: ParsedTime;
     if (clock) {
       let hour = Number(clock[1]);
-      if (clock[3]) {
+      if (clock[5]) {
         if (hour < 1 || hour > 12) return null;
-        hour = hour % 12 + (clock[3].toLowerCase() === "pm" ? 12 : 0);
+        hour = hour % 12 + (clock[5].toLowerCase() === "pm" ? 12 : 0);
       } else if (!clock[2]) return null;
-      const local = date.toPlainDateTime(Temporal.PlainTime.from({ hour, minute: Number(clock[2] ?? 0) }, { overflow: "reject" }));
+      const timeOfDay = `${String(hour).padStart(2, "0")}:${clock[2] ?? "00"}:${clock[3] ?? "00"}${clock[4] ? `.${clock[4]}` : ""}`;
+      if (clock[3] === "60") return null;
+      const local = date.toPlainDateTime(Temporal.PlainTime.from(timeOfDay));
       const at = local.toZonedDateTime(timeZone, { disambiguation: "reject" }).toInstant().toString();
       time = { kind: context.deadline ? "deadline" : "instant", at };
     } else {
-      const sourceDateZone = dateZone(timeZone);
-      if (!sourceDateZone) return null;
-      time = { kind: "date", date: date.toString(), timeZone: sourceDateZone };
+      if (/^\s*(?:at\s+)?\d{1,2}\s*:|^\s*at\s+\d/i.test(remainder)) return null;
+      time = { kind: "date", date: date.toString(), timeZone };
     }
     return { time, activityAnchor: context.activityAnchor, yearBasis: explicitYear ? "explicit" : "activity", timeZone, zoneBasis };
   } catch { return null; }
 }
 
-const clockText = "\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?";
-const rangePattern = new RegExp(`^\\s*(?:at\\s+|from\\s+|between\\s+)?(?<start>${clockText})(?:\\s*(?<startZone>${zoneToken}))?\\s*(?:[–—-]|to\\b|through\\b|and\\b)\\s*(?:(?<endDate>${datePattern})\\s*(?:at\\s+)?)?(?<end>${clockText})(?:\\s*(?<endZone>${zoneToken}))?`, "i");
+const nextDayPattern = "(?:(?:the\\s+)?next\\s+day\\b|次日|翌日)";
+const rangePattern = new RegExp(`^\\s*(?:at\\s+|from\\s+|between\\s+)?(?<start>${clockText})(?:\\s*(?<startZone>${zoneToken}))?\\s*(?:[–—-]|to\\b|through\\b|until\\b|and\\b)\\s*(?:(?<nextDay>${nextDayPattern})\\s*(?:at\\s+)?)?(?:(?<endDate>${datePattern})\\s*(?:at\\s+)?)?(?<end>${clockText})(?:\\s*(?<endZone>${zoneToken}))?(?:\\s*(?<endNextDay>${nextDayPattern}))?`, "i");
 const isoTimestampPattern = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d{1,9})?)?(?:Z|[+-]\\d{2}:\\d{2})";
 
 export function resolveSourceTime(expression: string, context: SourceTimeContext): ResolvedTime | null {
@@ -131,7 +127,7 @@ export function resolveSourceTime(expression: string, context: SourceTimeContext
     try {
       const from = Temporal.Instant.from(match[1]!).toString();
       const remainder = timestamp.slice(match[0].length);
-      let time: EventTime = { kind: context.deadline ? "deadline" : "instant", at: from };
+      let time: ParsedTime = { kind: context.deadline ? "deadline" : "instant", at: from };
       if (/^\s*(?:\/|[–—-]|to\b|through\b)/i.test(remainder)) {
         const end = new RegExp(`^\\s*(?:/|[–—-]|to\\b|through\\b)\\s*(${isoTimestampPattern})(?![\\w:+-])`, "i").exec(remainder);
         if (!end) return null;
@@ -148,7 +144,7 @@ export function resolveSourceTime(expression: string, context: SourceTimeContext
   const range = rangePattern.exec(remainder)?.groups;
   if (!range) {
     // Never turn an unparseable interval into a fabricated single occurrence.
-    if (new RegExp(`^\\s*(?:at|from|between)?\\s*${clockText}\\s*(?:${zoneToken})?\\s*(?:[–—-]|to\\b|through\\b|and\\b)`, "i").test(remainder)) return null;
+    if (new RegExp(`^\\s*(?:at|from|between)?\\s*${clockText}\\s*(?:${zoneToken})?\\s*(?:[–—-]|to\\b|through\\b|until\\b|and\\b)`, "i").test(remainder)) return null;
     return resolveSingleSourceTime(expression, context);
   }
   const startZone = range.startZone ?? range.endZone ?? "";
@@ -160,13 +156,9 @@ export function resolveSourceTime(expression: string, context: SourceTimeContext
     const start = resolveSingleSourceTime(`${date[0]} at ${clock} ${startZone}`, { ...context, deadline: false });
     if (start?.time.kind !== "instant") continue;
     const localDay = Temporal.Instant.from(start.time.at).toZonedDateTimeISO(start.timeZone).toPlainDate();
-    let endDate = range.endDate ?? localDay.toString();
-    let end = resolveSingleSourceTime(`${endDate} at ${range.end} ${endZone}`, { ...context, activityAnchor: start.time.at, past: false, deadline: false });
-    if (end?.time.kind !== "instant") continue;
-    if (!range.endDate && Date.parse(end.time.at) < Date.parse(start.time.at)) {
-      endDate = localDay.add({ days: 1 }).toString();
-      end = resolveSingleSourceTime(`${endDate} at ${range.end} ${endZone}`, { ...context, deadline: false });
-    }
+    // A clock running backwards is not evidence of an overnight schedule.
+    const endDate = range.endDate ?? localDay.add({ days: range.nextDay || range.endNextDay ? 1 : 0 }).toString();
+    const end = resolveSingleSourceTime(`${endDate} at ${range.end} ${endZone}`, { ...context, activityAnchor: start.time.at, past: false, deadline: false });
     if (end?.time.kind !== "instant") continue;
     const duration = Date.parse(end.time.at) - Date.parse(start.time.at);
     if (duration >= 0) options.push({ duration, result: { ...start, time: { kind: "range", from: start.time.at, through: end.time.at } } });
@@ -259,15 +251,23 @@ export function hasExplicitFutureIssuance(actionExcerpt: string, post?: PublicV2
     // This is evidence of a future plan only if the date is ahead without rolling the year forward.
     const resolved = resolveSourceTime(clause.slice(date.index),
       { activityAnchor, postText: post.text, activityText: clause, deadline: false, sameYear: true });
-    return resolved !== null && resolved.time.kind !== "unknown" && isFutureBusinessTime(resolved.time, activityAnchor);
+    return resolved !== null && resolved.time.kind !== "unknown" && isFutureSourceTime(resolved.time, activityAnchor);
   });
 }
 
+/** Normalize date-only source excerpts without replacing clocks or other clauses. */
+function dateOnlyWords(excerpt: string): string {
+  return excerpt.replace(/(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号號]/g, (source, year, month, day) =>
+    months[Number(month) - 1] ? ` ${months[Number(month) - 1]} ${day}${year ? `, ${year}` : ""} ` : source)
+    .replace(/(下|上|本|这|這)?(?:周|週|星期)([一二三四五六日天])/g, (_source, relative, day) =>
+      ` ${relative ? `${relative}周 ` : ""}${weekdays[Math.min(6, "一二三四五六日天".indexOf(day))]} `).trim();
+}
+
 /** Event expressions are kept apart from redemption and expiry wording. */
-export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, announcement: boolean, activityText: string, activityAnchor?: string, occurredLifecycle = false): EventTime {
+export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, announcement: boolean, activityText: string, activityAnchor?: string, occurredLifecycle = false): ParsedTime {
   if (!occurredLifecycle && isUsageTime(excerpt, post.text)) return { kind: "unknown" };
   const literal = excerpt.trim();
-  excerpt = namedClock(excerpt);
+  excerpt = namedClock(dateOnlyWords(literal));
   const anchor = new Date(post.published_at).toISOString();
   const date = calendarTime.exec(excerpt);
   const relative = firstRelativeTime(excerpt, date);
@@ -298,14 +298,15 @@ export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, a
   const { timeZone } = zone;
   const local = Temporal.Instant.from(anchor).toZonedDateTimeISO(timeZone);
   let day = local.toPlainDate();
-  const weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
-  const weekday = /\b(?:(next|last|this)\s+)?(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i.exec(excerpt);
+  const weekday = /(?:\b(next|last|this)\s+|([下上本这這])周\s*)?\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b/i.exec(excerpt);
   const dayExplicit = /\b(today|tomorrow|yesterday)\b/i.exec(excerpt);
   if (dayExplicit) day = day.add({ days: dayExplicit[1]!.toLowerCase() === "tomorrow" ? 1 : dayExplicit[1]!.toLowerCase() === "yesterday" ? -1 : 0 });
   else if (weekday) {
-    const offset = weekdays.indexOf(weekday[2]!.toLowerCase()) + 1 - local.dayOfWeek;
+    const offset = weekdays.indexOf(weekday[3]!.toLowerCase()) + 1 - local.dayOfWeek;
     const qualifier = weekday[1]?.toLowerCase();
-    const days = qualifier === "next" ? (offset + 7) % 7 || 7 : qualifier === "last" ? (offset - 7) % 7 || -7
+    // Chinese week qualifiers select a calendar week, unlike English next/last occurrences.
+    const days = weekday[2] ? offset + (weekday[2] === "下" ? 7 : weekday[2] === "上" ? -7 : 0)
+      : qualifier === "next" ? (offset + 7) % 7 || 7 : qualifier === "last" ? (offset - 7) % 7 || -7
       : qualifier === "this" ? offset : announcement ? (offset + 7) % 7 : (offset - 7) % 7;
     day = day.add({ days });
   }
@@ -317,11 +318,8 @@ export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, a
       return Date.parse(at) <= Date.parse(anchor) ? { kind: deadline ? "deadline" : "instant", at } : { kind: "unknown" };
     } catch { return { kind: "unknown" }; }
   }
-  const clock = /\b(?:at|by|before|until|from|between)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.exec(excerpt);
-  if (!clock) {
-    const sourceDateZone = dateZone(timeZone);
-    return (dayExplicit || weekday) && sourceDateZone ? { kind: "date", date: day.toString(), timeZone: sourceDateZone } : { kind: "unknown" };
-  }
+  const clock = /\b(?:at|by|before|until|from|between)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b|(?<!\d)\d{1,2}:\d{2}\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.exec(excerpt);
+  if (!clock) return dayExplicit || weekday ? { kind: "date", date: day.toString(), timeZone } : { kind: "unknown" };
   const clockExpression = excerpt.slice(clock.index).replace(/^(?:at|by|before|until|from|between)\s+/i, "");
   const expression = () => `${months[day.month - 1]} ${day.day}, ${day.year} at ${clockExpression}`;
   let result = resolveSourceTime(expression(), context)?.time;
@@ -334,17 +332,146 @@ export function resolveEventExpression(excerpt: string, post: PublicV2PostRow, a
   return result ?? { kind: "unknown" };
 }
 
-/** Unusable time metadata cannot reject an independently verified action. */
-export function resolveActionTime(action: Pick<ActionDraft, "action" | "invalidatesEvent"> & { timeExcerpt: string | null }, post: PublicV2PostRow, activityAnchor?: string): { time: BusinessTime | null; issue: string | null } {
+function isFutureSourceTime(time: Exclude<ParsedTime, { kind: "unknown" }>, at: string): boolean {
+  if (time.kind === "date") return time.date > Temporal.Instant.from(at).toZonedDateTimeISO(time.timeZone).toPlainDate().toString();
+  return isFutureBusinessTime(time, at);
+}
+
+const deadlineWords = /\b(?:by|before|until|within|no later than|end\s+of)\b|截止|截至|结束前|結束前|之前|不晚于|不晚於|最迟|最遲|天内|天內|小时内|小時內/i;
+function sourcePoint(text: string, post: PublicV2PostRow, anchor?: string): ParsedTime {
+  return resolveEventExpression(text.trim().replace(/^(?:from|between)\s+|^[从從]\s*/i, ""), post, true, post.text, anchor);
+}
+const dateClock = (date: string, clock: string) => `${date}T${clock}:00Z`;
+
+function announcementDeadline(excerpt: string, post: PublicV2PostRow): boolean {
+  const normalized = dateOnlyWords(excerpt.trim()), selected = selectedTime(normalized);
+  if (selected) {
+    const before = normalized.slice(0, selected.index), after = normalized.slice(selected.index + selected[0].length);
+    if (/^within\b/i.test(selected[0]) || /\b(?:by|before|until|within|no later than|end\s+of)\s*$/i.test(before)
+      || /(?:截止|截至|不晚于|不晚於|最迟|最遲)\s*$/.test(before)
+      || /^\s*(?:结束前|結束前|之前|前|内|內)/.test(after)
+      || new RegExp(`^\\s*(?:(?:at\\s+)?${clockText})?(?:\\s*${zoneToken})?\\s*(?:之前|前)`, "i").test(after)) return true;
+    const occurrences = [...post.text.matchAll(new RegExp(excerpt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))];
+    if (occurrences.length === 1 && /\b(?:by|before|until)\s*$/i.test(post.text.slice(0, occurrences[0]!.index))) return true;
+    return false;
+  }
+  return deadlineWords.test(excerpt);
+}
+
+/** Date-only restatements must not overwrite an accepted clock. */
+export function hasExplicitAnnouncementClock(excerpt: string): boolean {
+  return /(?<![+\-\d])\d{1,2}:\d{2}|\b\d{1,2}\s*[ap]m\b|\b(?:noon|midnight)\b/i.test(excerpt.replace(zonePattern, ""));
+}
+
+function announcementInterval(excerpt: string, post: PublicV2PostRow, anchor?: string): BusinessTime | null {
+  const split = /\s+(?:to|through|and|until)\s+|\s*[–—~至到]\s*|\s+-\s+|(?<=\d{4}-\d{2}-\d{2})\/(?=\d{4}-\d{2}-\d{2}\b)/i.exec(excerpt);
+  if (!split) return null;
+  const left = excerpt.slice(0, split.index).trim(), right = excerpt.slice(split.index + split[0].length).trim();
+  if (/^and$/i.test(split[0].trim()) && !/\bbetween\b/i.test(left)) return null;
+  // An adjacent claim deadline is a separate fact, not the end of a delivery range.
+  if (!/(?:\d|am|pm|UTC|GMT|P[DS]?T|E[DS]?T|day|[日号號一二三四五六天])$/i.test(left)
+    || isUsageTime(right, post.text)) return null;
   const publishedAt = new Date(post.published_at).toISOString();
-  const fallback = { time: defaultActionTime(action.action, post.published_at), issue: null };
-  if (!action.timeExcerpt || !quotedInPost(action.timeExcerpt, post.text)) return fallback;
-  if ((action.action === "announce" || action.action === "confirm") && isUsageTime(action.timeExcerpt, post.text)) return fallback;
-  const occurred = action.invalidatesEvent || action.action === "progress" || action.action === "confirm";
-  const resolved = resolveEventExpression(action.timeExcerpt, post,
-    action.action === "announce" || action.action === "amend" && !action.invalidatesEvent, post.text, occurred ? activityAnchor : undefined, occurred);
-  if (resolved.kind === "unknown") return fallback;
-  if (occurred && isFutureBusinessTime(resolved, publishedAt))
-    return resolved.kind === "deadline" ? fallback : { ...fallback, issue: "活动结果时间尚未发生" };
-  return { time: serializeEventTime(resolved), issue: null };
+  const location = anchor ?? publishedAt;
+  const clockOnly = new RegExp(`^(?:at\\s+)?(?=\\d{1,2}:|\\d{1,2}\\s*[ap]m\\b)${clockText}(?:\\s*${zoneToken})?$`, "i");
+  const leftWords = dateOnlyWords(left);
+  const namedStart = new RegExp(datePattern, "i").exec(leftWords)?.[0];
+  const nextDay = new RegExp(nextDayPattern, "i").exec(right);
+  const endWords = nextDay ? right.replace(nextDay[0], "").trim() : right;
+  const rightClock = clockOnly.test(namedClock(endWords));
+  const leftClock = left.replace(/^(?:from|between)\s+|^[从從]\s*/i, "").replace(/^at\s+/i, "");
+  const startZone = sourceZone(left, post.text, post.text)?.timeZone;
+  let start = sourcePoint(clockOnly.test(namedClock(leftClock)) ? `today at ${leftClock}` : left, post, anchor);
+  let end = sourcePoint(right, post, anchor);
+  const shortEnd = /^(\d{1,2})(?:st|nd|rd|th|[日号號])?(?=$|\s)(.*)$/i.exec(right);
+  const startCalendar = (value: ParsedTime) => value.kind === "date" ? value.date : value.kind === "instant" || value.kind === "deadline"
+    ? Temporal.Instant.from(value.at).toZonedDateTimeISO(startZone ?? "UTC").toPlainDate().toString() : undefined;
+  const endCalendar = (value: ParsedTime) => value.kind === "date" ? value.date : value.kind === "instant" || value.kind === "deadline"
+    ? Temporal.Instant.from(value.at).toZonedDateTimeISO(sourceZone(right, post.text, post.text)?.timeZone ?? "UTC").toPlainDate().toString() : undefined;
+  const abbreviatedEnd = (date: string) => {
+    if (rightClock) return sourcePoint(`${Temporal.PlainDate.from(date).add({ days: nextDay ? 1 : 0 })} at ${endWords.replace(/^at\s+/i, "")}`, post, anchor);
+    const first = Temporal.PlainDate.from(date);
+    const day = Number(shortEnd![1]);
+    const month = day < first.day ? first.add({ months: 1 }) : first;
+    return sourcePoint(`${month.with({ day }, { overflow: "reject" })}${shortEnd![2]}`, post, anchor);
+  };
+  if (namedStart && !/\d{4}/.test(namedStart)) {
+    const sameYear = resolveSourceTime(leftWords, { activityAnchor: location, postText: post.text, activityText: post.text, deadline: false, sameYear: true })?.time;
+    const candidateDate = sameYear && startCalendar(sameYear), rolledDate = startCalendar(start), endDate = endCalendar(end);
+    if (candidateDate && rolledDate && candidateDate < rolledDate && (endDate && candidateDate <= endDate && endDate < rolledDate
+      || shortEnd && end.kind === "unknown" && (endCalendar(abbreviatedEnd(candidateDate)) ?? "") >= location.slice(0, 10))) start = sameYear;
+  }
+  const startDate = startCalendar(start);
+  if (startDate && (rightClock || shortEnd && end.kind === "unknown")) end = abbreviatedEnd(startDate);
+  if (start.kind === "unknown" || end.kind === "unknown") {
+    // A recognized range separator must not turn an invalid endpoint into a point.
+    throw new RangeError("Invalid schedule range endpoint");
+  }
+  const startAt = start.kind === "date" ? start.date <= publishedAt.slice(0, 10) ? publishedAt : dateClock(start.date, "08:00")
+    : start.kind === "range" ? start.from : start.at;
+  const endAt = end.kind === "date" ? dateClock(end.date, "18:00") : end.kind === "range" ? end.through : end.at;
+  return normalizePublicTime({ kind: "range", from: startAt, through: endAt });
+}
+
+function announcementTime(excerpt: string, post: PublicV2PostRow, anchor?: string): BusinessTime | null {
+  const endOfDay = /\b(?:EOD|end\s+of\s+(?:the\s+)?day)\b/i;
+  if (endOfDay.test(excerpt) && !hasExplicitAnnouncementClock(excerpt)) {
+    const date = dateOnlyWords(excerpt.replace(endOfDay, ""));
+    const point = sourcePoint(selectedTime(date) ? date : `today ${date}`, post, anchor);
+    return point.kind === "date" ? { kind: "deadline", at: dateClock(point.date, "18:00") } : null;
+  }
+  const withinHours = /^(\d+(?:\.\d+)?)\s*(?:小时|小時)\s*(?:内|內)$/.exec(excerpt.trim());
+  if (withinHours) {
+    const at = new Date(new Date(post.published_at).getTime() + Number(withinHours[1]) * 3_600_000).toISOString();
+    return { kind: "deadline", at };
+  }
+  const interval = announcementInterval(excerpt, post, anchor);
+  if (interval) return interval;
+  const words: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+    一: 1, 两: 2, 兩: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+  const days = /\b(?:in|within|next|over)\s+(?:the\s+)?(?:next\s+)?(\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\b|([一两兩二三四五六七八九十\d]+)\s*天(?:内|內|后|後)/i.exec(excerpt);
+  const namedDate = calendarTime.exec(dateOnlyWords(excerpt));
+  if (days && (!namedDate || days.index < namedDate.index)) {
+    const quantity = days[1] ?? days[2]!;
+    const count = words[quantity.toLowerCase()] ?? Number(quantity);
+    if (!Number.isFinite(count) || count < 0) return null;
+    const date = Temporal.Instant.from(new Date(post.published_at).toISOString()).toZonedDateTimeISO("UTC").toPlainDate().add({ days: count }).toString();
+    const suffix = excerpt.slice(days.index + days[0].length);
+    if (hasExplicitAnnouncementClock(suffix) && /^\s*(?:at\s+)?(?:\d{1,2}|noon\b|midnight\b)/i.test(suffix)) {
+      const exact = sourcePoint(`${date} ${suffix.trim()}`, post, anchor);
+      return exact.kind === "instant" ? { kind: deadlineWords.test(days[0]) ? "deadline" : "instant", at: exact.at } : null;
+    }
+    if (/\b(?:over|next)\b/i.test(excerpt) && !/\bwithin\b/i.test(excerpt))
+      return normalizePublicTime({ kind: "range", from: new Date(post.published_at).toISOString(), through: dateClock(date, "18:00") });
+    return { kind: deadlineWords.test(excerpt) ? "deadline" : "instant", at: dateClock(date, "18:00") };
+  }
+  const resolved = sourcePoint(excerpt, post, anchor);
+  if (resolved.kind === "unknown") return null;
+  if (resolved.kind === "date") return { kind: announcementDeadline(excerpt, post) ? "deadline" : "instant", at: dateClock(resolved.date, "18:00") };
+  if (announcementDeadline(excerpt, post)) return { kind: "deadline", at: resolved.kind === "range" ? resolved.through : resolved.at };
+  return normalizePublicTime(resolved);
+}
+
+/** Time metadata never rejects an otherwise supported action. */
+export function resolveActionTime(action: Pick<ActionDraft, "action" | "invalidatesEvent"> & { timeExcerpt: string | null }, post: PublicV2PostRow,
+  activityAnchor?: string, now = Date.now()): { time: BusinessTime; issue: string | null } {
+  const publishedAt = new Date(post.published_at).toISOString();
+  if (action.action === "confirm") return { time: { kind: "instant", at: publishedAt }, issue: null };
+  const fallback = { time: defaultActionTime(action.action, post.published_at, now), issue: null };
+  const invalid = (issue: string) => ({ time: { kind: "instant" as const, at: dateClock(publishedAt.slice(0, 10), "18:00") }, issue });
+  try {
+    if (!action.timeExcerpt?.trim()) return fallback;
+    if (!quotedInPost(action.timeExcerpt, post.text)) return invalid("时间引文不在原帖中");
+    if (action.action === "announce" && isUsageTime(action.timeExcerpt, post.text)) return invalid("时间引文是使用或领取期限，需核对发放时间");
+    if (action.action === "announce") {
+      const time = announcementTime(action.timeExcerpt, post, activityAnchor);
+      return time ? { time: normalizePublicTime(time), issue: null } : invalid("预告时间无法解析，已保存默认时刻，等待核对");
+    }
+    const occurred = action.invalidatesEvent || action.action === "progress";
+    const resolved = resolveEventExpression(action.timeExcerpt, post, !occurred, post.text, occurred ? activityAnchor : undefined, occurred);
+    if (resolved.kind === "unknown") return invalid("动作时间无法解析，已保存默认时刻，等待核对");
+    if (resolved.kind === "date") return fallback;
+    if (occurred && isFutureSourceTime(resolved, publishedAt)) return invalid("活动结果时间尚未发生，已保存默认时刻，等待核对");
+    return { time: normalizePublicTime(resolved), issue: null };
+  } catch { return invalid("时间格式、时区或区间异常，已保存默认时刻，等待核对"); }
 }

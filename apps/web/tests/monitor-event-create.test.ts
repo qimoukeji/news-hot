@@ -41,14 +41,16 @@ for (const product of platforms) test(`${product.product} creates an event first
     await card.getByRole("button", { name: "添加动作", exact: true }).click();
     dialog = page.getByRole("dialog", { name: "添加动作", exact: true });
     await dialog.getByLabel("动作", { exact: true }).selectOption("confirm");
-    await dialog.getByLabel("业务时间", { exact: true }).selectOption("date");
-    await dialog.getByLabel("业务日期", { exact: true }).fill("2026-10-23");
+    await dialog.getByLabel("业务时间", { exact: true }).selectOption("instant");
+    await dialog.getByLabel("时间时区", { exact: true }).selectOption("UTC");
+    await dialog.getByLabel("业务时刻", { exact: true }).fill("2026-10-23T18:00");
     await dialog.getByRole("button", { name: "预览影响", exact: true }).click();
     await dialog.getByRole("button", { name: "确认提交", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     await expect(card.getByText("人工核实已生效", { exact: true })).toBeVisible();
     await expect(card.getByRole("button", { name: "撤回", exact: true })).toBeEnabled();
     assert.equal(record.actions.length, 1); assert.deepEqual(record.actions[0]!.sources, []);
+    assert.deepEqual(record.actions[0]!.time, { kind: "instant", at: "2026-10-23T18:00:00Z" });
     publicList = await (await fetch(`${web.origin}${product.list}`, { signal: AbortSignal.timeout(5000) })).json();
     assert.equal(publicList.list.find((event: { id: string }) => event.id === record.event.id).updates.length, 1);
     await card.getByRole("button", { name: "编辑", exact: true }).first().click();

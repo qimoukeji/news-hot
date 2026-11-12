@@ -4,8 +4,8 @@ import { cancelReviewNotification } from "./review-notifications.ts";
 import { sql, type Db } from "@aihot/backend/db";
 import { audit, Conflict } from "@aihot/backend/audit";
 import { monitorId, monitor, auditAction, auditSubject } from "./context.ts";
-import { actionDraftSchema, defaultActionTime, editorialTextSchema, editorialScopeSchema, reduceEvent, sourcedActions, currentUnsourcedConfirmation, type ActionInput, type ActionRow } from "../actions.ts";
-import { loadActionInput, rowVersion, validateActionFacts, validateScope, lockActionRecords, validateActionSources, auditPost, saveStandaloneFollowups, removeStandaloneFollowups } from "./action-store.ts";
+import { actionDraftSchema, editorialTextSchema, editorialScopeSchema, reduceEvent, sourcedActions, currentUnsourcedConfirmation, inferencesAfterAnnouncement, isInferredConfirmation, sourcedConfirmationTime, type ActionInput, type ActionRow } from "../actions.ts";
+import { loadActionInput, rowVersion, validateActionFacts, validateScope, lockActionRecords, validateActionSources, auditPost, saveStandaloneFollowups, removeStandaloneFollowups, invalidateInferences, removeInvalidatedInferences, saveManualConfirmations, removeManualConfirmations } from "./action-store.ts";
 import { enqueuePublicV2 } from "./public-v2-work.ts";
 import { normalizePublicTime, isFutureBusinessTime } from "../public-v2.ts";
 import { postContext } from "./post-context.ts";
@@ -38,7 +38,9 @@ function relatedIds(input: ActionInput, eventIds: Iterable<string>, extraPosts: 
   return { events: [...events].sort(), actions: actions.map(action => action.id).sort(), posts: [...new Set([...extraPosts, ...actions.flatMap(action => action.sources.map(source => source.postId))])].sort() };
 }
 function subset(input: ActionInput, ids: ReturnType<typeof relatedIds>) {
-  return { events: input.events.filter(event => ids.events.includes(event.id)), actions: input.actions.filter(action => ids.actions.includes(action.id)), posts: input.posts.filter(post => ids.posts.includes(post.id)) };
+  return { events: input.events.filter(event => ids.events.includes(event.id)), actions: input.actions.filter(action => ids.actions.includes(action.id)), posts: input.posts.filter(post => ids.posts.includes(post.id)),
+    manualConfirmationIds: [...input.manualConfirmationIds ?? []].filter(id => ids.actions.includes(id)).sort(),
+    invalidatedInferenceIds: [...input.invalidatedInferenceIds ?? []].filter(id => ids.actions.includes(id)).sort() };
 }
 const originExists = (input: ActionInput, origin: Origin) => origin.kind === "post" ? input.posts.some(post => post.id === origin.id && !post.context_only) : input.events.some(event => event.id === origin.id);
 const baseVersion = (input: ActionInput, origin: Origin) => rowVersion(subset(input, baseIds(input, origin)));
@@ -110,6 +112,8 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
     if (expected ? expected !== rowVersion(row) : !baseline[kind].includes(row.id)) throw new Conflict("新选择的记录已变化，请刷新选项后重新预览");
   }
   const after = structuredClone(state), createdAt = new Date(origin.kind === "post" ? state.posts.find(post => post.id === origin.id)!.published_at : state.events.find(event => event.id === origin.id)!.updated_at).toISOString();
+  const manualConfirmationIds = new Set(after.manualConfirmationIds);
+  after.manualConfirmationIds = manualConfirmationIds;
   const findEvent = (id: string) => { const event = after.events.find(event => event.id === id); if (!event) throw invalid("事件不存在于当前监控"); return event; };
   const findAction = (id: string) => { const action = after.actions.find(action => action.id === id); if (!action) throw invalid("动作不存在于当前监控"); return action; };
   for (const item of command.events.create) {
@@ -123,13 +127,14 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
   for (const item of command.actions.create) {
     const event = findEvent(eventRef(item)); if (event.withdrawn) throw invalid("已撤回事件不能新增动作");
     if (!after.actions.some(action => action.event_id === event.id && ["announce", "confirm"].includes(action.action)) && !["announce", "confirm"].includes(item.action)) throw invalid("事件首个动作必须为预告或确认");
-    const draft = { eventId: event.id, action: item.action, invalidatesEvent: item.invalidatesEvent, title: item.title, summary: item.summary, time: item.time ? normalizePublicTime(item.time) : null };
+    const draft = { eventId: event.id, action: item.action, invalidatesEvent: item.invalidatesEvent, title: item.title, summary: item.summary, time: normalizePublicTime(item.time) };
     validateActionFacts(draft);
     // Planned official sources must participate in replay before later actions choose an upgrade target.
     const plannedSources = command.sources.add.filter(source => source.actionKey === item.localKey).map(source => ({ postId: source.postId }));
     const current = item.action === "confirm" ? currentUnsourcedConfirmation(event, after) : null;
     if (current) {
       Object.assign(current, { title: draft.title, summary: draft.summary, time: draft.time, sources: plannedSources });
+      if (isInferredConfirmation(current)) manualConfirmationIds.add(current.id);
       actionKeys.set(item.localKey, current.id);
       continue;
     }
@@ -138,6 +143,11 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
   }
   for (const item of command.actions.update) {
     const action = findAction(item.id), event = findEvent(item.eventId ?? action.event_id);
+    const prior = state.actions.find(row => row.id === item.id)!;
+    const time = normalizePublicTime(item.time);
+    if (prior.action === "announce" && item.action === "announce" && stableJson(prior.time) !== stableJson(time)) {
+      after.invalidatedInferenceIds = new Set([...after.invalidatedInferenceIds ?? [], ...inferencesAfterAnnouncement(prior, state.actions, manualConfirmationIds)]);
+    }
     if (event.id !== action.event_id) {
       if (event.withdrawn) throw invalid("已撤回事件不能移入动作");
       if (event.type !== findEvent(action.event_id).type) throw invalid("动作只能移入同类型事件");
@@ -145,7 +155,8 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
       action.event_id = event.id;
     }
     validateActionFacts({ ...item, eventId: event.id });
-    Object.assign(action, { action: item.action, invalidates_event: item.invalidatesEvent ?? false, title: item.title, summary: item.summary, time: item.time ? normalizePublicTime(item.time) : null });
+    Object.assign(action, { action: item.action, invalidates_event: item.invalidatesEvent ?? false, title: item.title, summary: item.summary, time });
+    if (isInferredConfirmation(action)) manualConfirmationIds.add(action.id);
   }
   for (const item of command.sources.remove) {
     const action = findAction(item.actionId);
@@ -159,9 +170,20 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
     if (!action.sources.some(source => source.postId === item.postId)) action.sources.push({ postId: item.postId });
     action.sources.sort((a, b) => a.postId.localeCompare(b.postId));
   }
+  for (const action of after.actions) if (affected.has(action.event_id) && action.action === "confirm" && action.sources.length) {
+    const ids = new Set(action.sources.map(source => source.postId));
+    const prior = state.actions.find(row => row.id === action.id && row.action === "confirm" && row.sources.length);
+    const time = sourcedConfirmationTime(after.posts.filter(post => ids.has(post.id) && !post.context_only), prior?.time);
+    if (time) action.time = time;
+  }
   const lastSourceRemovals = after.actions.filter(action => !action.sources.length && state.actions.some(prior => prior.id === action.id && prior.sources.length > 0)).map(action => ({ actionId: action.id, eventId: action.event_id, message: "最后一条来源移除后删除动作，请核对事件当前影响范围" }));
   const deleted = new Set(lastSourceRemovals.map(action => action.actionId));
   after.actions = after.actions.filter(action => !deleted.has(action.id));
+  for (const id of manualConfirmationIds) {
+    const action = after.actions.find(action => action.id === id);
+    if (!action || action.action !== "confirm" || action.sources.length) manualConfirmationIds.delete(id);
+  }
+  after.invalidatedInferenceIds = new Set([...after.invalidatedInferenceIds ?? []].filter(id => !manualConfirmationIds.has(id)));
   const standaloneFollowupIds = new Set(after.standaloneFollowupIds);
   for (const id of deleted) standaloneFollowupIds.delete(id);
   for (const item of command.actions.update) {
@@ -178,26 +200,9 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
     const remaining = sourcedActions(event, after)[0];
     if (remaining?.posts.length && ["progress", "amend"].includes(remaining.action.action)) standaloneFollowupIds.add(remaining.action.id);
   }
-  for (const action of after.actions) if (affected.has(action.event_id) && action.action !== "announce" && action.time === null && action.sources.length) {
-    const dates = action.sources.map(source => after.posts.find(post => post.id === source.postId))
-      .filter(post => post && !post.context_only).map(post => new Date(post!.published_at).toISOString()).sort();
-    if (dates.length) action.time = defaultActionTime(action.action, dates[0]!);
-  }
   if (after.actions.some(action => !action.sources.length && (action.action !== "confirm" || !action.time))) throw invalid("只有填写明确生效时间的确认动作可以没有来源");
   for (const action of after.actions.filter(action => !action.sources.length)) {
     if (isFutureBusinessTime(action.time!, new Date(Date.now()).toISOString())) throw invalid("实际生效时间不能在未来");
-  }
-  const planCorrections: string[] = [];
-  for (const item of command.actions.update) {
-    const prior = state.actions.find(action => action.id === item.id)!;
-    const next = after.actions.find(action => action.id === item.id);
-    const event = findEvent(prior.event_id);
-    if (!next || prior.event_id !== next.event_id || prior.action !== "announce" || next.action !== "announce" || stableJson(prior.time) === stableJson(next.time)
-      || !currentUnsourcedConfirmation(event, state) || !next.sources.length) continue;
-    const revisionId = `plan-correction-${rowVersion({ identity, action: next.id, time: next.time })}`;
-    const sequence = Math.max(0, ...after.actions.filter(action => action.event_id === event.id).map(action => action.sequence)) + 1;
-    after.actions.push({ ...next, id: revisionId, sequence, action: "announce", invalidates_event: false, created_at: createdAt, updated_at: createdAt });
-    planCorrections.push(revisionId);
   }
   const retainedPostIds = new Set(command.sources.add.map(source => source.postId));
   for (const post of after.posts) if (retainedPostIds.has(post.id)) post.filtered_out = false;
@@ -205,7 +210,6 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
   for (const item of command.orders) {
     findEvent(item.eventId);
     const actionIds = item.actionIds.map(id => id.startsWith("actionKey:") ? actionKeys.get(id.slice(10)) ?? "" : id);
-    actionIds.push(...planCorrections.filter(id => findAction(id).event_id === item.eventId && !actionIds.includes(id)));
     unique(actionIds, "排序动作");
     const rows = after.actions.filter(action => action.event_id === item.eventId);
     if (actionIds.length !== rows.length || rows.some(action => !actionIds.includes(action.id))) throw invalid("排序必须包含该事件全部有效动作");
@@ -221,6 +225,7 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
     const event = input.events.find(event => event.id === eventId); if (!event) return null;
     const reduced = reduceEvent(event, input);
     return { type: event.type, title: event.title, summary: event.summary, scope: event.scope, status: reduced?.status ?? null, time: reduced?.time ?? null,
+      manualConfirmationIds: [...input.manualConfirmationIds ?? []].filter(id => input.actions.some(action => action.id === id && action.event_id === eventId)).sort(),
       actions: input.actions.filter(action => action.event_id === eventId).sort((a, b) => a.sequence - b.sequence).map(action => ({ ...action })) };
   };
   const changes = [...affected].sort().map(eventId => ({ eventId, before: snapshot(eventId, state), after: snapshot(eventId, after) }));
@@ -277,11 +282,17 @@ async function submit(origin: Origin, value: unknown, actor: string) {
     for (const change of planned.actionChanges) {
       const next = change.after;
       if (!next) await db`DELETE FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND id=${change.actionId}`;
-      else if (!change.before) await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources) VALUES(${monitorId()},${next.id},${next.event_id},${next.sequence},${next.action},${next.invalidates_event},${db.json(next.title)},${next.summary ? db.json(next.summary) : null},${next.time === null ? null : db.json(next.time)},${db.json(next.sources)})`;
-      else await db`UPDATE monitor_event_actions SET event_id=${next.event_id},sequence=${next.sequence},action=${next.action},invalidates_event=${next.invalidates_event},title=${db.json(next.title)},summary=${next.summary ? db.json(next.summary) : null},time=${next.time === null ? null : db.json(next.time)},sources=${db.json(next.sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${next.id}`;
+      else if (!change.before) await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources) VALUES(${monitorId()},${next.id},${next.event_id},${next.sequence},${next.action},${next.invalidates_event},${db.json(next.title)},${next.summary ? db.json(next.summary) : null},${db.json(next.time)},${db.json(next.sources)})`;
+      else await db`UPDATE monitor_event_actions SET event_id=${next.event_id},sequence=${next.sequence},action=${next.action},invalidates_event=${next.invalidates_event},title=${db.json(next.title)},summary=${next.summary ? db.json(next.summary) : null},time=${db.json(next.time)},sources=${db.json(next.sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${next.id}`;
     }
     await removeStandaloneFollowups(db, planned.actionChanges.filter(change => !change.after).map(change => change.actionId));
+    await removeInvalidatedInferences(db, planned.actionChanges.filter(change => !change.after).map(change => change.actionId));
+    await removeManualConfirmations(db, [...state.manualConfirmationIds ?? []].filter(id => !planned.after.manualConfirmationIds?.has(id)));
+    const verified = [...planned.after.manualConfirmationIds ?? []].filter(id => !state.manualConfirmationIds?.has(id));
+    await saveManualConfirmations(db, verified);
+    await removeInvalidatedInferences(db, verified);
     await saveStandaloneFollowups(db, [...planned.after.standaloneFollowupIds!].filter(id => !state.standaloneFollowupIds?.has(id)));
+    await invalidateInferences(db, [...planned.after.invalidatedInferenceIds ?? []].filter(id => !state.invalidatedInferenceIds?.has(id) && planned.after.actions.some(action => action.id === id)));
     for (const action of planned.after.actions.filter(action => reordered.has(action.event_id))) await db`UPDATE monitor_event_actions SET sequence=${action.sequence} WHERE monitor_id=${monitorId()} AND id=${action.id}`;
     await validateActionSources(db, planned.after.actions.filter(action => planned.affected.includes(action.event_id)));
     for (const post of planned.after.posts) if (state.posts.find(before => before.id === post.id)?.filtered_out !== post.filtered_out) {

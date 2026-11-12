@@ -1,12 +1,12 @@
 import { createServer } from "node:http";
 import { beijingDate } from "@aihot/contracts/time";
-import { compareBusinessTime, eventOrderTime, type BusinessTime, eventListSchema, overviewSchema, type EventList, type EventStatus, type Overview, type PlatformOverview } from "../../../../modules/reset-monitor/public-v2.ts";
+import { businessTimeSchema, compareBusinessTime, eventOrderTime, type BusinessTime, eventListSchema, overviewSchema, type EventList, type EventStatus, type Overview, type PlatformOverview } from "../../../../modules/reset-monitor/public-v2.ts";
 import type { AdminEvent, AdminPost, AdminEntries, AdminTimelineEvent, ReviewAction, AdminReviewDetail, ReviewCommands, ProcessingStatus } from "../../../../modules/reset-monitor/web/admin-types.ts";
 
 export const day = "2026-10-23";
 export const at = "2026-10-22T16:30:00.000Z";
 export const instant = (at: string): BusinessTime => ({ kind: "instant", at });
-export const date = (date: string, timeZone = "Asia/Shanghai"): BusinessTime => ({ kind: "date", date, timeZone });
+export const dayInstant = (date: string): BusinessTime => ({ kind: "instant", at: `${date}T18:00:00Z` });
 export const range = (from: string, through: string): BusinessTime => ({ kind: "range", from, through });
 const localized = (value: string) => ({ en: value, zh: value, "zh-Hant": value, ja: value, ko: value, ru: value, es: value });
 export const platforms = [
@@ -31,16 +31,16 @@ export function createMonitorFixture() {
     replyTo: AdminPost["replyTo"]; publicEventCount: number;
     emptyConfirmation: boolean; emptyConfirmationTitle: string;
     eventScope?: EventList["list"][number]["scope"];
-    actionTimes?: [BusinessTime | null, BusinessTime | null];
+    actionTimes?: [BusinessTime, BusinessTime];
     actionPublishedAt?: [string, string];
     typicalInterval: PlatformOverview["statistics"]["typicalInterval"]; predictedResetTime: string | null; resetTime?: string | null;
   } = { type: "direct_reset", status: "completed", noActions: false, emptyConfirmation: false, emptyConfirmationTitle: "已到预告时间", previewConflict: false, processingStatus: "needs_attention", reviewReason: "来源关系需要管理员核对", withdrawn: false, filteredOut: false, replyTo: null, publicEventCount: 1,
     typicalInterval: { value: 3.0625, unit: "day", sampleCount: 5 }, predictedResetTime: "2026-10-28T00:00:00Z" };
   const event = (product: Product): EventList["list"][number] => ({
     id: "event-1", type: state.type, status: state.status, publishedAt: at, title: localized(`${product.product} 官方活动`),
-    summary: localized("仅限 Pro 套餐，每周额度。"), time: state.status === "announced" && state.actionTimes ? state.actionTimes[0] : instant(at), scope: state.eventScope ?? { ...scope, note: localized("仅限 Pro 用户") },
+    summary: localized("仅限 Pro 套餐，每周额度。"), time: state.status === "announced" && state.actionTimes ? state.actionTimes[0] ?? instant(at) : instant(at), scope: state.eventScope ?? { ...scope, note: localized("仅限 Pro 用户") },
     updates: [
-      { id: "announce-action", action: "announce", invalidatesEvent: false, title: localized("额度活动预告"), summary: null, time: state.actionTimes ? state.actionTimes[0] : date(beijingDate(at)), publishedAt: state.actionPublishedAt?.[0] ?? at, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }] },
+      { id: "announce-action", action: "announce", invalidatesEvent: false, title: localized("额度活动预告"), summary: null, time: state.actionTimes ? state.actionTimes[0] ?? dayInstant(beijingDate(at)) : dayInstant(beijingDate(at)), publishedAt: state.actionPublishedAt?.[0] ?? at, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }] },
       { id: "confirm-action", title: localized(state.emptyConfirmation ? state.emptyConfirmationTitle : "额度活动状态确认"), summary: localized("以官方公告明确的活动结果为准。"), time: state.actionTimes?.[1] ?? instant(at), publishedAt: state.actionPublishedAt?.[1] ?? at,
         ...(state.status === "cancelled" ? { action: "amend" as const, invalidatesEvent: true, sources: [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }, { postId: "post-2", sourceId: "other", url: "https://example.org/official-2" }] }
           : { action: "confirm" as const, invalidatesEvent: false as const, sources: state.emptyConfirmation ? [] : [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }, { postId: "post-2", sourceId: "other", url: "https://example.org/official-2" }] }) },
@@ -49,24 +49,24 @@ export function createMonitorFixture() {
   const overview = (product: Product): PlatformOverview => ({ platform: product.platform,
     sources: ["official", "other"].map((id, index) => ({ id, type: "official_social", name: localized(`官方账号 ${index + 1}`), url: `https://example.org/account-${index}` })),
     statistics: { typicalInterval: state.typicalInterval, resetsLast30Days: state.type !== "bonus_credit" && state.status !== "cancelled" ? 1 : 0, cardsLast30Days: 0, bonusesLast30Days: state.type === "bonus_credit" && state.status !== "cancelled" ? 1 : 0 },
-    hasAnnouncement: state.status === "announced", predictedResetTime: state.predictedResetTime, announcedResetTime: state.status === "announced" ? state.actionTimes ? state.actionTimes[0] : instant(at) : null, resetTime: state.resetTime !== undefined ? state.resetTime : state.status === "cancelled" ? null : state.status === "announced" ? "2026-10-20T16:30:00Z" : at,
+    hasAnnouncement: state.status === "announced", predictedResetTime: state.predictedResetTime, announcedResetTime: state.status === "announced" ? state.actionTimes ? state.actionTimes[0] ?? instant(at) : instant(at) : null, resetTime: state.resetTime !== undefined ? state.resetTime : state.status === "cancelled" ? null : state.status === "announced" ? "2026-10-20T16:30:00Z" : at,
   });
   const adminEvent = (product: Product): AdminEvent => ({ ...event(product), withdrawn: state.withdrawn, version: "event-version", actionCount: state.noActions ? 0 : 2, sourcePostCount: state.noActions ? 0 : 2, ...(state.noActions ? { status: null, time: null, updates: [], title: null, scope: null } : {}) });
   const post = (): AdminPost => ({ id: "post-1", author: "official", publishedAt: at, title: localized("官方帖子摘要"), summary: localized("这条帖子同时包含活动预告及确认事实。"), url: "https://example.org/official-1", text: "Original outer post: quota reset announced and confirmed.", quotedPost: { text: "Quoted context is separate evidence.", author: "other", url: "https://example.org/quoted" }, replyTo: state.replyTo, filteredOut: state.filteredOut, processingStatus: state.processingStatus, reviewReason: state.reviewReason, version: "post-version", actionCount: state.noActions ? 0 : 2 });
   const posts = (): AdminPost[] => [post(), { ...post(), id: "post-2", author: "other", title: localized("另一条官方报道"), url: "https://example.org/official-2", text: "Second official report.", quotedPost: null, version: "other-post-version" }];
   const sourcePosts = (product: Product) => [...posts().map(post => editedPost(product, post)), ...createdPosts.filter(row => row.platform === product.platform).map(row => editedPost(product, row.post))];
   const actions = (): ReviewAction[] => state.noActions ? [] : [
-    { id: "announce-action", eventId: "event-1", sequence: 1, action: "announce", invalidatesEvent: false, title: localized("额度活动预告"), summary: null, time: state.actionTimes?.[0] ?? null, sources: [{ postId: "post-1" }], version: "announce-version" },
-    { id: "confirm-action", eventId: "event-1", sequence: 2, action: "confirm", invalidatesEvent: false, title: localized(state.emptyConfirmation ? state.emptyConfirmationTitle : "额度活动状态确认"), summary: null, time: state.actionTimes?.[1] ?? (state.emptyConfirmation ? instant(at) : null), sources: state.emptyConfirmation ? [] : [{ postId: "post-1" }, { postId: "post-2" }], version: "confirm-version" },
+    { id: "announce-action", eventId: "event-1", sequence: 1, action: "announce", invalidatesEvent: false, title: localized("额度活动预告"), summary: null, time: state.actionTimes?.[0] ?? instant(at), sources: [{ postId: "post-1" }], version: "announce-version" },
+    { id: "confirm-action", eventId: "event-1", sequence: 2, action: "confirm", invalidatesEvent: false, title: localized(state.emptyConfirmation ? state.emptyConfirmationTitle : "额度活动状态确认"), summary: null, time: state.actionTimes?.[1] ?? instant(at), sources: state.emptyConfirmation ? [] : [{ postId: "post-1" }, { postId: "post-2" }], version: "confirm-version" },
   ];
   const detail = (product: Product, eventMode = false): AdminReviewDetail => {
     const unsourcedConfirmationId = state.emptyConfirmation ? (associationActions.get(product.platform) ?? actions()).find(action => action.eventId === "event-1" && action.action === "confirm" && !action.sources.length)?.id : undefined;
     const e = { id: "event-1", type: state.type, title: event(product).title, summary: event(product).summary, scope: event(product).scope, version: "event-version", status: state.noActions ? null : state.status, time: state.noActions ? null : instant(at), withdrawn: state.withdrawn, ...(unsourcedConfirmationId ? { unsourcedConfirmationId } : {}) };
     const otherEvent = { ...e, id: "event-2", title: localized("另一期额度活动"), version: "other-event-version", unsourcedConfirmationId: undefined };
-    const otherAction: ReviewAction = { id: "other-action", eventId: "event-2", sequence: 1, action: "announce", invalidatesEvent: false, title: localized("另一期活动预告"), summary: null, time: null, sources: [{ postId: "post-2" }], version: "other-action-version" };
+    const otherAction: ReviewAction = { id: "other-action", eventId: "event-2", sequence: 1, action: "announce", invalidatesEvent: false, title: localized("另一期活动预告"), summary: null, time: instant(at), sources: [{ postId: "post-2" }], version: "other-action-version" };
     const allActions = associationActions.get(product.platform) ?? [...actions(), otherAction];
     const allEvents = [e, otherEvent, ...createdEvents.filter(row => row.platform === product.platform).map(row => row.event)];
-    const detailedEvent: AdminTimelineEvent = { ...adminEvent(product), ...e, latestAt: at, timeline: state.noActions ? [] : event(product).updates.map((update, index) => ({ ...update, time: state.actionTimes ? state.actionTimes[index] : index === 0 ? date(beijingDate(at)) : instant(at), sequence: index + 1, sources: update.sources.map(source => sourcePosts(product).find(post => post.id === source.postId)!) })).reverse() };
+    const detailedEvent: AdminTimelineEvent = { ...adminEvent(product), ...e, latestAt: at, timeline: state.noActions ? [] : event(product).updates.map((update, index) => ({ ...update, time: state.actionTimes ? state.actionTimes[index] ?? instant(at) : index === 0 ? dayInstant(beijingDate(at)) : instant(at), sequence: index + 1, sources: update.sources.map(source => sourcePosts(product).find(post => post.id === source.postId)!) })).reverse() };
     return { version: eventMode ? "event-review-version" : "review-version", versions: { events: Object.fromEntries(allEvents.map(event => [event.id, event.version])), actions: Object.fromEntries(allActions.map(action => [action.id, action.version])), posts: Object.fromEntries(sourcePosts(product).map(post => [post.id, post.version])) }, ...(eventMode ? { event: detailedEvent } : { post: post() }), actions: allActions.filter(action => eventMode ? action.eventId === "event-1" : action.sources.some(source => source.postId === "post-1")), options: { events: allEvents, actions: allActions, posts: sourcePosts(product) } };
   };
   const orphanPost = (): AdminPost => ({ ...post(), id: "post-3", title: localized("待核对的独立帖子"), actionCount: 0, events: [] });
@@ -111,7 +111,7 @@ export function createMonitorFixture() {
       const month = url.searchParams.get("from")?.slice(0, 7) ?? "2026-10";
       const list = Array.from({ length: state.publicEventCount }, (_, index) => ({ ...event(product), id: state.publicEventCount === 1 ? "event-1" : `event-${String(index + 1).padStart(3, "0")}`,
         title: localized(`${product.product} 官方活动${state.publicEventCount === 1 ? "" : ` ${index + 1}`}`),
-        time: state.status === "announced" && state.actionTimes?.[0] === null ? null : instant(`${month}-${index < 16 ? "22" : "21"}T16:30:00.000Z`) }));
+        time: instant(`${month}-${index < 16 ? "22" : "21"}T16:30:00.000Z`) }));
       for (const record of createdEvents.filter(record => record.platform === product.platform && record.event.status)) {
         list.push({ ...event(product), id: record.event.id, type: record.event.type, publishedAt: record.event.publishedAt, updates: record.event.updates, title: localized(record.event.title?.zh ?? "Manual event"), summary: record.event.summary ? localized(record.event.summary.zh ?? "Summary") : null,
           scope: { ...(record.event.scope ?? event(product).scope), note: record.event.scope?.note ? localized(record.event.scope.note.zh ?? "Scope") : null }, status: record.event.status!, time: record.event.time! });
@@ -159,7 +159,7 @@ export function createMonitorFixture() {
         const actionKeys = new Map(command.actions.create.map((action, index) => [action.localKey, `association-action-${writes.length}-${index}`]));
         for (const draft of command.actions.create) {
           const eventId = draft.eventId ?? eventKeys.get(draft.eventKey!)!;
-          nextActions.push({ ...draft, id: actionKeys.get(draft.localKey)!, eventId, sequence: Math.max(0, ...nextActions.filter(action => action.eventId === eventId).map(action => action.sequence)) + 1, sources: [], version: `association-action-version-${writes.length}` });
+          nextActions.push({ ...draft, time: businessTimeSchema.parse(draft.time), id: actionKeys.get(draft.localKey)!, eventId, sequence: Math.max(0, ...nextActions.filter(action => action.eventId === eventId).map(action => action.sequence)) + 1, sources: [], version: `association-action-version-${writes.length}` });
         }
         for (const patch of command.actions.update) Object.assign(nextActions.find(action => action.id === patch.id)!, patch);
         for (const remove of command.sources.remove) { const action = nextActions.find(action => action.id === remove.actionId)!; action.sources = action.sources.filter(source => source.postId !== remove.postId); }
@@ -221,7 +221,7 @@ export function createMonitorFixture() {
         if (path.endsWith("/preview")) return send({ previewToken: `preview-${event.version}`, changes: [{ eventId: event.id, before: { status: event.status, time: event.time }, after: { status: command.actions.create.at(-1)?.action === "confirm" ? "completed" : "announced", time: command.actions.create.at(-1)?.time ?? event.time } }],
           actionChanges: command.actions.create.map(action => ({ actionId: action.localKey, eventId: event.id, before: null, after: action })), sourceChanges: [], orderChanges: [], lastSourceRemovals: [] });
         if (path.endsWith("/review")) {
-          for (const action of command.actions.create) record.actions.push({ ...action, id: `${event.id}-action-${record.actions.length + 1}`, eventId: event.id, sequence: record.actions.length + 1, version: `action-version-${writes.length}`, publishedAt: new Date().toISOString(), sources: command.sources.add.filter(source => source.actionKey === action.localKey).map(source => ({ postId: source.postId })) });
+          for (const action of command.actions.create) record.actions.push({ ...action, time: businessTimeSchema.parse(action.time), id: `${event.id}-action-${record.actions.length + 1}`, eventId: event.id, sequence: record.actions.length + 1, version: `action-version-${writes.length}`, publishedAt: new Date().toISOString(), sources: command.sources.add.filter(source => source.actionKey === action.localKey).map(source => ({ postId: source.postId })) });
           for (const patch of command.actions.update) Object.assign(record.actions.find(action => action.id === patch.id)!, patch);
           refreshCreated(record); return send({ saved: true });
         }
@@ -241,7 +241,7 @@ export function createMonitorFixture() {
       if (path.endsWith("/review")) {
         for (const action of body.actions?.update ?? []) {
           const index = action.id === "announce-action" ? 0 : action.id === "confirm-action" ? 1 : null;
-          if (index !== null) { state.actionTimes ??= [null, null]; state.actionTimes[index] = action.time; }
+          if (index !== null) { state.actionTimes ??= [instant(at), instant(at)]; state.actionTimes[index] = businessTimeSchema.parse(action.time); }
         }
         const confirmation = body.actions?.create.find((action: ReviewCommands["actions"]["create"][number]) => action.action === "confirm" && !body.sources.add.some((source: ReviewCommands["sources"]["add"][number]) => source.actionKey === action.localKey));
         if (confirmation) { state.emptyConfirmation = true; state.emptyConfirmationTitle = confirmation.title.zh; state.status = "completed"; }
@@ -259,7 +259,7 @@ export function createMonitorFixture() {
       const postMatches = progressMatches && kind !== "events" && (!type || type === "all") && (!status || status === "all") && (!visibility || visibility === "all") && (!q || `待核对的独立帖子 official 来源关系需要管理员核对`.toLowerCase().includes(q));
       const rows: AdminEntries["rows"] = [];
       if (kind !== "posts" && collectionFilter !== "filtered") for (const record of createdEvents.filter(record => record.platform === product.platform)) rows.push({ kind: "event", latestAt: record.event.latestAt, event: record.event });
-      if (eventMatches && collectionFilter !== "filtered") rows.push({ kind: "event", latestAt: at, event: { ...adminEvent(product), latestAt: at, timeline: state.noActions ? [] : event(product).updates.map((update, index) => ({ ...update, time: state.actionTimes?.[index] ?? (index === 0 ? date(beijingDate(at)) : instant(at)), sequence: index + 1, sources: update.sources.map(source => posts().find(post => post.id === source.postId)!) })).reverse() } });
+      if (eventMatches && collectionFilter !== "filtered") rows.push({ kind: "event", latestAt: at, event: { ...adminEvent(product), latestAt: at, timeline: state.noActions ? [] : event(product).updates.map((update, index) => ({ ...update, time: state.actionTimes?.[index] ?? (index === 0 ? dayInstant(beijingDate(at)) : instant(at)), sequence: index + 1, sources: update.sources.map(source => posts().find(post => post.id === source.postId)!) })).reverse() } });
       if (postMatches && (collectionFilter === "all" || orphan.filteredOut === (collectionFilter === "filtered"))) rows.push({ kind: "post", latestAt: at, post: orphan });
       const inRange = (value: string) => {
         const day = new Date(Date.parse(value) + 8 * 3600_000).toISOString().slice(0, 10);

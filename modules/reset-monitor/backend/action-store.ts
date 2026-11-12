@@ -6,7 +6,6 @@ import { monitorId, monitor } from "./context.ts";
 import { captureReviewNotification, cancelReviewNotification } from "./review-notifications.ts";
 import {
   actionDraftSchema,
-  defaultActionTime,
   replyToSchema,
   withoutPostOriginal,
   type ActionInput,
@@ -17,6 +16,8 @@ import {
   type ActionRow,
   type EditorialScope,
   currentUnsourcedConfirmation,
+  inferencesAfterAnnouncement,
+  sourcedConfirmationTime,
 } from "../actions.ts";
 import { normalizePublicTime, sourceUrlSchema } from "../public-v2.ts";
 import { enqueuePublicV2 } from "./public-v2-work.ts";
@@ -29,6 +30,29 @@ export type {
 } from "../actions.ts";
 export const rowVersion = (row: unknown) => sha256(stableJson(row));
 const standaloneFollowupPrefix = "recognition:standalone-followup:";
+const invalidatedInferencePrefix = "confirmation:invalidated:";
+const manualConfirmationPrefix = "confirmation:manual:";
+export async function loadManualConfirmationIds(db: Db, id = monitorId()) {
+  const rows = await db<{ key: string }[]>`SELECT key FROM monitor_state WHERE monitor_id=${id} AND starts_with(key,${manualConfirmationPrefix})`;
+  return new Set(rows.map(row => row.key.slice(manualConfirmationPrefix.length)));
+}
+export async function saveManualConfirmations(db: Db, ids: string[]) {
+  for (const id of ids) await db`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${manualConfirmationPrefix + id},'true'::jsonb) ON CONFLICT(monitor_id,key) DO NOTHING`;
+  if (ids.length) await db`UPDATE monitor_event_actions SET updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=ANY(${ids}::text[])`;
+}
+export async function removeManualConfirmations(db: Db, ids: string[]) {
+  if (ids.length) await db`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=ANY(${ids.map(id => manualConfirmationPrefix + id)}::text[])`;
+}
+export async function loadInvalidatedInferenceIds(db: Db, id = monitorId()) {
+  const rows = await db<{ key: string }[]>`SELECT key FROM monitor_state WHERE monitor_id=${id} AND starts_with(key,${invalidatedInferencePrefix})`;
+  return new Set(rows.map(row => row.key.slice(invalidatedInferencePrefix.length)));
+}
+export async function invalidateInferences(db: Db, ids: Iterable<string>) {
+  for (const id of ids) await db`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${invalidatedInferencePrefix + id},'true'::jsonb) ON CONFLICT(monitor_id,key) DO NOTHING`;
+}
+export async function removeInvalidatedInferences(db: Db, ids: string[]) {
+  if (ids.length) await db`DELETE FROM monitor_state WHERE monitor_id=${monitorId()} AND key=ANY(${ids.map(id => invalidatedInferencePrefix + id)}::text[])`;
+}
 export async function saveStandaloneFollowups(db: Db, ids: Iterable<string>) {
   for (const id of ids) await db`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${standaloneFollowupPrefix + id},'true'::jsonb) ON CONFLICT(monitor_id,key) DO NOTHING`;
 }
@@ -51,7 +75,8 @@ export async function loadActionInput(db: Db = sql): Promise<ActionInput> {
   const states = await db<{ key: string; value: NonNullable<ActionInput["editorials"]>[string] }[]>`SELECT key,value FROM monitor_state WHERE monitor_id=${monitorId()} AND key LIKE 'public_v2:overview:%'`;
   const standalone = await db<{ key: string }[]>`SELECT key FROM monitor_state WHERE monitor_id=${monitorId()} AND starts_with(key,${standaloneFollowupPrefix})`;
   return { events, posts, actions, editorials: Object.fromEntries(states.map(row => [row.key.slice("public_v2:overview:".length), row.value])),
-    standaloneFollowupIds: new Set(standalone.map(row => row.key.slice(standaloneFollowupPrefix.length))) };
+    standaloneFollowupIds: new Set(standalone.map(row => row.key.slice(standaloneFollowupPrefix.length))),
+    invalidatedInferenceIds: await loadInvalidatedInferenceIds(db), manualConfirmationIds: await loadManualConfirmationIds(db) };
 }
 
 export async function storeCollectedPost(
@@ -166,6 +191,8 @@ export interface ActionWriteOptions {
   editExisting?: boolean;
   newActionIds?: readonly (string | undefined)[];
   standaloneFollowups?: ReadonlySet<string>;
+  /** INTERNAL: only verified refinements of these existing announcements may replace facts. */
+  refineAnnouncementIds?: ReadonlySet<string>;
 }
 export async function lockActionRecords(db: Db, eventIds: Iterable<string>, actionIds: Iterable<string>, postIds: Iterable<string>) {
   const ordered = (ids: Iterable<string>) => [...new Set(ids)].sort();
@@ -219,7 +246,14 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
   }
   if (options.replace) for (const action of previous) {
     const [latest] = await db<ActionRow[]>`SELECT id,sources FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND id=${action.id}`;
-    if (latest) await db`UPDATE monitor_event_actions SET sources=${db.json(latest.sources.filter(source => source.postId !== post.id))},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${action.id}`;
+    if (!latest) continue;
+    const sources = latest.sources.filter(source => source.postId !== post.id);
+    let time = action.time;
+    if (action.action === "confirm" && sources.length && !normalized.some(draft => draft.id === action.id)) {
+      const remaining = await db<Pick<SourcePostRow, "published_at">[]>`SELECT published_at FROM monitor_source_posts WHERE monitor_id=${monitorId()} AND id=ANY(${sources.map(source => source.postId)}::text[]) AND NOT context_only`;
+      time = sourcedConfirmationTime(remaining, action.time) ?? action.time;
+    }
+    await db`UPDATE monitor_event_actions SET time=${db.json(time)},sources=${db.json(sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${action.id}`;
   }
   for (const [index, draft] of normalized.entries()) {
     const [event] = await db<EventRow[]>`SELECT id,type,withdrawn FROM monitor_event_records WHERE monitor_id=${monitorId()} AND id=${draft.eventId!}`;
@@ -234,20 +268,32 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
     }
     const upgrading = existing?.action === "confirm" && existing.sources.length === 0 && draft.action === "confirm";
     if (draft.id && (!existing || existing.event_id !== event.id)) throw invalid("动作不属于目标事件");
-    const sourceOnly = existing && !upgrading && !options.editExisting;
-    const time = normalizePublicTime(sourceOnly ? draft.time ?? existing.time : draft.time ?? defaultActionTime(draft.action, actual.published_at));
-    if (existing && !upgrading && !options.editExisting && (existing.action !== draft.action || existing.invalidates_event !== (draft.invalidatesEvent ?? false) || stableJson(existing.time) !== stableJson(time))) throw invalid("补充来源不能修改已接受动作事实");
+    const refining = existing?.action === "announce" && draft.action === "announce" && options.refineAnnouncementIds?.has(existing.id);
+    const draftTime = normalizePublicTime(draft.time);
+    if (existing && !upgrading && !options.editExisting && (existing.action !== draft.action || existing.invalidates_event !== (draft.invalidatesEvent ?? false)
+      || !refining && stableJson(existing.time) !== stableJson(draftTime))) throw invalid("补充来源不能修改已接受动作事实");
     const sources = existing ? [...existing.sources] : [];
     if (!sources.some(source => source.postId === post.id)) sources.push({ postId: post.id });
     sources.sort((a, b) => a.postId.localeCompare(b.postId));
+    let time = draftTime;
+    if (draft.action === "confirm") {
+      const otherIds = sources.filter(source => source.postId !== post.id).map(source => source.postId);
+      const others = otherIds.length ? await db<Pick<SourcePostRow, "published_at">[]>`SELECT published_at FROM monitor_source_posts WHERE monitor_id=${monitorId()} AND id=ANY(${otherIds}::text[]) AND NOT context_only` : [];
+      time = sourcedConfirmationTime([actual, ...others], existing?.sources.length ? existing.time : undefined)!;
+    }
     if (existing) {
-      if (options.editExisting || upgrading) await db`UPDATE monitor_event_actions SET action=${draft.action},invalidates_event=${draft.invalidatesEvent ?? false},title=${db.json(draft.title)},summary=${draft.summary ? db.json(draft.summary) : null},time=${time === null ? null : db.json(time)},sources=${db.json(sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${existing.id}`;
-      else await db`UPDATE monitor_event_actions SET sources=${db.json(sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${existing.id}`;
+      if (refining && stableJson(existing.time) !== stableJson(time)) {
+        const actions = await db<Parameters<typeof inferencesAfterAnnouncement>[1]>`SELECT id,event_id,sequence,action,invalidates_event,sources FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND event_id=${event.id}`;
+        await invalidateInferences(db, inferencesAfterAnnouncement(existing, actions, await loadManualConfirmationIds(db)));
+      }
+      if (options.editExisting || upgrading) await db`UPDATE monitor_event_actions SET action=${draft.action},invalidates_event=${draft.invalidatesEvent ?? false},title=${db.json(draft.title)},summary=${draft.summary ? db.json(draft.summary) : null},time=${db.json(time)},sources=${db.json(sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${existing.id}`;
+      else await db`UPDATE monitor_event_actions SET time=${db.json(refining || draft.action === "confirm" ? time : existing.time)},sources=${db.json(sources)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${existing.id}`;
+      if (draft.action === "confirm") await removeManualConfirmations(db, [existing.id]);
     } else {
       const [max] = await db<{ sequence: number }[]>`SELECT coalesce(max(sequence),0)+1 AS sequence FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND event_id=${event.id}`;
       const id = options.newActionIds?.[index] ?? randomUUID();
       await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources)
-        VALUES(${monitorId()},${id},${event.id},${max!.sequence},${draft.action},${draft.invalidatesEvent ?? false},${db.json(draft.title)},${draft.summary ? db.json(draft.summary) : null},${time === null ? null : db.json(time)},${db.json(sources)})`;
+        VALUES(${monitorId()},${id},${event.id},${max!.sequence},${draft.action},${draft.invalidatesEvent ?? false},${db.json(draft.title)},${draft.summary ? db.json(draft.summary) : null},${db.json(time)},${db.json(sources)})`;
       if (max!.sequence === 1 && options.standaloneFollowups?.has(event.id)) {
         await saveStandaloneFollowups(db, [id]);
       }
@@ -257,6 +303,8 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
   if (removedIds.length) {
     const deleted = await db<{ id: string }[]>`DELETE FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND id=ANY(${removedIds}::text[]) AND sources='[]'::jsonb RETURNING id`;
     await removeStandaloneFollowups(db, deleted.map(action => action.id));
+    await removeInvalidatedInferences(db, deleted.map(action => action.id));
+    await removeManualConfirmations(db, deleted.map(action => action.id));
   }
   const actions = await db<ActionRow[]>`SELECT id,action,time,sources FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND event_id=ANY(${eventIds}::text[])`;
   await validateActionSources(db, actions);
@@ -277,6 +325,8 @@ export async function saveAcceptedPost(
     filteredOut?: boolean;
     reviewReason?: string | null;
     standaloneFollowups?: ReadonlySet<string>;
+    /** INTERNAL: supplied only after verifying a same-announcement explicit time reference. */
+    refineAnnouncementIds?: ReadonlySet<string>;
   },
   db?: Db,
 ) {
@@ -286,7 +336,7 @@ export async function saveAcceptedPost(
       SourcePostRow[]
     >`SELECT id,author,published_at,url,text,quoted_post,reply_to,context_only,filtered_out,title,summary,source_receipt_id,model_receipt_id,processing_status,review_reason,created_at,updated_at FROM monitor_source_posts WHERE monitor_id=${monitorId()} AND id=${id} FOR UPDATE`;
     if (!post || post.processing_status !== "pending" || rowVersion(post) !== input.expectedVersion) throw new StalePostWork("帖子已变化，忽略过期识别结果");
-    const affected = await writePostActions(tx, post, input.actions, { events: input.events, standaloneFollowups: input.standaloneFollowups });
+    const affected = await writePostActions(tx, post, input.actions, { events: input.events, standaloneFollowups: input.standaloneFollowups, refineAnnouncementIds: input.refineAnnouncementIds });
     const [linked] = await tx`SELECT 1 FROM monitor_event_actions WHERE monitor_id=${monitorId()} AND sources @> ${tx.json([{ postId: id }])}::jsonb LIMIT 1`;
     await tx`UPDATE monitor_source_posts SET title=${tx.json(input.title)},summary=${input.summary ? tx.json(input.summary) : null},processing_status=${input.reviewReason ? "needs_attention" : "processed"},review_reason=${input.reviewReason?.slice(0, 1000) ?? null},model_receipt_id=${input.receiptId},filtered_out=${Boolean(input.filteredOut && !linked && !input.reviewReason)},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${id}`;
     if (input.reviewReason) await captureReviewNotification(tx, id);

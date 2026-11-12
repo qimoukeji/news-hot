@@ -31,7 +31,7 @@
 | action | created、updated、withdrawn、restored |
 | event | v2 列表事件对象，不包含 bonusCredit；withdrawn 时为 null |
 
-`event.updates` 是完整动作时间线，包含动作 ID、`announce`／`confirm`／`amend`／`progress`、`invalidatesEvent`、七语言标题摘要、业务时间 `time`、发布时间及全部 `sources: [{postId,sourceId,url}]`。`time` 保留精确时间、日期或区间，预告时间未明确或无法解析时保存 time=null，并公开为时间未公布；amend 缺时间时保存不早于来源发帖时刻的最近一个 10:00 UTC，confirm、progress 缺时间时保存最早有效来源发帖时刻，未知预告的 event.time 也为 null。只有 `confirm` 可返回空数组；有来源时 `publishedAt` 取最早有效来源发布时间，无来源时取动作创建时间，不冒充生效时间。后续官方确认补充同一动作的来源、标题摘要及实际时间，保持动作 ID，通知修订号递增，事件不重复计数。
+`event.updates` 与 v2 共用完整动作契约，包含稳定 ID、动作、invalidatesEvent、七语言标题摘要、必填 time、publishedAt 和全部来源。time 仅允许 instant、range、deadline，直接使用已保存值，不转换、不补默认值；无来源 confirm 仍保留，publishedAt 使用动作创建时间。写入和异常待处理规则见 [时间规则](reset-monitor-time-normalization.md)。
 
 三类事件共用状态与动作规则，关闭领取、到期、重开使用 progress，取消使用 amend 的 invalidatesEvent=true，取消为业务终态，只能更正或删除错误取消动作后重算；普通 amend 不改变预告计划、恢复预告或使已有确认失效；明确新计划和改期使用 announce，预告、延期、取消可使旧无来源确认不再决定当前结果。同帖可支持多个动作，多帖可支持同一动作，原帖链接使用已保存值；不返回动作 result 或 scope。接口地址、schemaVersion=2 和签名协议不变，严格客户端须接受空来源确认、仅四种业务动作并移除旧判定元数据。Webhook 的外层 `action=restored` 仍表示管理撤回后的可见性恢复，与已取消业务无关，继续保留。切换时清理旧格式待发通知并建立当前基线，不补发历史消息；不保留旧载荷兼容模式。数据版本与请求头的签名算法版本分别管理。
 
@@ -70,4 +70,4 @@
 
 实现位于共享监控模块：`webhooks.ts` 定义协议，`backend/webhook-events.ts` 与业务事务一起记录变化，`backend/webhooks.ts` 管理订阅和投递。站点仅注册一次管理页面、队列和恢复扫描。已有飞书群通知独立运行，行为不变。
 
-时间缺失或无法解析时，预告（announce）保存 null，不触发自动确认，也不继承其他轮次时间；amend 保存不早于来源发帖时刻的最近一个 10:00 UTC，confirm、progress 保存发帖时刻。自动确认的 time 为到期边界的 instant，原始预告不改：时刻及截止取 at、区间取 through、纯日期取当天北京时间18点。无来源动作的 publishedAt 仍是实际创建时间，不替代生效时刻。
+确认帖的业务时间使用该帖发布时间。自动确认取预告边界：instant/deadline 的 at、range 的 through，保存为新的 instant；待处理来源阻断推定。无来源确认的 publishedAt 是动作创建时间。

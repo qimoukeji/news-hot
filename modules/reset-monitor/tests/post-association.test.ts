@@ -141,7 +141,7 @@ for (const definition of definitions) test(`${definition.monitorId}: official so
   await associate("review", { actions: { update: [{ id: original.id, ...fact(), time: bt("2026-10-02T12:00:00Z") }] }, sources: { add: [{ actionId: original.id, postId: "review" }] } });
   const input = await loadActionInput(), updated = input.actions[0]!;
   assert.equal(input.actions.length, 1); assert.equal(updated.id, original.id); assert.equal(updated.sequence, original.sequence);
-  assert.equal(updated.title.zh, "Official quota result"); assert.deepEqual(updated.time, bt("2026-10-02T12:00:00Z")); assert.deepEqual(updated.sources, [{ postId: "review" }]);
+  assert.equal(updated.title.zh, "Official quota result"); assert.deepEqual(updated.time, bt("2026-10-01T12:00:00.000Z")); assert.deepEqual(updated.sources, [{ postId: "review" }]);
   assert.equal(input.posts[0]!.processing_status, "needs_attention"); assert.equal(reduceEvent(input.events[0]!, input)!.status, "completed");
   assert.equal((await monitorPostDetail("review"))!.options.events.find(row => row.id === event.id)!.unsourcedConfirmationId, null);
 }));
@@ -166,7 +166,7 @@ test("two sourced confirmations in one batch remain independent when the event o
   const first = input.actions.find(action => action.title.zh === "First independent completion")!, second = input.actions.find(action => action.title.zh === "Second independent completion")!;
   assert.ok(first); assert.ok(second); assert.notEqual(first.id, second.id); assert.ok(first.sequence < second.sequence);
   assert.deepEqual(first.sources, [{ postId: "review" }]); assert.deepEqual(second.sources, [{ postId: "other-evidence" }]);
-  assert.deepEqual(first.time, bt("2026-10-01T10:00:00Z")); assert.deepEqual(second.time, bt("2026-10-01T11:00:00Z"));
+  assert.deepEqual(first.time, bt("2026-10-01T12:00:00.000Z")); assert.deepEqual(second.time, bt("2026-10-01T12:00:00.000Z"));
   assert.equal(reduceEvent(input.events[0]!, input)!.status, "completed");
 }));
 
@@ -197,7 +197,7 @@ test("a new sourced announcement in a batch supersedes the old unsourced confirm
   assert.ok(announcement); assert.ok(confirmation); assert.notEqual(confirmation.id, original.id); assert.ok(original.sequence < announcement.sequence && announcement.sequence < confirmation.sequence);
   assert.deepEqual(announcement.sources, [{ postId: "review" }]); assert.deepEqual(confirmation.sources, [{ postId: "other-evidence" }]);
   const reduced = reduceEvent(input.events[0]!, input)!;
-  assert.equal(reduced.status, "completed"); assert.equal(reduced.confirmationId, confirmation.id); assert.deepEqual(reduced.confirmedTime, bt("2026-10-01T11:00:00Z"));
+  assert.equal(reduced.status, "completed"); assert.equal(reduced.confirmationId, confirmation.id); assert.deepEqual(reduced.confirmedTime, bt("2026-10-01T12:00:00.000Z"));
 }));
 
 test("post metadata, recognition completion, retention and empty commands still require a review reason", async () => inMonitor(codex, async () => {

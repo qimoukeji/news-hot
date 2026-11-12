@@ -137,24 +137,26 @@ for (const [expression, expected, confirmedAt] of [
     ["in a few minutes", null, null],
     ["soon", null, null],
     ["at an unspecified time", null, null],
-  ] as const) test(`relative forecast '${expression}' retains its precision and only an explicit plan can auto-confirm`, async () => inMonitor(codex, async () => {
+  ] as const) test(`relative forecast '${expression}' saves a concrete time and blocks inference when parsing needs review`, async () => inMonitor(codex, async () => {
     const text = `We will reset usage ${expression}.`, saved = await post(codex, text), answer = response(text);
     answer.actions[0]!.action = "announce";
     answer.actions[0]!.timeExcerpt = expression;
     await applyOfflineRecognition(saved.id, answer, saved.version);
     const input = await loadActionInput(), action = input.actions.find(action => action.sources.some(source => source.postId === saved.id))!;
-    assert.deepEqual(action.time, bt(expected));
-    assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
     const event = input.events.find(event => event.id === action.event_id)!;
     if (expected === null) {
+      assert.deepEqual(action.time, bt("2026-10-23T18:00:00Z"));
+      assert.equal((await sourcePost(saved.id))!.processing_status, "needs_attention");
       assert.equal(inferredConfirmation(event, input, Date.parse("2027-01-01T00:00:00Z")), null);
       const snapshot = projectPublicV2(input, codex, Date.parse(at));
       assert.equal(snapshot.events.find(row => row.id === event.id)!.status, "announced");
-      assert.equal(snapshot.events.find(row => row.id === event.id)!.time, null);
+      assert.deepEqual(snapshot.events.find(row => row.id === event.id)!.time, action.time);
       assert.equal(snapshot.hasAnnouncement, true);
-      assert.equal(snapshot.announcedResetTime, null);
+      assert.deepEqual(snapshot.announcedResetTime, action.time);
       return;
     }
+    assert.deepEqual(action.time, bt(expected));
+    assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
     const boundary = inferenceBoundary(bt(expected));
     assert.equal(inferredConfirmation(event, input, boundary - 1), null);
     const confirmation = inferredConfirmation(event, input, boundary)!;

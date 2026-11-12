@@ -40,9 +40,12 @@ export async function assertScopeCutoverComplete(db: Db = sql) {
     OR EXISTS (SELECT 1 FROM monitor_state WHERE key=${legacyScopeBaselineKey})
     OR EXISTS (SELECT 1 FROM monitor_state WHERE starts_with(key,'recognition:pending:')
       AND value->>'promptVersion' IS DISTINCT FROM ${threadRecognitionVersion})
-    OR EXISTS (SELECT 1 FROM monitor_webhook_deliveries d JOIN monitor_webhook_notifications n ON n.id=d.notification_id
-      WHERE d.status IN ('pending','sending') AND (n.payload->'event'->'scope') ?| ${[...retiredScopeFields]}::text[]) AS blocked`;
-  if (result?.blocked) throw new Error("Complete the reviewed reset-monitor scope cutover before starting the new contract");
+    OR EXISTS (SELECT 1 FROM monitor_event_actions WHERE (time->>'kind' IN ('instant','range','deadline')) IS NOT TRUE) AS blocked`;
+  const required = () => new Error("Complete the reviewed reset-monitor scope cutover and time normalization before starting the new contract");
+  if (result?.blocked) throw required();
+  const queued = await db<{ payload: unknown }[]>`SELECT n.payload FROM monitor_webhook_notifications n
+    WHERE EXISTS (SELECT 1 FROM monitor_webhook_deliveries d WHERE d.notification_id=n.id AND d.status IN ('pending','sending'))`;
+  if (queued.some(row => !webhookPayloadSchema.safeParse(row.payload).success)) throw required();
 }
 
 /** Offline format switch: keep revision, visibility and delivery history; never dispatch here. */
@@ -181,7 +184,7 @@ async function persistConfirmations(db: Db, input: PublicV2Input, now: number, c
     const action = inferredConfirmation(event, input, now);
     if (!action) continue;
     const rows = await db`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,invalidates_event,title,summary,time,sources,created_at,updated_at)
-      VALUES(${monitorId()},${action.id},${action.event_id},${action.sequence},'confirm',false,${db.json(action.title)},${action.summary ? db.json(action.summary) : null},${action.time === null ? null : db.json(action.time)},'[]'::jsonb,${action.created_at},${action.updated_at}) ON CONFLICT(monitor_id,id) DO NOTHING`;
+      VALUES(${monitorId()},${action.id},${action.event_id},${action.sequence},'confirm',false,${db.json(action.title)},${action.summary ? db.json(action.summary) : null},${db.json(action.time)},'[]'::jsonb,${action.created_at},${action.updated_at}) ON CONFLICT(monitor_id,id) DO NOTHING`;
     if (rows.count) {
       input.actions.push(action);
       await db`UPDATE monitor_event_records SET updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${event.id}`;

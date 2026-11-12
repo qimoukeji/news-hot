@@ -362,7 +362,7 @@ test("valid facts survive review flags while fabricated action or audience evide
   const cases: Array<{ text: string; patch: Partial<Claim>; needsReview?: boolean; accepted: boolean; review: boolean }> = [
     { text: "We reset usage.", patch: {}, needsReview: true, accepted: true, review: true },
     { text: "We will reset usage.", patch: { excerpt: "We reset usage for everyone." }, accepted: false, review: true },
-    { text: "We will reset usage soon.", patch: { action: "announce", timeExcerpt: "soon" }, accepted: true, review: false },
+    { text: "We will reset usage soon.", patch: { action: "announce", timeExcerpt: "soon" }, accepted: true, review: true },
     { text: "We reset usage for paid users.", patch: { scopeExcerpt: "for everyone" }, accepted: false, review: true },
     { text: "We reset usage.", patch: {}, accepted: true, review: false },
   ];
@@ -372,9 +372,12 @@ test("valid facts survive review flags while fabricated action or audience evide
     await inMonitor(codex, () => applyRecognition(post.id, rec));
     const saved = (await inMonitor(codex, () => sourcePost(post.id)))!;
     assert.equal(saved.processing_status, value.review ? "needs_attention" : "processed");
+    if (value.patch.timeExcerpt === "soon") assert.match(saved.review_reason!, /预告时间无法解析/);
     assert.deepEqual(saved.title, rec.title); assert.deepEqual(saved.summary, rec.summary);
     const input = await inMonitor(codex, () => loadActionInput());
     assert.equal(input.actions.some(action => action.sources.some(source => source.postId === post.id)), value.accepted);
+    if (value.patch.timeExcerpt === "soon") assert.deepEqual(input.actions.find(action => action.sources.some(source => source.postId === post.id))!.time,
+      { kind: "instant", at: "2026-10-23T18:00:00Z" });
   }
   assert.equal((await inMonitor(codex, () => loadActionInput())).actions.length, 3);
 });

@@ -20,7 +20,7 @@ import { createMonitorServer } from "../server.ts";
 import { properName, projectPublicV2 } from "../backend/public-v2.ts";
 import { loadActionInput, sourcePost, writePostActions, rowVersion } from "../backend/action-store.ts";
 import type { ActionDraft, EditorialText, EditorialScope } from "../actions.ts";
-import { initializeWebhookBaselines, captureWebhookEvent, sweepConfirmationResults } from "../backend/webhook-events.ts";
+import { assertScopeCutoverComplete, initializeWebhookBaselines, captureWebhookEvent, sweepConfirmationResults } from "../backend/webhook-events.ts";
 import { createSubscription, updateSubscription, listSubscriptions, rotateSubscriptionSecret,
   listWebhookDeliveries, retryWebhookDelivery, deliverWebhook, webhookSignature, webhookRetryDelays,
   sweepWebhookDeliveries, type WebhookTransport } from "../backend/webhooks.ts";
@@ -77,6 +77,28 @@ async function notifications() {
   const rows = await sql`SELECT payload FROM monitor_webhook_notifications ORDER BY monitor_id,event_id,revision`;
   return rows.map(row => webhookPayloadSchema.parse(row.payload));
 }
+
+test("startup blocks legacy stored times and live webhook payloads until the joint cutover", async () => {
+  await addEvent(codex, true);
+  for (const time of [null, { kind: "date", date: "2026-10-01", timeZone: "UTC" }]) {
+    await sql`UPDATE monitor_event_actions SET time=${time ? sql.json(time) : null}`;
+    await assert.rejects(assertScopeCutoverComplete(), /time normalization/);
+  }
+  await sql`UPDATE monitor_event_actions SET time=${sql.json(bt(sourceAt))}`;
+  await assertScopeCutoverComplete();
+  await initializeWebhookBaselines(definitions);
+  await subscriber();
+  await sql`UPDATE monitor_event_actions SET time=${sql.json(bt("2026-10-01T15:00:00Z"))}`;
+  await capture();
+  assert.equal((await notifications()).length, 1);
+  await assertScopeCutoverComplete();
+  await sql`UPDATE monitor_webhook_notifications SET payload=jsonb_set(payload,'{event,updates,0,time}','null'::jsonb)`;
+  await assert.rejects(assertScopeCutoverComplete(), /time normalization/);
+  await sql`UPDATE monitor_webhook_deliveries SET status='sending'`;
+  await assert.rejects(assertScopeCutoverComplete(), /time normalization/);
+  await sql`UPDATE monitor_webhook_deliveries SET status='cancelled'`;
+  await assertScopeCutoverComplete();
+});
 
 test("time checks establish history without replay and notify inference and later official proof only once", async () => {
   await addEvent(codex, true);
@@ -211,7 +233,7 @@ test("title, summary, action time, scope and accepted action changes each trigge
   await addPost(codex, "business-update", "2026-10-01T14:00:00Z");
   await sql.begin(db => inMonitor(codex, async () => {
     const post = await sourcePost("business-update", db);
-    await writePostActions(db, post!, [{ eventId, action: "progress", title: properName("Synthetic rollout progress"), summary: properName("Synthetic progress"), time: null }]);
+    await writePostActions(db, post!, [{ eventId, action: "progress", title: properName("Synthetic rollout progress"), summary: properName("Synthetic progress"), time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }]);
     await enqueuePublicV2(db, [eventId]);
   }));
   const rows = await notifications();
@@ -533,7 +555,7 @@ test("official cancellation is terminal until the invalidating amendment is corr
   await addPost(codex, "cancellation", "2026-10-01T14:00:00Z");
   await sql.begin(db => inMonitor(codex, async () => {
     const post = await sourcePost("cancellation", db);
-    await writePostActions(db, post!, [{ eventId, action: "amend", invalidatesEvent: true, title: properName("Official cancellation"), summary: null, time: null }]);
+    await writePostActions(db, post!, [{ eventId, action: "amend", invalidatesEvent: true, title: properName("Official cancellation"), summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }]);
     await enqueuePublicV2(db, [eventId]);
   }));
   assert.equal((await notifications()).at(-1)!.event!.status, "cancelled");
@@ -542,7 +564,7 @@ test("official cancellation is terminal until the invalidating amendment is corr
   await addPost(codex, "restoration", "2026-10-01T15:00:00Z");
   await sql.begin(db => inMonitor(codex, async () => {
     const post = await sourcePost("restoration", db);
-    await writePostActions(db, post!, [{ eventId, action: "announce", title: properName("Later announcement"), summary: null, time: null }]);
+    await writePostActions(db, post!, [{ eventId, action: "announce", title: properName("Later announcement"), summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }]);
     await enqueuePublicV2(db, [eventId]);
   }));
   assert.equal((await notifications()).at(-1)!.event!.status, "cancelled");

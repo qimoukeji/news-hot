@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type postgres from "postgres";
 import { fixture } from "./action-fixture.ts";
-import { editorialFacts, editorialPromptVersion, editorialRecordVersion, editorialVersion } from "../backend/event-editorial.ts";
-import { convertLegacyInput, convertLegacyTime, planUpgradeStates, timeUpgradeDigest, upgradeHash, verifyBusinessTimeUpgrade, verifyConvertedTime, type LegacyInput, type UpgradeState, type UpgradeTimeRow } from "../scripts/business-time-upgrade.ts";
+import { editorialPromptVersion, editorialRecordVersion } from "../backend/event-editorial.ts";
+import { convertLegacyInput, convertLegacyTime, planUpgradeStates, projectUpgradeEvents, restoreUpgradeSets, serializeUpgradeSets, timeUpgradeDigest, upgradeEditorialFacts, upgradeEditorialVersion, upgradeHash, upgradeJson, verifyBusinessTimeUpgrade, verifyConvertedTime, type LegacyInput, type UpgradeSetSnapshot, type UpgradeState, type UpgradeTimeRow } from "../scripts/business-time-upgrade.ts";
+import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
 
 test("offline scalar conversion preserves precision and existing date semantics without inventing deadline metadata", () => {
   assert.deepEqual(convertLegacyTime(null), null);
@@ -23,7 +24,8 @@ test("partial conversion can be verified repeatedly but a mismatch stops cleanup
 });
 
 test("source-free confirmations require a valid saved time before any upgrade writes", () => {
-  const before = fixture() as unknown as LegacyInput;
+  const current = fixture();
+  const before: LegacyInput = { ...current, actions: current.actions.map(row => ({ ...row, time: null })) };
   before.actions[0]!.sources = [];
   assert.throws(() => convertLegacyInput(before), /source-free/);
   before.actions[0]!.time = "2026-11-02T05:00:00Z";
@@ -32,11 +34,46 @@ test("source-free confirmations require a valid saved time before any upgrade wr
   assert.throws(() => convertLegacyInput(before), /source-free/);
 });
 
+test("upgrade snapshots retain every action marker set through JSON read-back and conversion", () => {
+  const current = fixture();
+  const before: LegacyInput = { ...current, actions: current.actions.map(row => ({ ...row, action: "announce", time: "2026-11-02T05:00:00Z" })),
+    standaloneFollowupIds: new Set(["followup-b", "followup-a"]),
+    invalidatedInferenceIds: new Set(["inferred-stale"]), manualConfirmationIds: new Set(["inferred-manual"]) };
+  before.actions.push({ ...before.actions[0]!, id: "inferred-stale", action: "confirm", sequence: 2, sources: [] });
+  const snapshot = { ...before, ...serializeUpgradeSets(before) };
+  const saved = JSON.parse(JSON.stringify(snapshot)) as Omit<LegacyInput, keyof UpgradeSetSnapshot> & UpgradeSetSnapshot;
+  assert.deepEqual(saved.standaloneFollowupIds, ["followup-a", "followup-b"]);
+  assert.deepEqual(saved.invalidatedInferenceIds, ["inferred-stale"]);
+  assert.deepEqual(saved.manualConfirmationIds, ["inferred-manual"]);
+  const restored: LegacyInput = { ...saved, ...restoreUpgradeSets(saved) };
+  const after = convertLegacyInput(restored);
+  assert.deepEqual(serializeUpgradeSets(after), serializeUpgradeSets(before));
+  assert.equal(upgradeJson(restored), upgradeJson(before));
+  assert.notEqual(after.invalidatedInferenceIds, restored.invalidatedInferenceIds, "conversion clones its input sets");
+  assert.equal(projectUpgradeEvents(after, codex)[0]!.status, "announced", "invalidated inference stays inactive after read-back");
+  const manual = { ...before.actions[1]!, id: "inferred-manual", sequence: 3 };
+  restored.actions.push(manual);
+  restored.invalidatedInferenceIds = new Set(["inferred-stale", "inferred-manual"]);
+  const manualAfter = convertLegacyInput(restored);
+  assert.equal(projectUpgradeEvents(manualAfter, codex)[0]!.status, "completed");
+  assert.equal(projectUpgradeEvents({ ...manualAfter, manualConfirmationIds: new Set() }, codex)[0]!.status, "announced", "manual marker prevents an edited confirmation being treated as an invalidated inference");
+  restored.actions[0]!.action = "progress";
+  restored.standaloneFollowupIds = new Set([restored.actions[0]!.id]);
+  restored.actions = restored.actions.slice(0, 1);
+  const followup = convertLegacyInput({ ...restored, ...restoreUpgradeSets(JSON.parse(JSON.stringify(serializeUpgradeSets(restored))) as UpgradeSetSnapshot) });
+  assert.equal(projectUpgradeEvents(followup, codex)[0]!.status, "in_progress", "standalone followup keeps its initial-action eligibility");
+  for (const key of Object.keys(serializeUpgradeSets(before)) as Array<keyof UpgradeSetSnapshot>) {
+    assert.notEqual(upgradeHash(before), upgradeHash({ ...before, [key]: new Set() }), `${key} participates in snapshot hashing`);
+  }
+  assert.deepEqual(serializeUpgradeSets({}), { standaloneFollowupIds: [], invalidatedInferenceIds: [], manualConfirmationIds: [] });
+});
+
 test("only valid overview bindings and same-version translation failures advance to object facts", () => {
-  const before = fixture() as unknown as LegacyInput;
+  const current = fixture();
+  const before: LegacyInput = { ...current, actions: current.actions.map(row => ({ ...row, time: null })) };
   before.actions[0]!.time = "2026-11-02";
   const after = convertLegacyInput(before), event = after.events[0]!;
-  const facts = editorialFacts(event, after)!;
+  const facts = upgradeEditorialFacts(event, after)!;
   const legacyVersion = upgradeHash({ prompt: editorialPromptVersion, facts: { ...facts, actions: facts.actions.map(action => ({ ...action, time: before.actions.find(old => old.id === action.id)!.time })) } });
   for (const status of ["ready", "edited", "failed", "needs_review"]) {
     const states: UpgradeState[] = [
@@ -46,7 +83,7 @@ test("only valid overview bindings and same-version translation failures advance
     ];
     const raw = { id: event.id, time: after.actions[0]!.time };
     const updates = planUpgradeStates(before, after, states, [raw]);
-    assert.deepEqual(updates[0]!.value, { ...states[0]!.value, version: editorialVersion(event, after) });
+    assert.deepEqual(updates[0]!.value, { ...states[0]!.value, version: upgradeEditorialVersion(event, after) });
     assert.deepEqual(updates[1]!.value, { ...states[1]!.value, version: upgradeHash(after.actions[0]) });
     assert.deepEqual(updates[2]!.value, { ...states[2]!.value, fingerprint: upgradeHash(raw) });
     assert.equal(states[0]!.value.version, legacyVersion, "planner never changes the backup");

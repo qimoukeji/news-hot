@@ -24,9 +24,9 @@ test("business times preserve intervals, years, fractional seconds and source-da
     assert.equal(publicTimeSchema.safeParse(bt(expected!)).success, true);
     assert.equal(publicTimeSchema.safeParse(raw).success, false);
   }
-  assert.deepEqual(normalizePublicTime({ kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" }), { kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" });
+  assert.equal(publicTimeSchema.safeParse({ kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" }).success, false);
   assert.deepEqual(normalizePublicTime({ kind: "deadline", at: "2026-11-02T13:42:26+08:00" }), { kind: "deadline", at: "2026-11-02T05:42:26Z" });
-  assert.equal(inferenceBoundary(bt("2026-11-02")), Date.parse("2026-11-02T18:00:00+08:00"));
+  assert.equal(inferenceBoundary(bt("2026-11-02")), Date.parse("2026-11-02T18:00:00Z"));
 });
 
 for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: overview is independent, becomes stale with facts and never feeds unsourced results to a model`, () => {

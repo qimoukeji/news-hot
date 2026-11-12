@@ -8,7 +8,7 @@ export { quotedInPost } from "./evidence.ts";
 import { recognizedScope } from "./recognition-scope.ts";
 import { relatedContextEvents, uniqueContextEvent, uniqueRoundContextEvent } from "./context-association.ts";
 import { defaultActionTime, reduceEvent, type ActionKind, type ActionInput, type SourcePostRow } from "../actions.ts";
-import { hasExplicitFutureIssuance, isUsageTime, resolveActionTime } from "./public-v2-time.ts";
+import { hasExplicitAnnouncementClock, hasExplicitFutureIssuance, resolveActionTime } from "./public-v2-time.ts";
 import { actionRecognitionSchema, type ActionRecognition, type ActionRecognitionBody, type Proposition, type ThreadRecognition } from "./recognize.ts";
 import { postContext, needsReplyContext } from "./post-context.ts";
 
@@ -44,7 +44,8 @@ export async function applyRecognitionGroup(targets: SourcePostRow[], context: S
     throw Object.assign(new Error("识别组目标不完整"), { statusCode: 400 });
   if (options.preserveReceipt) for (const post of recognition.posts) for (const claim of post.actions) {
     if (claim.eventId && !baseline.events.some(event => event.id === claim.eventId)
-      || claim.existingActionId && !baseline.actions.some(action => action.id === claim.existingActionId)) {
+      || claim.existingActionId && !baseline.actions.some(action => action.id === claim.existingActionId)
+        && !targets.slice(0, targets.findIndex(target => target.id === post.postId)).some(target => claim.existingActionId === `source:${target.id}`)) {
       throw Object.assign(new Error("识别结果引用了输入之外的事件或动作"), { statusCode: 400 });
     }
   }
@@ -60,7 +61,7 @@ export async function applyRecognitionGroup(targets: SourcePostRow[], context: S
       if (rowVersion(current.events.find(row => row.id === event.id)) !== rowVersion(event)) throw new StalePostWork("识别组事件已变化");
       if (rowVersion(current.actions.filter(row => row.event_id === event.id)) !== rowVersion(baseline.actions.filter(row => row.event_id === event.id))) throw new StalePostWork("识别组动作已变化");
     }
-    const events = new Set<string>(), localEvents = new Map<string, string>();
+    const events = new Set<string>(), localEvents = new Map<string, string>(), earlierTargets = new Set<string>();
     for (const post of targets) {
       const result = recognition.posts.find(result => result.postId === post.id);
       if (!result) {
@@ -68,7 +69,8 @@ export async function applyRecognitionGroup(targets: SourcePostRow[], context: S
         continue;
       }
       const affected = await applyRecognitionBody(post.id, result, rowVersion(post), recognition.receiptId, tx, localEvents, result.reviewReason,
-        !options.preserveReceipt, options.preserveReceipt ? undefined : baseline);
+        !options.preserveReceipt, options.preserveReceipt ? undefined : baseline, earlierTargets);
+      earlierTargets.add(post.id);
       for (const id of affected.eventIds) events.add(id);
     }
     if (!options.preserveReceipt) await completeReceipt(tx, recognition.receiptId);
@@ -77,7 +79,7 @@ export async function applyRecognitionGroup(targets: SourcePostRow[], context: S
   return options.db ? save(options.db) : sql.begin(save);
 }
 
-async function applyRecognitionBody(postId: string, recognition: ActionRecognitionBody, expectedVersion: string, receiptId: number | null, db: Db = sql, sharedEvents?: Map<string, string>, reviewDetail?: string | null, completePaidReceipt = true, paidBaseline?: ActionInput): Promise<Applied> {
+async function applyRecognitionBody(postId: string, recognition: ActionRecognitionBody, expectedVersion: string, receiptId: number | null, db: Db = sql, sharedEvents?: Map<string, string>, reviewDetail?: string | null, completePaidReceipt = true, paidBaseline?: ActionInput, earlierTargets?: ReadonlySet<string>): Promise<Applied> {
   const transaction = <T>(run: (tx: Db) => Promise<T>): Promise<T> => db === sql ? sql.begin(run) as Promise<T> : run(db);
   const finish = (db: Db) => receiptId === null || !completePaidReceipt ? Promise.resolve() : completeReceipt(db, receiptId);
   const empty: Applied = { eventIds: [], notify: [] };
@@ -103,12 +105,16 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
   const reasons: string[] = needsReplyContext(post, context) ? ["回复缺少可核验的父帖或引用上下文"] : [];
   const blockedPost = reasons.length > 0 || !recognition.relevant && recognition.actions.length > 0;
   const standaloneFollowups = new Set<string>();
+  const refineAnnouncementIds = new Set<string>();
+  const processingNow = Date.now();
   if (paidBaseline && !recognition.relevant && recognition.actions.some(action => action.real)) reasons.push("模型相关性与识别动作不一致");
   if (recognition.needsReview && reviewDetail) reasons.push(reviewDetail);
   function planClaim(original: ActionRecognitionBody["actions"][number]) {
     const claim = structuredClone(original);
+    const earlierSource = claim.existingActionId?.startsWith("source:") && earlierTargets?.has(claim.existingActionId.slice(7))
+      ? claim.existingActionId.slice(7) : null;
     if (paidBaseline && (claim.eventId && !paidBaseline.events.some(event => event.id === claim.eventId)
-      || claim.existingActionId && !paidBaseline.actions.some(action => action.id === claim.existingActionId))) {
+      || claim.existingActionId && !earlierSource && !paidBaseline.actions.some(action => action.id === claim.existingActionId))) {
       reasons.push("识别结果引用了输入之外的事件或动作"); return;
     }
     if (paidBaseline && claim.kind === "direct_reset" && quotedInPost(claim.excerpt, text)
@@ -200,16 +206,20 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
         eventId = randomUUID();
       }
     } else if (claim.localEventKey) { reasons.push("已有事件不能指定本地分组"); return; }
+    if (earlierSource) {
+      const candidates = input.actions.filter(action => action.event_id === eventId && action.action === "announce"
+        && action.sources.some(source => source.postId === earlierSource));
+      if (claim.action !== "announce" || candidates.length !== 1) {
+        reasons.push("同组补充时间未关联唯一预告动作"); return;
+      }
+      claim.existingActionId = candidates[0]!.id;
+    }
     if (claim.existingActionId) {
       const prior = input.actions.find(action => action.id === claim.existingActionId);
       if (!prior || prior.event_id !== eventId || prior.action !== claim.action || prior.invalidates_event !== claim.invalidatesEvent) { reasons.push("重复事实没有匹配的已有动作"); return; }
     }
-    const resolvedTime = resolveActionTime(claim, { text, published_at: post.published_at }, target ? new Date(target.created_at).toISOString() : undefined);
-    if (paidBaseline && claim.timeExcerpt) {
-      if (!quotedInPost(claim.timeExcerpt, text)) reasons.push("时间引文不在原帖中");
-      else if (["announce", "confirm"].includes(claim.action) && isUsageTime(claim.timeExcerpt, text)) reasons.push("模型将使用或领取截止选为发放时间");
-    }
-    if (resolvedTime.issue) { reasons.push(resolvedTime.issue); return; }
+    const resolvedTime = resolveActionTime(claim, { text, published_at: post.published_at }, target ? new Date(target.created_at).toISOString() : undefined, processingNow);
+    if (resolvedTime.issue) reasons.push(resolvedTime.issue);
     const time = resolvedTime.time;
     const prior = claim.existingActionId ? input.actions.find(action => action.id === claim.existingActionId)! : null;
     // A repeated fact only adds a source; changing an accepted audience requires a sourced amendment.
@@ -222,8 +232,11 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
       else events.set(eventId, { ...(events.get(eventId) ?? { id: eventId }), scope });
     }
     if (claim.localEventKey) localEvents.set(claim.localEventKey, eventId);
+    const refineTime = prior?.action === "announce" && claim.action === "announce" && claim.timeExcerpt !== null
+      && !resolvedTime.issue && hasExplicitAnnouncementClock(claim.timeExcerpt) && JSON.stringify(prior.time) !== JSON.stringify(time);
+    if (refineTime) refineAnnouncementIds.add(prior!.id);
     drafts.push(prior ? { id: prior.id, eventId, action: prior.action, title: prior.title,
-      summary: prior.summary, time: prior.time, invalidatesEvent: prior.invalidates_event }
+      summary: prior.summary, time: refineTime ? time : prior.time, invalidatesEvent: prior.invalidates_event }
       : { eventId, action: claim.action, title: claim.title, summary: claim.summary, time, invalidatesEvent: claim.invalidatesEvent });
     acceptedClaims.push(claim);
   }
@@ -239,7 +252,7 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     const sameNewGroup = proposed && events.get(proposed)?.type === claim.kind ? proposed : undefined;
     const eventId = sameNewGroup ?? (key ? localEvents.get(key) : undefined) ?? randomUUID();
     const initial = !events.has(eventId) && !input.events.some(event => event.id === eventId);
-    const { time, issue } = resolveActionTime(claim, { text, published_at: post.published_at });
+    const { time, issue } = resolveActionTime(claim, { text, published_at: post.published_at }, undefined, processingNow);
     const future = claim.action === "confirm" && quotedInPost(claim.excerpt, text)
       && hasExplicitFutureIssuance(claim.excerpt, { text, published_at: post.published_at });
     if (issue) reasons.push(issue);
@@ -252,7 +265,7 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     if (key) localEvents.set(key, eventId);
     if (claim.localEventKey && !proposed) localEvents.set(claim.localEventKey, eventId);
     drafts.push({ eventId, action: claim.action, title: claim.title, summary: claim.summary,
-      time: issue || future ? defaultActionTime(claim.action, post.published_at) : time, invalidatesEvent: claim.invalidatesEvent });
+      time: future && !issue ? defaultActionTime(claim.action, post.published_at, processingNow) : time, invalidatesEvent: claim.invalidatesEvent });
   }
   if ((!paidBaseline && blockedPost) || (!drafts.length && (recognition.needsReview || reasons.length))) {
     await transaction(async db => {
@@ -266,7 +279,7 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
   try {
     eventIds = await transaction(async db => {
       const affected = await saveAcceptedPost(postId, { title: recognition.title, summary: recognition.summary, actions: drafts, events: [...events.values()], receiptId, expectedVersion: version,
-        filteredOut: monitor().collection.resetOnly && recognition.relevant === false, reviewReason, standaloneFollowups }, db);
+        filteredOut: monitor().collection.resetOnly && recognition.relevant === false, reviewReason, standaloneFollowups, refineAnnouncementIds }, db);
       await finish(db);
       return affected;
     });

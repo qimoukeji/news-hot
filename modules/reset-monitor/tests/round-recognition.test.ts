@@ -116,7 +116,7 @@ function assertHistory(input: ActionInput) {
   assert.deepEqual(secondActions.map(action => ({ action: action.action, sources: action.sources })), [
     { action: "announce", sources: [{ postId: firstRound.id }] }, { action: "confirm", sources: [{ postId: secondRound.id }] },
   ]);
-  assert.equal(secondActions[0]!.time, null, "the remaining round has no invented date or source-time fallback");
+  assert.deepEqual(secondActions[0]!.time, { kind: "instant", at: "2026-11-01T23:59:00.000Z" }, "the remaining round uses its own publication date default");
   assert.equal(second.scope!.type, "unknown");
   assert.deepEqual(reduceEvent(first, input)!.confirmedTime, { kind: "instant", at: firstRound.at });
   assert.deepEqual(reduceEvent(second, input)!.confirmedTime, { kind: "instant", at: secondRound.at });
@@ -141,8 +141,8 @@ for (const timing of ["together", "separately"] as const) test(`independent bank
     assert.equal(midway.events.length, 2);
     const pending = midway.events.find(event => event.id !== initial.event.id)!;
     assert.equal(reduceEvent(pending, midway)!.status, "announced");
-    assert.equal(reduceEvent(pending, midway)!.time, null);
-    assert.equal(midway.actions.find(action => action.event_id === pending.id)!.time, null);
+    assert.deepEqual(reduceEvent(pending, midway)!.time, { kind: "instant", at: "2026-11-01T23:59:00.000Z" });
+    assert.deepEqual(midway.actions.find(action => action.event_id === pending.id)!.time, { kind: "instant", at: "2026-11-01T23:59:00.000Z" });
     await seed([secondRound, unrelated[1]!]);
     await processPending();
   }
@@ -212,7 +212,7 @@ test("two pending rounds attached to the same numbered source remain genuinely a
   const initial = await acceptOriginal(); await seed([firstRound]); await processPending();
   const input = await loadActionInput(), second = input.events.find(event => event.id !== initial.event.id)!;
   await sql.begin(async tx => writePostActions(tx, (await sourcePost(firstRound.id, tx))!, [{ eventId: "competing-round", action: "announce",
-    title: localized("A competing pending round"), summary: null, time: null }], { events: [{ id: "competing-round", type: "reset_credit", scope: second.scope }] }));
+    title: localized("A competing pending round"), summary: null, time: { kind: "instant", at: "2026-11-01T23:59:00Z" } }], { events: [{ id: "competing-round", type: "reset_credit", scope: second.scope }] }));
   const before = await loadActionInput();
   await seed([secondRound], "quote"); await processPending();
   const after = await loadActionInput();
@@ -230,7 +230,7 @@ test("a remaining round does not borrow the previous round's audience or schedul
   await seed([firstRound]); await processPending();
   const input = await loadActionInput(), next = input.events.find(event => event.id !== initial.event.id)!;
   assert.deepEqual(next.scope, { type: "unknown", note: null });
-  assert.equal(reduceEvent(next, input)!.time, null);
+  assert.deepEqual(reduceEvent(next, input)!.time, { kind: "instant", at: "2026-11-01T23:59:00.000Z" });
   assert.deepEqual(input.events.find(event => event.id === initial.event.id)!.scope, initial.event.scope);
 }));
 
@@ -291,7 +291,7 @@ test("a completed final round retains an extra model announcement separately for
   assert.deepEqual(fromFinal.map(action => action.action).sort(), ["announce", "confirm"]);
   assert.equal(fromFinal.find(action => action.action === "confirm")!.event_id, second.id);
   const extra = fromFinal.find(action => action.action === "announce")!;
-  assert.equal(extra.time, null);
+  assert.deepEqual(extra.time, { kind: "instant", at: "2026-11-01T23:59:00.000Z" });
   assert.ok(!before.events.some(event => event.id === extra.event_id));
   assert.equal(reduceEvent(saved.events.find(event => event.id === second.id)!, saved)!.status, "completed");
   assert.equal((await sourcePost(secondRound.id))!.processing_status, "needs_attention", "the unsupported proposal remains visible for review");

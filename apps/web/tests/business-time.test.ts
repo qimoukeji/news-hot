@@ -5,11 +5,7 @@ import { businessDate, fromTimeInput, toTimeInput } from "../../../modules/reset
 import { eventDate, forecastTime, stamp } from "../../../modules/reset-monitor/web/components/format.ts";
 import type { BusinessTime } from "../../../modules/reset-monitor/public-v2.ts";
 
-test("business date rendering retains date precision and its source zone", () => {
-  const day: BusinessTime = { kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" };
-  assert.equal(businessDate(day, "Asia/Shanghai"), "2026-11-02");
-  assert.match(formatBusinessTime(day), /2026.*11.*02.*America\/Los_Angeles/);
-  assert.doesNotMatch(formatBusinessTime(day), /18:00|00:00/);
+test("business date rendering uses the saved instant in the selected zone", () => {
   const at: BusinessTime = { kind: "instant", at: "2026-12-31T23:59:07.123456789Z" };
   assert.equal(businessDate(at, "Asia/Shanghai"), "2027-01-01");
   assert.equal(businessDate(at, "America/Los_Angeles"), "2026-12-31");
@@ -28,25 +24,18 @@ test("public forecast precision and range notices match the API time in Beijing"
   assert.equal(forecastTime({ kind: "instant", at: "2026-12-31T23:59:07Z" }, true, now), "1月1日 07:59");
   assert.equal(forecastTime({ kind: "deadline", at: range.through }, true, now), "11月2日 13:42 之前");
   assert.equal(forecastTime({ kind: "instant", at: range.through }, false, now), "11月2日");
-  assert.equal(forecastTime({ kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" }, true, now), "11月2日");
 });
 
 test("time selection uses an explicit zone and preserves the selected kind", () => {
   assert.deepEqual(fromTimeInput({ kind: "instant", start: "2026-11-02T13:42:26", end: "", timeZone: "Asia/Shanghai" }), { kind: "instant", at: "2026-11-02T05:42:26Z" });
-  assert.deepEqual(fromTimeInput({ kind: "date", start: "2026-11-02", end: "", timeZone: "America/Los_Angeles" }), { kind: "date", date: "2026-11-02", timeZone: "America/Los_Angeles" });
   assert.deepEqual(fromTimeInput({ kind: "deadline", start: "2026-11-02T13:42:26", end: "", timeZone: "UTC" }), { kind: "deadline", at: "2026-11-02T13:42:26Z" });
-  assert.deepEqual(toTimeInput({ kind: "date", date: "2026-11-02", timeZone: "Asia/Tokyo" }), { kind: "date", start: "2026-11-02", end: "", timeZone: "Asia/Tokyo" });
   assert.equal(fromTimeInput({ kind: "empty", start: "", end: "", timeZone: "UTC" }), null);
 });
 
-test("unknown announcement time stays empty and uses publication only for calendar placement", () => {
-  assert.equal(formatBusinessTime(null), "时间未公布");
-  assert.equal(formatBusinessTime(null, "en"), "Time not announced");
-  assert.equal(stamp(null), "时间未公布");
-  assert.equal(eventDate(null, "2026-11-01T23:27:20Z"), "2026-11-02");
-  assert.equal(businessDate(null, "America/Los_Angeles", "2026-11-01T23:27:20Z"), "2026-11-01");
+test("empty form drafts cannot create an unknown business time", () => {
   assert.deepEqual(toTimeInput(null), { kind: "empty", timeZone: "Asia/Shanghai", start: "", end: "" });
   assert.equal(fromTimeInput(toTimeInput(null)), null);
+  assert.equal(eventDate({ kind: "instant", at: "2026-11-01T23:27:20Z" }), "2026-11-02");
 });
 
 test("time selection rejects incomplete input, inverted ranges and DST ambiguity", () => {

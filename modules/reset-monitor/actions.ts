@@ -5,7 +5,6 @@ import {
   publicTimeSchema,
   scopeSchema,
   updateActions,
-  normalizePublicTime,
   sourceUrlSchema,
   timestampSchema,
   type ResetEvent,
@@ -34,7 +33,7 @@ export const actionDraftSchema = z.strictObject({
   invalidatesEvent: z.boolean().optional(),
   title: editorialTextSchema,
   summary: editorialTextSchema.nullable(),
-  time: publicTimeSchema.nullable(),
+  time: publicTimeSchema,
 }).refine(value => !value.invalidatesEvent || value.action === "amend", "只有修订动作可以使事件失效");
 export type ActionDraft = z.infer<typeof actionDraftSchema>;
 export const postProcessingStatuses = ["pending", "processed", "needs_attention", "failed"] as const;
@@ -83,7 +82,7 @@ export interface ActionRow {
   invalidates_event: boolean;
   title: EditorialText;
   summary: EditorialText | null;
-  time: BusinessTime | null;
+  time: BusinessTime;
   sequence: number;
   sources: Array<{ postId: string }>;
   created_at: Date | string;
@@ -95,6 +94,8 @@ export interface ActionInput {
   actions: ActionRow[];
   editorials?: Record<string, { version: string; status: string; recordVersion?: string }>;
   standaloneFollowupIds?: ReadonlySet<string>;
+  invalidatedInferenceIds?: ReadonlySet<string>;
+  manualConfirmationIds?: ReadonlySet<string>;
 }
 export const languages = [
   "en",
@@ -117,20 +118,34 @@ export function translated(
   );
 }
 export const iso = (value: Date | string) => new Date(value).toISOString();
-/** Unknown plans stay empty; amendments use the next 10:00 UTC at or after publication. */
-export function defaultActionTime(action: ActionKind, publishedAt: Date | string): BusinessTime | null {
-  if (action === "announce") return null;
-  const sourceAt = iso(publishedAt);
+/** Defaults are chosen once on write and never recomputed by readers. */
+export function defaultActionTime(action: ActionKind, publishedAt: Date | string, now = Date.now()): BusinessTime {
+  const sourceAt = publishedAt instanceof Date ? iso(publishedAt) : Temporal.Instant.from(publishedAt).toString();
+  if (action === "announce") {
+    const boundary = `${sourceAt.slice(0, 10)}T18:00:00.000Z`;
+    return { kind: "instant", at: now > Date.parse(boundary) ? `${sourceAt.slice(0, 10)}T23:59:00.000Z` : boundary };
+  }
   if (action !== "amend") return { kind: "instant", at: sourceAt };
   const publication = Temporal.Instant.from(publishedAt instanceof Date ? sourceAt : publishedAt);
   const sameDay = Temporal.Instant.from(`${sourceAt.slice(0, 10)}T10:00:00Z`);
   const at = Temporal.Instant.compare(publication, sameDay) > 0 ? sameDay.add({ hours: 24 }) : sameDay;
   return { kind: "instant", at: at.toString({ fractionalSecondDigits: 3 }) };
 }
+export function sourcedConfirmationTime(posts: Iterable<{ published_at: Date | string }>, prior?: BusinessTime): Extract<BusinessTime, { kind: "instant" }> | null {
+  let at: string | null = null;
+  for (const post of posts) {
+    const publication = post.published_at instanceof Date ? iso(post.published_at) : post.published_at;
+    const normalized = publication.endsWith("Z") ? publication : Temporal.Instant.from(publication).toString();
+    if (at === null || Temporal.Instant.compare(normalized, at) < 0) at = normalized;
+  }
+  if (at === null) return null;
+  return prior?.kind === "instant" && Temporal.Instant.compare(prior.at, at) === 0 ? prior : { kind: "instant", at };
+}
 export function sourcedActions(event: EventRow, input: ActionInput) {
   return input.actions
     .filter((action) => action.event_id === event.id)
     .flatMap((action) => {
+      publicTimeSchema.parse(action.time);
       const seen = new Set<string>();
       const posts = action.sources
         .filter(source => {
@@ -159,6 +174,19 @@ export function sourcedActions(event: EventRow, input: ActionInput) {
 
 export const eventIdsForPost = (input: ActionInput, postId: string) => [...new Set(input.actions.filter(action => action.sources.some(source => source.postId === postId)).map(action => action.event_id))].sort();
 
+export function isInferredConfirmation(action: Pick<ActionRow, "id" | "action" | "sources">, manualConfirmationIds?: ReadonlySet<string>) {
+  return action.action === "confirm" && !action.sources.length && /^inferred-[a-f0-9]{64}$/.test(action.id)
+    && !manualConfirmationIds?.has(action.id);
+}
+
+/** Keep prior inferred actions in the timeline but retire their effect when their plan changes. */
+export function inferencesAfterAnnouncement(announcement: ActionRow, actions: Pick<ActionRow, "id" | "event_id" | "sequence" | "action" | "invalidates_event" | "sources">[], manualConfirmationIds?: ReadonlySet<string>) {
+  const later = actions.filter(action => action.event_id === announcement.event_id && action.sequence > announcement.sequence)
+    .sort((a, b) => a.sequence - b.sequence);
+  const end = later.findIndex(action => action.action === "announce" || action.invalidates_event);
+  return (end === -1 ? later : later.slice(0, end)).filter(action => isInferredConfirmation(action, manualConfirmationIds)).map(action => action.id);
+}
+
 /** Original source text is restricted to source storage and authenticated review. */
 export function withoutPostOriginal<T extends { text?: unknown; quoted_post?: unknown }>(post: T) {
   const { text: _text, quoted_post: _quote, ...snapshot } = post;
@@ -173,7 +201,7 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
   );
   if (!initial) return null;
   let status: ResetEvent["status"] = initial.action.action === "amend" ? "in_progress" : "announced";
-  let time: BusinessTime | null = null;
+  let time: BusinessTime = initial.action.time;
   let announcedTime: BusinessTime | null = null;
   let confirmedTime: BusinessTime | null = null;
   let confirmationId: string | null = null;
@@ -182,14 +210,15 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
     const action = update.action;
     if (action.action === "amend" && action.invalidates_event) {
       status = "cancelled";
-      time = action.time ?? defaultActionTime("amend", update.publishedAt);
+      time = action.time;
       announcedTime = confirmedTime = null;
       confirmationId = null;
       officialConfirmed = false;
     } else if (action.action === "confirm" && status !== "cancelled") {
+      if (isInferredConfirmation(action, input.manualConfirmationIds) && input.invalidatedInferenceIds?.has(action.id)) continue;
       if (!action.sources.length && officialConfirmed) continue;
       status = "completed";
-      time = action.time ?? { kind: "instant", at: update.publishedAt };
+      time = action.time;
       confirmedTime = time;
       confirmationId = action.id;
       officialConfirmed = action.sources.length > 0;
@@ -204,17 +233,17 @@ export function reduceEvent(event: EventRow, input: ActionInput) {
       status !== "cancelled" && !officialConfirmed
     ) {
       status = "in_progress";
-      time = action.time ?? { kind: "instant", at: update.publishedAt };
+      time = action.time;
       announcedTime = confirmedTime = confirmationId = null;
     } else if (action.action === "amend" && status === "in_progress") {
-      time = action.time ?? defaultActionTime("amend", update.publishedAt);
+      time = action.time;
     }
   }
   return {
     status,
-    time: normalizePublicTime(time),
-    announcedTime: announcedTime === null ? null : normalizePublicTime(announcedTime),
-    confirmedTime: confirmedTime === null ? null : normalizePublicTime(confirmedTime),
+    time,
+    announcedTime,
+    confirmedTime,
     confirmationId,
     scope: event.scope,
     actions,

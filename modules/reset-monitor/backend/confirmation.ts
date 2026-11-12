@@ -1,7 +1,7 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
 import { reduceEvent, type ActionInput, type ActionRow, type EventRow } from "../actions.ts";
-import { normalizePublicTime, type BusinessTime } from "../public-v2.ts";
+import type { BusinessTime } from "../public-v2.ts";
 
 export const inferredConfirmationTitle = {
   en: "The announced time has arrived", zh: "已到预告时间", "zh-Hant": "已到預告時間",
@@ -18,12 +18,12 @@ export const inferredConfirmationSummary = {
   es: "Ha llegado la hora anunciada. Consulta tu cuenta para comprobar el estado real del restablecimiento.",
 };
 
-/** Unknown planned times never become a completion deadline. */
+/** Only active announcements supply a completion boundary. */
 export function announcementBasis(event: EventRow, input: ActionInput) {
   const official = reduceEvent(event, { ...input, actions: input.actions.filter(action => action.sources.length) });
   if (!official) return null;
   let plan: BusinessTime | null = null;
-  const revisions: Array<{ id: string; action: string; time: BusinessTime | null }> = [];
+  const revisions: Array<{ id: string; action: string; time: BusinessTime }> = [];
   for (const { action } of official.actions) {
     if (action.action === "announce" || action.invalidates_event) {
       revisions.push({ id: action.id, action: action.invalidates_event ? "cancel" : action.action, time: action.time });
@@ -31,11 +31,10 @@ export function announcementBasis(event: EventRow, input: ActionInput) {
       else if (action.action === "announce") plan = action.time;
     }
   }
-  return { official, plan: plan ? normalizePublicTime(plan) : null, version: sha256(stableJson(revisions)) };
+  return { official, plan, version: sha256(stableJson(revisions)) };
 }
 
 export function inferredConfirmationTime(time: BusinessTime): Extract<BusinessTime, { kind: "instant" }> {
-  if (time.kind === "date") return { kind: "instant", at: Temporal.PlainDate.from(time.date).toZonedDateTime({ timeZone: "Asia/Shanghai", plainTime: "18:00:00" }).toInstant().toString() };
   const at = time.kind === "range" ? time.through : time.at;
   return { kind: "instant", at: at.endsWith("Z") ? at : Temporal.Instant.from(at).toString() };
 }
@@ -51,7 +50,8 @@ export function inferredConfirmation(event: EventRow, input: ActionInput, now = 
   const basis = announcementBasis(event, input);
   if (!basis || basis.official.status !== "announced" || !basis.plan || inferenceBoundary(basis.plan) > now
     || basis.official.actions.some(update => update.posts.some(post => post.processing_status === "needs_attention"))) return null;
-  const id = `inferred-${sha256(stableJson({ event: event.id, plan: basis.version }))}`;
+  let id = `inferred-${sha256(stableJson({ event: event.id, plan: basis.version }))}`;
+  while (input.invalidatedInferenceIds?.has(id)) id = `inferred-${sha256(id)}`;
   if (input.actions.some(action => action.id === id)) return null;
   return { id, event_id: event.id, action: "confirm", invalidates_event: false,
     title: { ...inferredConfirmationTitle },

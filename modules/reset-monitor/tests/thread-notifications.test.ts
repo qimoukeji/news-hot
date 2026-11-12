@@ -29,7 +29,7 @@ for (const incomplete of [false, true]) test(`historical group establishes a not
   const historical = await post("102", "2026-10-28T02:00:00Z");
   await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES('codex','recognition:historical:102','{"suppressNotifications":true}'::jsonb)`;
   await saveAcceptedPost(historical.id, { expectedVersion: historical.version, title: properName("Reset completed"), summary: null, receiptId: null,
-    actions: [{ eventId: "event", action: "confirm", title: properName("Reset completed"), summary: null, time: null }] });
+    actions: [{ eventId: "event", action: "confirm", title: properName("Reset completed"), summary: null, time: bt("2026-10-28T02:00:00Z") }] });
   let [baseline] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key='webhook:event:event'`;
   assert.equal(baseline.value.revision, 0);
   assert.equal(baseline.value.historicalPending, false, "a pending event overview does not hide accepted actions");
@@ -42,7 +42,7 @@ for (const incomplete of [false, true]) test(`historical group establishes a not
   }
   const next = await post("103", "2026-10-28T03:00:00Z");
   await saveAcceptedPost(next.id, { expectedVersion: next.version, title: properName("Delivery update"), summary: null, receiptId: null,
-    actions: [{ eventId: "event", action: "progress", title: properName("Delivery update"), summary: null, time: null }] });
+    actions: [{ eventId: "event", action: "progress", title: properName("Delivery update"), summary: null, time: bt("2026-10-28T03:00:00Z") }] });
   [baseline] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key='webhook:event:event'`;
   assert.equal(baseline.value.revision, 1, "a historical source must not permanently mute later official updates");
   assert.equal((await loadActionInput()).actions.length, 3);

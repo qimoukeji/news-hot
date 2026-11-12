@@ -30,12 +30,8 @@ const identifier = text;
 export const platformSchema = z.enum(["codex", "claude-code", "grok"]);
 export const updateSourceSchema = z.strictObject({ postId: identifier, sourceId: identifier, url: sourceUrlSchema });
 export const updateActions = ["announce", "confirm", "progress", "amend"] as const;
-const timeZone = text.refine(value => {
-  try { return !/^[+-]/.test(new Intl.DateTimeFormat("en", { timeZone: value }).resolvedOptions().timeZone); } catch { return false; }
-}, "Invalid source time zone");
 export const businessTimeSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("instant"), at: businessTimestampSchema }),
-  z.strictObject({ kind: z.literal("date"), date: calendarDate, timeZone }),
   z.strictObject({ kind: z.literal("range"), from: businessTimestampSchema, through: businessTimestampSchema })
     .refine(value => {
       // Zod may run a refinement even when a child string has format issues.
@@ -44,10 +40,7 @@ export const businessTimeSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("deadline"), at: businessTimestampSchema }),
 ]);
 export type BusinessTime = z.infer<typeof businessTimeSchema>;
-export const eventTimeSchema = z.union([businessTimeSchema, z.strictObject({ kind: z.literal("unknown") })]);
-export type EventTime = z.infer<typeof eventTimeSchema>;
-
-export const publicTimeSchema = businessTimeSchema.nullable();
+export const publicTimeSchema = businessTimeSchema;
 export type PublicTime = z.infer<typeof publicTimeSchema>;
 const updateFields = { id: identifier, publishedAt: timestampSchema, title: localizedTextSchema, summary: localizedTextSchema.nullable() };
 function updateSchema() {
@@ -61,40 +54,25 @@ function updateSchema() {
 }
 export const eventUpdateSchema = updateSchema();
 export const rawEventUpdateSchema = eventUpdateSchema;
-/** Preserve date precision and fractional seconds while expressing instants in UTC. */
-export function normalizePublicTime(time: BusinessTime): BusinessTime;
-export function normalizePublicTime(time: null): null;
-export function normalizePublicTime(time: PublicTime): PublicTime;
+/** Preserve fractional seconds while expressing instants in UTC. */
 export function normalizePublicTime(time: PublicTime): PublicTime {
   const value = publicTimeSchema.parse(time);
-  if (value === null) return null;
   const utc = (at: string) => at.endsWith("Z") ? at : Temporal.Instant.from(at).toString();
-  if (value.kind === "date") return value;
   if (value.kind === "range") return { kind: "range", from: utc(value.from), through: utc(value.through) };
   return { ...value, at: utc(value.at) };
 }
-export function serializeEventTime(time: EventTime): PublicTime {
-  if (time.kind === "unknown") return null;
-  return normalizePublicTime(time);
-}
-
-/** Ordering uses source-local midnight for dates; it never supplies an occurrence time. */
 export function businessTimeBoundary(time: BusinessTime): string {
-  if (time.kind === "date") return Temporal.PlainDate.from(time.date).toZonedDateTime(time.timeZone).toInstant().toString();
   return time.kind === "range" ? time.from : time.at;
 }
 export function compareBusinessTime(a: BusinessTime, b: BusinessTime): number {
   return Temporal.Instant.compare(businessTimeBoundary(a), businessTimeBoundary(b));
 }
-/** Unknown planned times use publication only for ordering, never as an occurrence time. */
 export function eventOrderTime(event: { time: PublicTime; publishedAt: string }): BusinessTime {
-  return event.time ?? { kind: "instant", at: event.publishedAt };
+  return event.time;
 }
-/** A calendar date has occurred only once that date starts in its source time zone. */
 export function isFutureBusinessTime(time: BusinessTime, at: string): boolean {
   const instant = Temporal.Instant.from(at);
-  return time.kind === "date" ? time.date > instant.toZonedDateTimeISO(time.timeZone).toPlainDate().toString()
-    : Temporal.Instant.compare(time.kind === "range" ? time.through : time.at, instant) > 0;
+  return Temporal.Instant.compare(time.kind === "range" ? time.through : time.at, instant) > 0;
 }
 
 export const eventStatuses = ["announced", "in_progress", "completed", "cancelled"] as const;
@@ -109,7 +87,6 @@ const eventObjectSchema = z.strictObject({
   time: publicTimeSchema, updates: z.array(eventUpdateSchema).min(1), scope: scopeSchema,
 });
 function validateEvent(event: z.infer<typeof eventObjectSchema>, context: z.RefinementCtx) {
-  if (event.time === null && event.status !== "announced") context.addIssue({ code: "custom", path: ["time"], message: "Only an announcement may have an unknown time" });
   const ids = new Set<string>();
   event.updates.forEach((update, index) => {
     if (new Set(update.sources.map(source => source.postId)).size !== update.sources.length) context.addIssue({ code: "custom", path: ["updates", index, "sources"], message: "Source posts must be unique" });
@@ -136,10 +113,10 @@ export const statisticsSchema = z.strictObject({
 });
 const overviewFields = {
   platform: platformSchema, sources: z.array(sourceSchema), statistics: statisticsSchema,
-  hasAnnouncement: z.boolean(), predictedResetTime: utcInstantSchema.nullable(), announcedResetTime: publicTimeSchema, resetTime: utcInstantSchema.nullable(),
+  hasAnnouncement: z.boolean(), predictedResetTime: utcInstantSchema.nullable(), announcedResetTime: publicTimeSchema.nullable(), resetTime: utcInstantSchema.nullable(),
 };
-function validateOverview(value: { sources: z.infer<typeof sourceSchema>[]; hasAnnouncement: boolean; announcedResetTime: PublicTime }, context: z.RefinementCtx) {
-  if (!value.hasAnnouncement && value.announcedResetTime !== null) context.addIssue({ code: "custom", path: ["announcedResetTime"], message: "An announced time requires an announcement" });
+function validateOverview(value: { sources: z.infer<typeof sourceSchema>[]; hasAnnouncement: boolean; announcedResetTime: PublicTime | null }, context: z.RefinementCtx) {
+  if (value.hasAnnouncement !== (value.announcedResetTime !== null)) context.addIssue({ code: "custom", path: ["announcedResetTime"], message: "An announced time requires an announcement and every announcement requires its saved time" });
   if (new Set(value.sources.map(source => source.id)).size !== value.sources.length) context.addIssue({ code: "custom", path: ["sources"], message: "IDs must be unique" });
 }
 export const platformOverviewSchema = z.strictObject(overviewFields).superRefine(validateOverview);

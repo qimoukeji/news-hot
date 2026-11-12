@@ -84,9 +84,9 @@ test("forged context-only source additions are rejected even with its current ex
 
 test("source validation refuses a context-only row even when its author is an official configured account", async () => inMonitor(codex, async () => {
   await seed();
-  await validateActionSources(sql, [{ id: "valid", action: "announce", time: null, sources: [{ postId: sourceId }] }]);
+  await validateActionSources(sql, [{ id: "valid", action: "announce", time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" }, sources: [{ postId: sourceId }] }]);
   for (const sources of [[{ postId: parentId }], [{ postId: sourceId }, { postId: parentId }]]) {
-    await assert.rejects(validateActionSources(sql, [{ id: "invalid", action: "announce", time: null, sources }]), /来源/);
+    await assert.rejects(validateActionSources(sql, [{ id: "invalid", action: "announce", time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" }, sources }]), /来源/);
   }
 }));
 

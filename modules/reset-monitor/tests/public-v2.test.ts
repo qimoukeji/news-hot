@@ -134,7 +134,7 @@ test("all platforms expose action updates through v2 only and support ETag", asy
 test("same post can append a confirmation with explicit source commands", async () => inMonitor(codex, async () => {
   const detail = (await monitorPostDetail("post"))!;
   const draft = { version: detail.version, versions: detail.versions, reason: "核对原帖动作",
-    actions: { create: [{ localKey: "confirmation", eventId: "event", action: "confirm", title: { zh: "已完成" }, summary: null, time: null }] },
+    actions: { create: [{ localKey: "confirmation", eventId: "event", action: "confirm", title: { zh: "已完成" }, summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }] },
     sources: { add: [{ actionKey: "confirmation", postId: "post" }] } };
   const preview = (await previewMonitorReview("post", draft))!;
   await submitMonitorReview("post", { ...draft, previewToken: preview.previewToken }, "reviewer");
@@ -238,7 +238,7 @@ test("display edits cannot write status or time and partial translations stay pr
 
 test("compatible event types can be previewed and changed without rewriting their actions", async () =>
   inMonitor(codex, async () => {
-    await sql`UPDATE monitor_event_actions SET action='confirm',time=NULL WHERE monitor_id='codex' AND event_id='event'`;
+    await sql`UPDATE monitor_event_actions SET action='confirm' WHERE monitor_id='codex' AND event_id='event'`;
     const event = (await listEvents()).events[0]!, before = await loadActionInput();
     const edit = { version: event.version, reason: "更正事件类型", patch: { type: "bonus_credit" } };
     await assert.rejects(updateMonitorEvent("event", edit, "reviewer"), /预览/);
@@ -271,7 +271,7 @@ test("type changes share action semantics and reject stale source previews", asy
     await updateMonitorEvent("event", { ...change, previewToken: fresh.previewToken }, "reviewer");
     await sql.begin(async tx => {
       const post = await sourcePost("post", tx);
-      await writePostActions(tx, post!, [{ eventId: "event", action: "progress", title: properName("Claim closed"), summary: null, time: null }]);
+      await writePostActions(tx, post!, [{ eventId: "event", action: "progress", title: properName("Claim closed"), summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }]);
     });
     event = (await listEvents()).events[0]!;
     const shared = { version: event.version, patch: { type: "direct_reset" } };
@@ -437,10 +437,12 @@ test("OpenAPI v2 describes action sources and v1 no longer advertises monitor sn
     assert.deepEqual(variants.map((variant: any) => variant.properties.action.const).sort(), ["amend", "announce", "confirm", "progress"]);
     for (const variant of variants) {
       const acceptsNull = variant.properties.time.anyOf?.some((time: any) => time.type === "null") ?? false;
-      assert.equal(acceptsNull, variant.properties.action.const === "announce", "only announcement actions have an unknown business time");
-      assert.ok(variant.required.includes("time"), "unknown time is explicit null rather than an omitted field");
+      assert.equal(acceptsNull, false);
+      assert.ok(variant.required.includes("time"));
+      assert.deepEqual(variant.properties.time.oneOf.map((time: { properties: { kind: { const: string } } }) => time.properties.kind.const).sort(), ["deadline", "instant", "range"]);
     }
-    assert.ok(event.properties.time.anyOf.some((time: any) => time.type === "null"));
+    assert.ok(event.required.includes("time"));
+    assert.deepEqual(event.properties.time.oneOf.map((time: { properties: { kind: { const: string } } }) => time.properties.kind.const).sort(), ["deadline", "instant", "range"]);
     const overview = spec.components.schemas.Overview.properties.platforms.items;
     assert.equal(overview.properties.catalog, undefined);
     assert.equal(overview.properties.hasAnnouncement.type, "boolean");
@@ -492,7 +494,7 @@ test("monitor Agent addresses use v2 and stay discoverable without legacy aliase
 test("admin event filters combine search, type, derived status and publication visibility", async () => inMonitor(codex, async () => {
   const add = async (eventId: string, type: "direct_reset" | "bonus_credit", action: "confirm" | "announce", title: string) => {
     await sql`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,title,processing_status) VALUES('codex',${eventId},'FilterAuthor',${sourceAt},${`https://example.test/${eventId}`},${sql.json(properName(title))},'processed')`;
-    await sql.begin(async db => writePostActions(db, (await sourcePost(eventId, db))!, [{ eventId, action, title: properName(title), summary: null, time: null }], { events: [{ id: eventId, type, title: properName(title) }] }));
+    await sql.begin(async db => writePostActions(db, (await sourcePost(eventId, db))!, [{ eventId, action, title: properName(title), summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }], { events: [{ id: eventId, type, title: properName(title) }] }));
   };
   await add("bonus", "bonus_credit", "confirm", "奖励活动 Alpha");
   await add("hidden", "direct_reset", "confirm", "Withdrawn reset");
@@ -514,7 +516,7 @@ test("admin counts use valid relationships while translations withhold public up
   await sql`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,title,processing_status,review_reason) VALUES('codex','second','CountAuthor',${sourceAt},'https://example.test/count-second',${sql.json(properName("Second source"))},'failed','Keep visible review reason')`;
   await sql.begin(async db => {
     await writePostActions(db, (await sourcePost("second", db))!, [{ id: original.id, eventId: "event", action: original.action, title: original.title, summary: original.summary, time: original.time }]);
-    await writePostActions(db, (await sourcePost("post", db))!, [{ eventId: "event", action: "amend", title: { zh: "未译修订" }, summary: null, time: null }]);
+    await writePostActions(db, (await sourcePost("post", db))!, [{ eventId: "event", action: "amend", title: { zh: "未译修订" }, summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }]);
   });
   await sql`UPDATE monitor_event_records SET title='{"zh":"配额调整事件"}'::jsonb,scope=${sql.json({ type: "selected_users", note: { zh: "仅特定用户" } })} WHERE monitor_id='codex' AND id='event'`;
   const event = (await listEvents()).events[0]!;

@@ -10,7 +10,7 @@ function rounds() {
   addAction(input, "first-delivery", "confirm", "2026-10-11T10:00:00Z", { time: { kind: "instant", at: "2026-10-11T10:00:00Z" } });
   input.posts[1]!.text = "Banked 1/2";
   input.events.push({ ...input.events[0]!, id: "round-2", created_at: "2026-10-11T10:00:00Z" });
-  input.actions.push({ ...input.actions[1]!, id: "next-announcement", event_id: "round-2", action: "announce", time: null, sequence: 1 });
+  input.actions.push({ ...input.actions[1]!, id: "next-announcement", event_id: "round-2", action: "announce", time: { kind: "instant", at: "2026-10-11T18:00:00Z" }, sequence: 1 });
   const post = { ...input.posts[0]!, id: "final-delivery", text: "Day 28/ Banked 2/2", published_at: "2026-10-12T10:00:00Z",
     reply_to: { postId: input.posts[1]!.id, author: "thsottiaux" } };
   input.posts.push(post);

@@ -19,7 +19,7 @@ async function post(id: string, at: string, status = "processed") {
   await sql`INSERT INTO monitor_source_posts(monitor_id,id,author,published_at,url,title,text,processing_status,review_reason)
     VALUES(${monitorId()},${id},'SourceAuthor',${at},${`https://example.test/${id}`},${sql.json(properName(id))},${`Private original ${id}`},${status},${status === "failed" ? "需要核验来源" : null})`;
 }
-const fact = (eventId: string, action: "confirm" | "amend" = "confirm") => ({ eventId, action, title: properName(action), summary: properName("Source fact"), time: null });
+const fact = (eventId: string, action: "confirm" | "amend" = "confirm") => ({ eventId, action, title: properName(action), summary: properName("Source fact"), time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } });
 
 for (const definition of [codex, claude, grok]) test(`${definition.monitorId} combined entries group all facts and sources before filtering and pagination`, async () => {
   for (const def of [codex, claude, grok]) await inMonitor(def, async () => {

@@ -88,7 +88,7 @@ test("offline rebuilding clears only reviewed tables atomically, preserves subsc
     const linked = await run(additional);
     assert.deepEqual(linked.results[0]!.eventIds, resumed.results.find(row => row.monitorId === "codex")!.eventIds, "explicit source references reuse the verified event and action");
     const eventId = linked.results[0]!.eventIds[0]!;
-    await sql`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,title,sources) VALUES('codex','synthetic-second-confirm',${eventId},2,'confirm',${sql.json(properName("Second confirmation"))},'[{"postId":"101"}]'::jsonb)`;
+    await sql`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,title,time,sources) VALUES('codex','synthetic-second-confirm',${eventId},2,'confirm',${sql.json(properName("Second confirmation"))},${sql.json({ kind: "instant", at })},'[{"postId":"101"}]'::jsonb)`;
     additional.sources[0] = { ...additional.sources[0]!, id: "103", url: `https://x.com/${account}/status/103` } as OfflineBundle["sources"][number];
     const ambiguous = await run(additional);
     assert.equal(ambiguous.results[0]!.status, "needs_attention");
@@ -96,7 +96,7 @@ test("offline rebuilding clears only reviewed tables atomically, preserves subsc
     const [ambiguousText] = await sql`SELECT title,summary FROM monitor_source_posts WHERE monitor_id='codex' AND id='103'`;
     assert.deepEqual(ambiguousText!.title, duplicate.title); assert.deepEqual(ambiguousText!.summary, duplicate.summary);
     await sql`INSERT INTO monitor_event_records(monitor_id,id,type,created_at) VALUES('codex','synthetic-second-event','direct_reset',${at})`;
-    await sql`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,title,sources) VALUES('codex','synthetic-second-event-confirm','synthetic-second-event',1,'confirm',${sql.json(properName("Another event"))},'[{"postId":"101"}]'::jsonb)`;
+    await sql`INSERT INTO monitor_event_actions(monitor_id,id,event_id,sequence,action,title,time,sources) VALUES('codex','synthetic-second-event-confirm','synthetic-second-event',1,'confirm',${sql.json(properName("Another event"))},${sql.json({ kind: "instant", at })},'[{"postId":"101"}]'::jsonb)`;
     additional.sources[0] = { ...additional.sources[0]!, id: "105", url: `https://x.com/${account}/status/105` } as OfflineBundle["sources"][number];
     const ambiguousEvent = await run(additional);
     assert.equal(ambiguousEvent.results[0]!.status, "needs_attention");

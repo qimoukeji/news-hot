@@ -5,19 +5,15 @@ export const defaultTimeZone = "Asia/Shanghai";
 export type TimeInputKind = BusinessTime["kind"] | "empty";
 export type TimeInput = { kind: TimeInputKind; timeZone: string; start: string; end: string };
 
-export function businessDate(value: BusinessTime | null, timeZone = defaultTimeZone, publishedAt?: string): string {
-  if (value === null) {
-    if (!publishedAt) throw new Error("未知业务时间需要来源发布时间归日");
-    return Temporal.Instant.from(publishedAt).toZonedDateTimeISO(timeZone).toPlainDate().toString();
-  }
-  return value.kind === "date" ? value.date : Temporal.Instant.from(value.kind === "range" ? value.from : value.at).toZonedDateTimeISO(timeZone).toPlainDate().toString();
+export function businessDate(value: BusinessTime, timeZone = defaultTimeZone): string {
+  return Temporal.Instant.from(value.kind === "range" ? value.from : value.at).toZonedDateTimeISO(timeZone).toPlainDate().toString();
 }
 
 
-export function toTimeInput(value: BusinessTime | null, timeZone = value?.kind === "date" ? value.timeZone : defaultTimeZone): TimeInput {
+export function toTimeInput(value: BusinessTime | null, timeZone = defaultTimeZone): TimeInput {
   const local = (at: string) => Temporal.Instant.from(at).toZonedDateTimeISO(timeZone).toPlainDateTime().toString({ smallestUnit: "second" });
   return { kind: value?.kind ?? "empty", timeZone,
-    start: !value ? "" : value.kind === "date" ? value.date : local(value.kind === "range" ? value.from : value.at),
+    start: !value ? "" : local(value.kind === "range" ? value.from : value.at),
     end: value?.kind === "range" ? local(value.through) : "" };
 }
 
@@ -27,10 +23,9 @@ export function fromTimeInput(input: TimeInput, original: BusinessTime | null = 
   if (!input.start || input.kind === "range" && !input.end) throw new Error("请选择完整的业务时间");
   if (/^[+-]/.test(input.timeZone)) throw new Error("请选择有效的 IANA 时区");
   try { new Intl.DateTimeFormat("en", { timeZone: input.timeZone }); } catch { throw new Error("请选择有效的 IANA 时区"); }
-  if (input.kind === "date") return { kind: "date", date: Temporal.PlainDate.from(input.start).toString(), timeZone: input.timeZone };
   const prior = original?.kind === input.kind ? toTimeInput(original, input.timeZone) : null;
   const instant = (at: string, edge: "start" | "end") => {
-    if (prior && original && original.kind !== "date" && Temporal.PlainDateTime.compare(prior[edge], at) === 0) {
+    if (prior && original && Temporal.PlainDateTime.compare(prior[edge], at) === 0) {
       return original.kind === "range" ? original[edge === "start" ? "from" : "through"] : original.at;
     }
     try { return Temporal.PlainDateTime.from(at).toZonedDateTime(input.timeZone, { disambiguation: "reject" }).toInstant().toString(); }

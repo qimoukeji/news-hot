@@ -4,8 +4,8 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { convertLegacyInput, convertLegacyTime, planUpgradeStates, timeUpgradeDigest, timeUpgradeKey, upgradeHash, upgradeJson, verifyBusinessTimeUpgrade, type LegacyInput, type UpgradeState, type UpgradeTimeRow } from "./business-time-upgrade.ts";
-import { withoutPostOriginal, type ActionInput } from "../actions.ts";
+import { convertLegacyInput, convertLegacyTime, loadScalarUpgradeInput, planUpgradeStates, projectUpgradeEvents, restoreUpgradeSets, serializeUpgradeSets, timeUpgradeDigest, timeUpgradeKey, upgradeHash, upgradeJson, verifyBusinessTimeUpgrade, type LegacyInput, type StructuredUpgradeInput, type UpgradeSetSnapshot, type UpgradeState, type UpgradeTimeRow } from "./business-time-upgrade.ts";
+import { withoutPostOriginal } from "../actions.ts";
 
 async function main() {
   const { values } = parseArgs({ options: {
@@ -37,11 +37,9 @@ async function main() {
     try { await verifyActionBackup(backup!.path, verificationDatabaseUrl); }
     catch (error) { await closeDb(); throw error; }
   }
-  const { loadActionInput } = await import("../backend/action-store.ts");
-  const { projectPublicV2, projectRawV2 } = await import("../backend/public-v2.ts");
   const { RESET_MONITOR_BACKENDS } = await import("@aihot/site/reset-monitor-backends");
   const { inMonitor } = await import("../backend/context.ts");
-  type Prepared = { definition: typeof RESET_MONITOR_BACKENDS[number]; before: LegacyInput; after: ActionInput; states: UpgradeState[]; updates: UpgradeState[]; timestamps: Record<string, string> };
+  type Prepared = { definition: typeof RESET_MONITOR_BACKENDS[number]; before: LegacyInput; after: StructuredUpgradeInput; states: UpgradeState[]; updates: UpgradeState[]; timestamps: Record<string, string> };
   const prepared: Prepared[] = [];
   try {
     const types = await sql<{ attname: string; type: string }[]>`SELECT attname,atttypid::regtype::text AS type FROM pg_attribute
@@ -53,25 +51,25 @@ async function main() {
     // Validate every monitor and the files read back from disk before the first database write.
     for (const definition of RESET_MONITOR_BACKENDS) await inMonitor(definition, async () => {
       const { before, states, timestamps } = await sql.begin("isolation level repeatable read read only", async db => ({
-        before: await loadActionInput(db) as unknown as LegacyInput,
+        before: await loadScalarUpgradeInput(db, definition.monitorId),
         states: await db<UpgradeState[]>`SELECT key,value FROM monitor_state WHERE monitor_id=${definition.monitorId}
           AND (key LIKE 'public_v2:overview:%' OR key LIKE 'public_v2:translation:action:%' OR key LIKE 'webhook:event:%') ORDER BY key`,
         timestamps: Object.fromEntries((await db<{ id: string; at: string }[]>`SELECT id,to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at FROM monitor_event_actions WHERE monitor_id=${definition.monitorId}`).map(row => [row.id, row.at])),
       }));
-      const snapshot = { ...before, posts: before.posts.map(withoutPostOriginal) };
+      const snapshot = { ...before, posts: before.posts.map(withoutPostOriginal), ...serializeUpgradeSets(before) };
       const snapshotFile = path.join(output, `${definition.monitorId}-before.json`);
       await writeFile(snapshotFile, JSON.stringify({ input: snapshot, states, timestamps }, null, 2), { flag: "wx" });
-      const saved = JSON.parse(await readFile(snapshotFile, "utf8")) as { input: LegacyInput; states: UpgradeState[]; timestamps: Record<string, string> };
+      const saved = JSON.parse(await readFile(snapshotFile, "utf8")) as { input: Omit<LegacyInput, keyof UpgradeSetSnapshot> & UpgradeSetSnapshot; states: UpgradeState[]; timestamps: Record<string, string> };
       assert.equal(upgradeJson(saved.input), upgradeJson(snapshot), "Backup snapshot failed read-back verification");
-      const after = convertLegacyInput(saved.input);
-      const updates = planUpgradeStates(saved.input, after, saved.states, projectRawV2(after, definition).events);
-      projectPublicV2(after, definition);
+      const savedInput: LegacyInput = { ...saved.input, ...restoreUpgradeSets(saved.input) };
+      const after = convertLegacyInput(savedInput);
+      const updates = planUpgradeStates(savedInput, after, saved.states, projectUpgradeEvents(after, definition));
       assert.deepEqual(after.actions.map(action => [action.id, action.event_id, action.sequence, action.sources]), before.actions.map(action => [action.id, action.event_id, action.sequence, action.sources]));
       if (types.some(row => row.attname === "business_time")) {
         const shadows = await sql<{ id: string; business_time: unknown }[]>`SELECT id,business_time FROM monitor_event_actions WHERE monitor_id=${definition.monitorId}`;
         for (const row of shadows) if (row.business_time !== null && upgradeJson(row.business_time) !== upgradeJson(after.actions.find(action => action.id === row.id)?.time)) throw new Error(`Action ${row.id} has a conflicting partial conversion`);
       }
-      await writeFile(path.join(output, `${definition.monitorId}-after.json`), JSON.stringify({ input: after, stateUpdates: updates }, null, 2), { flag: "wx" });
+      await writeFile(path.join(output, `${definition.monitorId}-after.json`), JSON.stringify({ input: { ...after, ...serializeUpgradeSets(after) }, stateUpdates: updates }, null, 2), { flag: "wx" });
       assert.deepEqual(saved.timestamps, timestamps, "Exact database timestamps failed backup read-back verification");
       prepared.push({ definition, before, after, states: [...states], updates, timestamps });
     });
@@ -96,7 +94,7 @@ async function main() {
           // Lock in normal event/action order, then hold tables against any writer until metadata
           // and the completion digest commit together. No model or queue is started by this tool.
           await db`LOCK TABLE monitor_event_records,monitor_event_actions,monitor_source_posts,monitor_state IN SHARE ROW EXCLUSIVE MODE`;
-          const current = await loadActionInput(db) as unknown as LegacyInput;
+          const current = await loadScalarUpgradeInput(db, definition.monitorId);
           assert.equal(upgradeJson({ ...current, posts: current.posts.map(withoutPostOriginal) }), upgradeJson({ ...before, posts: before.posts.map(withoutPostOriginal) }), "Records changed during conversion; rerun with writers stopped");
           const latestStates = await db<UpgradeState[]>`SELECT key,value FROM monitor_state WHERE monitor_id=${definition.monitorId}
             AND (key LIKE 'public_v2:overview:%' OR key LIKE 'public_v2:translation:action:%' OR key LIKE 'webhook:event:%') ORDER BY key`;

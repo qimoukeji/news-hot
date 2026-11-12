@@ -70,3 +70,29 @@ test("midnight and noon share numeric-clock date, timezone and DST semantics", (
   for (const expression of ["around midnight PST", "midnight CST", "midnight PST PDT"])
     assert.deepEqual(parse(expression), { kind: "unknown" }, expression);
 });
+
+test("Chinese week qualifiers retain source calendar weeks across weekday and year boundaries", () => {
+  const wednesday = "2026-11-11T12:34:56Z";
+  for (const [expression, date] of [
+    ["下周四", "2026-11-19"], ["下週一", "2026-11-16"], ["下星期三", "2026-11-18"],
+    ["上周一", "2026-11-02"], ["上週四", "2026-11-05"], ["上星期日", "2026-11-08"],
+    ["本周一", "2026-11-09"], ["这周四", "2026-11-12"], ["這週天", "2026-11-15"],
+  ]) for (const announcement of [true, false])
+    assert.deepEqual(parse(expression!, announcement, expression!, wednesday), { kind: "date", date, timeZone: "UTC" }, expression);
+  assert.deepEqual(parse("下周一", true, "下周一 PT", "2026-11-16T01:00:00Z"),
+    { kind: "date", date: "2026-11-16", timeZone: "America/Los_Angeles" });
+  assert.deepEqual(parse("下周四 at 10am PT", true, "下周四 at 10am PT", "2026-11-01T06:30:00Z"),
+    { kind: "instant", at: "2026-11-05T18:00:00Z" });
+  assert.deepEqual(parse("下周一", true, "下周一", "2026-12-30T12:00:00Z"),
+    { kind: "date", date: "2027-01-04", timeZone: "UTC" });
+  assert.deepEqual(parse("上周四", true, "上周四", "2027-01-06T12:00:00Z"),
+    { kind: "date", date: "2026-12-31", timeZone: "UTC" });
+});
+
+test("English next and last weekdays keep the next and previous occurrence semantics", () => {
+  for (const [expression, date] of [
+    ["next Thursday", "2026-11-12"], ["next Monday", "2026-11-16"], ["next Wednesday", "2026-11-18"],
+    ["last Monday", "2026-11-09"], ["last Thursday", "2026-11-05"], ["last Wednesday", "2026-11-04"],
+    ["this Monday", "2026-11-09"], ["Thursday", "2026-11-12"],
+  ]) assert.deepEqual(parse(expression!, true, expression!, "2026-11-11T12:34:56Z"), { kind: "date", date, timeZone: "UTC" }, expression);
+});

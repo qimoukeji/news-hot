@@ -21,14 +21,15 @@ function event(id: string, time: string): ResetEvent {
 }
 function query(params: Record<string, unknown> = {}, at = now) { return parsePublicV2Query(params, at); }
 
-test("cursors issued before instant confirmations cannot continue through moved event dates", () => {
+test("cursors issued before time normalization cannot continue through changed event ordering", () => {
   const data = snapshot();
   data.events = [event("newer", "2026-10-15T01:00:00Z"), event("older", "2026-10-14T01:00:00Z")];
   const params = { from: "2026-10-01", to: "2026-10-31", timeZone: "UTC", limit: "1" };
-  const oldBinding = queryBinding({ platform: data.platform, from: params.from, to: params.to, timeZone: params.timeZone, limit: 1 });
+  const oldBinding = queryBinding({ contract: "v2.6", platform: data.platform, from: params.from, to: params.to, timeZone: params.timeZone, limit: 1 });
   const oldCursor = encodeCursor("rmb1", { binding: oldBinding, at: "2026-10-15T01:00:00Z", id: "newer" });
   assert.throws(() => paginatePublicV2(data, query({ ...params, cursor: oldCursor })), PublicV2QueryError);
   const first = paginatePublicV2(data, query(params));
+  assert.match(first.pagination.nextCursor!, /^rmb2\./);
   const second = paginatePublicV2(data, query({ ...params, cursor: first.pagination.nextCursor! }));
   assert.equal(second.list[0]!.id, "older");
 });
@@ -45,19 +46,19 @@ test("date and limit defaults treat missing, empty and whitespace inputs alike",
   assert.equal(query({}, Date.parse("2027-01-01T00:00:00Z")).to, "2027-01-31");
 });
 
-test("unknown announcement times filter and paginate by publication without inventing a business time", () => {
+test("announcements filter and paginate by their saved time independent of publication", () => {
   const data = snapshot();
   const unknown = event("unknown", "2026-10-15T00:00:00Z");
-  Object.assign(unknown, { status: "announced", time: null, publishedAt: "2026-10-15T00:00:00Z" });
-  Object.assign(unknown.updates[0]!, { action: "announce", time: null });
+  Object.assign(unknown, { status: "announced", time: bt("2026-10-15T18:00:00Z"), publishedAt: "2026-10-01T00:00:00Z" });
+  Object.assign(unknown.updates[0]!, { action: "announce", time: bt("2026-10-15T18:00:00Z") });
   data.events = [event("newer", "2026-10-16T00:00:00Z"), unknown, event("older", "2026-10-14T00:00:00Z")];
   const params = { from: "2026-10-01", to: "2026-10-31", timeZone: "UTC", limit: "1" };
   const first = paginatePublicV2(data, query(params));
   const second = paginatePublicV2(data, query({ ...params, cursor: first.pagination.nextCursor! }));
   const third = paginatePublicV2(data, query({ ...params, cursor: second.pagination.nextCursor! }));
   assert.deepEqual([first.list[0]!.id, second.list[0]!.id, third.list[0]!.id], ["newer", "unknown", "older"]);
-  assert.equal(second.list[0]!.time, null);
-  assert.equal(second.list[0]!.updates[0]!.time, null);
+  assert.deepEqual(second.list[0]!.time, bt("2026-10-15T18:00:00Z"));
+  assert.deepEqual(second.list[0]!.updates[0]!.time, bt("2026-10-15T18:00:00Z"));
   const day = paginatePublicV2(data, query({ from: "2026-10-15", to: "2026-10-15", timeZone: "UTC" }));
   assert.deepEqual(day.list.map(event => event.id), ["unknown"]);
 });
@@ -92,11 +93,11 @@ test("limits, cursors and unknown parameters are strictly validated", () => {
   ]) assert.throws(() => paginatePublicV2(snapshot(), query(params)), PublicV2QueryError, JSON.stringify(params));
 });
 
-test("filtering uses the requested local dates, literal dates and interval starts", () => {
+test("filtering uses the requested local dates, saved instants and interval starts", () => {
   const data = snapshot();
   data.events = [
     event("late", "2026-10-15T16:00:00Z"), event("end", "2026-10-15T15:59:59Z"),
-    event("date", "2026-10-15"), event("range", "2026-10-14T16:00:00Z/2026-10-20T16:00:00Z"),
+    event("date", "2026-10-15T12:00:00Z"), event("range", "2026-10-14T16:00:00Z/2026-10-20T16:00:00Z"),
     event("start", "2026-10-14T16:00:00+00:00"), event("early", "2026-10-14T15:59:59Z"),
   ];
   const before = structuredClone(data);
@@ -118,7 +119,7 @@ test("local days include their start and exclude the next midnight across both D
     const data = snapshot();
     data.events = [event("next", end), event("end", new Date(Date.parse(end) - 1).toISOString()),
       ...repeated.map((at, i) => event(`inside-${i}`, at)), event("start", start),
-      event("before", new Date(Date.parse(start) - 1).toISOString()), event("date", day),
+      event("before", new Date(Date.parse(start) - 1).toISOString()), event("date", `${day}T12:00:00Z`),
       event("range", `${start}/${end}`)];
     data.events.sort((a, b) => compareBusinessTime(eventOrderTime(b), eventOrderTime(a)) || a.id.localeCompare(b.id));
     const result = paginatePublicV2(data, query({ from: day, to: day, timeZone: "America/Los_Angeles" }));
@@ -127,9 +128,9 @@ test("local days include their start and exclude the next midnight across both D
   }
 });
 
-test("changing query zones changes date membership without moving literal dates or reordering events", () => {
+test("changing query zones changes date membership without moving saved instants or reordering events", () => {
   const data = snapshot();
-  data.events = [event("later", "2026-10-16T00:00:00Z"), event("cross-day", "2026-10-15T23:30:00Z"), event("date", "2026-10-15")];
+  data.events = [event("later", "2026-10-16T00:00:00Z"), event("cross-day", "2026-10-15T23:30:00Z"), event("date", "2026-10-15T12:00:00Z")];
   const params = { from: "2026-10-15", to: "2026-10-15" };
   assert.deepEqual(paginatePublicV2(data, query(params)).list.map(item => item.id), ["cross-day", "date"]);
   assert.deepEqual(paginatePublicV2(data, query({ ...params, timeZone: "Asia/Shanghai" })).list.map(item => item.id), ["date"]);

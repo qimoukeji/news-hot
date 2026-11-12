@@ -84,7 +84,7 @@ async function transition(hook: Hook, id: string, version: string, db?: Db) {
   if (hook === "failure") return markPostFailure(id, version, undefined, db);
   return saveAcceptedPost(id, {
     title: properName("Quota restored"), summary: properName("Official quota update"), receiptId: null,
-    actions: [{ eventId: `event-${id}`, action: "confirm", title: properName("Confirmed"), summary: null, time: null }],
+    actions: [{ eventId: `event-${id}`, action: "confirm", title: properName("Confirmed"), summary: null, time: { kind: "instant" as const, at: "2026-10-01T12:00:00.000Z" } }],
     events: [{ id: `event-${id}`, type: "direct_reset" }], expectedVersion: version, reviewReason: "已保存有效动作，范围仍需核对",
   }, db);
 }

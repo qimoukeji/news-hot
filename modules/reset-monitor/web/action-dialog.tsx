@@ -10,6 +10,7 @@ import { ReviewImpact } from "./review-preview.tsx";
 import { AdminDialog } from "./admin-dialog.tsx";
 import { ActionSources, AddActionSources } from "./action-sources.tsx";
 import { useReviewDetail } from "./use-review-detail.ts";
+import { sourcedConfirmationTime } from "../actions.ts";
 
 export function ActionDialog({ eventId, actionId, onClose, onDone }: { eventId: string; actionId?: string; onClose: () => void; onDone: () => void }) {
   const { adminApiPath } = useMonitor();
@@ -49,9 +50,11 @@ function ActionForm({ detail, actionId, base, onClose, onDone, onBusy, onReload 
   const dirty = !original || factChanged || eventChanged || added.length > 0 || removed.length > 0;
   const removingLastSource = !!originalIds.length && !postIds.length;
   const sourceLessConfirmation = fact.action === "confirm" && !postIds.length && !removingLastSource;
+  const sourcedTime = fact.action === "confirm" ? sourcedConfirmationTime(detail.options.posts.filter(post => postIds.includes(post.id)).map(post => ({ published_at: post.publishedAt }))) : null;
+  const submitted = sourcedTime ? { ...fact, time: sourcedTime } : fact;
   const commands: ReviewCommands = {
     events: { create: [], update: [] },
-    actions: { create: original ? [] : [{ ...fact, localKey: "new-action", eventId: detail.event!.id }], update: original && (factChanged || eventChanged) && !removingLastSource ? [{ id: original.id, ...fact, ...(eventChanged ? { eventId: targetEventId } : {}) }] : [] },
+    actions: { create: original ? [] : [{ ...submitted, localKey: "new-action", eventId: detail.event!.id }], update: original && (factChanged || eventChanged) && !removingLastSource ? [{ id: original.id, ...submitted, ...(eventChanged ? { eventId: targetEventId } : {}) }] : [] },
     sources: {
       add: (original ? added : postIds).map(postId => ({ ...(original ? { actionId: original.id } : { actionKey: "new-action" }), postId })),
       remove: original ? removed.map(postId => ({ actionId: original.id, postId })) : [],
@@ -77,7 +80,7 @@ function ActionForm({ detail, actionId, base, onClose, onDone, onBusy, onReload 
   }}>
     <div className="min-h-0 overflow-y-auto p-4">
       <fieldset disabled={busy || conflict || (!original && detail.event?.withdrawn)} className="min-w-0 space-y-4">
-        <FactFields fullWidthText showHints={false} requiresTime={sourceLessConfirmation} value={fact} initial={!original && !detail.event?.status} onChange={value => { setFact(value.action === "confirm" && !postIds.length && !text(value.title).trim() ? { ...value, title: { zh: "人工核实已生效" } } : value); changed(); }} />
+        <FactFields fullWidthText showHints={false} value={fact} sourcedConfirmAt={sourcedTime?.at} initial={!original && !detail.event?.status} onChange={value => { setFact(value.action === "confirm" && !postIds.length && !text(value.title).trim() ? { ...value, title: { zh: "人工核实已生效" } } : value); changed(); }} />
         {original && <Field label="所属事件"><Select value={targetEventId} disabled={removingLastSource} onChange={event => { setTargetEventId(event.target.value); changed(); }}>{eventOptions.map(event => <option key={event.id} value={event.id}>{text(event.title) || "未命名事件"} · {event.withdrawn ? "已撤回" : event.status ? STATUS[event.status] : "缺少有效动作"}{event.id === original.eventId ? "（当前所属）" : ""}</option>)}</Select></Field>}
         <ActionSources posts={detail.options.posts} selected={postIds} disabled={busy || conflict} canAdd={!detail.event?.withdrawn} onAdd={() => setPickingSources(true)} onRemove={id => { setPostIds(postIds.filter(postId => postId !== id)); changed(); }} />
       </fieldset>

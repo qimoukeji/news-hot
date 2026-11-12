@@ -70,13 +70,13 @@ function ExistingSource({ detail, event, additions, onClose, onBack, onAdd }: { 
   return <form className="flex min-h-0 flex-col" onSubmit={submission => {
     submission.preventDefault(); submission.stopPropagation();
     if (!selected || alreadyLinked(selected) || event.withdrawn) return;
-    const message = onAdd({ key: crypto.randomUUID(), kind: "source", eventId: event.id, actionId: selected.id, ...(canUpdate && updateConfirmation ? { fact: { ...fact, action: "confirm", invalidatesEvent: false } } : {}) });
+    const message = onAdd({ key: crypto.randomUUID(), kind: "source", eventId: event.id, actionId: selected.id, ...(canUpdate && updateConfirmation ? { fact: { ...fact, action: "confirm", invalidatesEvent: false, time: { kind: "instant", at: detail.post!.publishedAt } } } : {}) });
     if (message) setError(message);
   }}>
     <div className="min-h-0 space-y-4 overflow-y-auto p-4"><p className="text-[13px] text-ink-3">目标事件：{text(event.title) || "未命名事件"}</p>
       <fieldset className="space-y-2"><legend className="mb-2 text-[13px] font-medium">选择已有动作</legend>{actions.map(action => <label key={action.id} className="flex items-start gap-2 rounded-control border border-line p-3 text-[13px]"><input type="radio" name="association-action" className="mt-1 shrink-0" disabled={!!event.withdrawn || alreadyLinked(action)} checked={actionId === action.id} onChange={() => { setActionId(action.id); setFact(factOf(action)); setUpdateConfirmation(false); }} /><span className="min-w-0 break-words">{ACTION[action.action]} · {text(action.title)}<span className="mt-1 block text-[12px] text-ink-4">{stamp(action.time)} · {action.sources.length} 条来源{alreadyLinked(action) ? " · 当前帖子已关联或待添加" : ""}</span></span></label>)}</fieldset>
-      {canUpdate && <label className="flex items-start gap-2 text-[13px]"><input type="checkbox" aria-label="同时更新确认内容" className="mt-1" checked={updateConfirmation} onChange={change => setUpdateConfirmation(change.target.checked)} /><span>同时更新确认内容<span className="mt-1 block text-ink-4">补充官方证据时可修正标题、摘要和实际时间，保留此确认动作。</span></span></label>}
-      {canUpdate && updateConfirmation && <FactFields fullWidthText fixedAction showHints={false} value={fact} onChange={setFact} />}
+      {canUpdate && <label className="flex items-start gap-2 text-[13px]"><input type="checkbox" aria-label="同时更新确认内容" className="mt-1" checked={updateConfirmation} onChange={change => setUpdateConfirmation(change.target.checked)} /><span>同时更新确认内容<span className="mt-1 block text-ink-4">可修改标题和摘要。确认时间取来源帖子发布时间。</span></span></label>}
+      {canUpdate && updateConfirmation && <FactFields fullWidthText fixedAction showHints={false} value={fact} sourcedConfirmAt={detail.post!.publishedAt} onChange={setFact} />}
       {error && <p role="alert" className="text-[13px] text-hot">{error}</p>}
     </div>
     <footer className="flex shrink-0 justify-end gap-2 border-t border-line p-4"><Button tone="ghost" onClick={onBack}>返回</Button><Button tone="ghost" onClick={onClose}>取消</Button><Button type="submit" tone="primary" disabled={!selected || !!event.withdrawn || alreadyLinked(selected)}>确定</Button></footer>
@@ -92,13 +92,14 @@ function NewAssociation({ detail, event, onClose, onAdd }: { detail: AdminReview
   return <form className="flex min-h-0 flex-col" onSubmit={submission => {
     submission.preventDefault(); submission.stopPropagation(); if (blocked) return;
     const key = crypto.randomUUID();
-    const message = onAdd(event ? { kind: "action", key, eventId: event.id, fact } : { kind: "event", key, event: draft, fact });
+    const action: ActionFact = fact.action === "confirm" ? { ...fact, time: { kind: "instant", at: detail.post!.publishedAt } } : fact;
+    const message = onAdd(event ? { kind: "action", key, eventId: event.id, fact: action } : { kind: "event", key, event: draft, fact: action });
     if (message) setError(message);
   }}>
     <div className="min-h-0 space-y-4 overflow-y-auto p-4">
       <fieldset disabled={blocked} className="min-w-0 space-y-4">
         {event ? <p className="text-[13px] text-ink-3">目标事件：{text(event.title) || "未命名事件"}</p> : <section aria-label="新事件信息" className="space-y-3"><h3 className="text-[14px] font-medium">事件信息</h3><EventFields requiredTitle value={draft} onChange={patch => setDraft(current => ({ ...current, ...patch }))} /></section>}
-        <section aria-label="关联动作内容" className="space-y-3"><h3 className="text-[14px] font-medium">{event ? "新增动作" : "首个动作"}</h3><FactFields fullWidthText showHints={false} initial={!event?.status} value={fact} onChange={value => { setFact(value); setError(""); }} /></section>
+        <section aria-label="关联动作内容" className="space-y-3"><h3 className="text-[14px] font-medium">{event ? "新增动作" : "首个动作"}</h3><FactFields fullWidthText showHints={false} initial={!event?.status} value={fact} sourcedConfirmAt={detail.post!.publishedAt} onChange={value => { setFact(value); setError(""); }} /></section>
       </fieldset>
       <p className="rounded-control bg-bg-sunk p-3 text-[13px] text-ink-3">来源帖子：{text(detail.post?.title) || "无标题帖子"}</p>
       {error && <p role="alert" className="text-[13px] text-hot">{error}</p>}

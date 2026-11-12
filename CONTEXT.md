@@ -54,6 +54,6 @@ _避免_：重置卡、个人已到账
 
 ## 业务时间
 
-没有明确或可解析时间的预告保存 null，表示时间未公布，不补发帖日期、不继承其他轮次时间、不参与到时推定；amend 缺时间时保存不早于最早有效来源发帖时刻的最近一个 10:00 UTC；confirm、progress 缺时间时使用最早有效来源发帖时刻。总览 hasAnnouncement 区分无预告与时间未公布，未知预告不回退统计预测。
+事件和动作 `time` 必填，只保存 `instant`、`range`、`deadline`。预告只有日期或星期时保存该日 18:00 UTC 的 instant；只有截止日期时保存该日 18:00 UTC 的 deadline；范围缺开始时刻时，当天及之前取发帖时刻，未来日期取 08:00 UTC，缺结束时刻取 18:00 UTC，准确时刻优先。完全没有时间的预告取发帖 UTC 日期 18:00，首次处理已过点取同日 23:59，保存后不重算。解析异常取发帖 UTC 日期 18:00，保留事件动作并进入 needs_attention，不因时间问题丢弃或另挂事件。有来源 confirm 一律使用确认帖发布时间；progress 缺时间用发帖时刻，amend 缺时间用不早于发帖时刻的最近一个 10:00 UTC。详见 [时间写入规则](docs/reset-monitor-time-normalization.md)。
 
-`BusinessTime` 表达原始业务时间的精度，供事件 `time`、动作 `time` 与 `announcedResetTime` 使用，值为 instant、date（包含来源 IANA 时区）、range 或 deadline 对象。自动推定确认的生效时刻取预告到期边界：时刻与截止取 at、区间取 through、纯日期取当天北京时间18点；该时刻属于推定结果，不改变原始预告。`resetTime` 是最近一次有效确认的单一生效时刻，`predictedResetTime` 是该时刻加典型间隔的单点预测，两者均为 UTC ISO 8601 字符串或 null。发布时间等记录时间与生效时刻分别表达。
+`BusinessTime` 是事件与动作已经确定的业务时间，仅含 instant、range、deadline。有效预告的 announcedResetTime 直接取预告动作 time，无预告时为 null。自动推定确认取 instant/deadline 的 at 或 range 的 through，保存新的 instant；不改原预告。`resetTime` 是最新有效确认的单点时间，`predictedResetTime` 为该点加典型间隔，两者为 UTC ISO 字符串或 null。发布时间与业务时间分别表达。

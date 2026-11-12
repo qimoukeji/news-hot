@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { chromium, expect, type Browser } from "@playwright/test";
 import { startWebServer, type WebServer } from "./web-server.ts";
-import { createMonitorFixture, day } from "./fixtures/reset-monitor.ts";
+import { at, createMonitorFixture, day, instant } from "./fixtures/reset-monitor.ts";
 
 const fixture = createMonitorFixture();
 let web: WebServer;
@@ -43,7 +43,7 @@ test("bonus review uses common actions and explicitly marks a cancellation amend
       assert.equal(draft.invalidatesEvent, false);
       assert.equal("result" in draft, false);
       assert.equal("scope" in draft, false);
-      assert.equal(draft.time, null);
+      assert.deepEqual(draft.time, instant(at));
     }
     for (const action of ["cancel", "close", "expire", "reopen", "restore"]) await expect(page.getByLabel("动作", { exact: true }).last().locator(`option[value="${action}"]`)).toHaveCount(0);
     await page.getByLabel("动作", { exact: true }).last().selectOption("amend");

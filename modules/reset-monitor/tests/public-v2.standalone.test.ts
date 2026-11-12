@@ -14,11 +14,11 @@ import { fixture, addAction, at } from "./action-fixture.ts";
 const now = Date.parse("2026-10-15T00:00:00Z"),
   read = (input = fixture()) => projectPublicV2(input, codex, now);
 
-test("action time preserves precision and defaults to source publication time", () => {
-  for (const time of [null, "2026-10-09T01:25:00Z", "2026-10-09", "2026-10-09T01:00:00Z/2026-10-09T03:00:00Z"]) {
+test("action time preserves saved precision without read-time defaults", () => {
+  for (const time of ["2026-10-09T01:25:00Z", "2026-10-09T18:00:00Z", "2026-10-09T01:00:00Z/2026-10-09T03:00:00Z"]) {
     const input = fixture(); input.actions[0]!.time = bt(time);
     const update = read(input).events[0]!.updates[0]!;
-    assert.deepEqual(update.time, bt(time ?? at));
+    assert.deepEqual(update.time, bt(time));
     assert.equal(update.publishedAt, at);
     assert.equal(eventUpdateSchema.safeParse({ ...update, time: "not-a-business-time" }).success, false);
     assert.equal(eventUpdateSchema.safeParse({ ...update, time: null }).success, false);
@@ -91,7 +91,7 @@ test("confirmation replaces planned timing and later progress cannot undo comple
     time: bt("2026-10-21T00:00:00Z"),
   });
   assert.equal(read(input).events[0]!.status, "completed");
-  assert.deepEqual(read(input).resetTime, "2026-10-11T00:00:00.000Z");
+  assert.deepEqual(read(input).resetTime, "2026-10-11T00:00:00Z");
   assert.deepEqual(read(input).announcedResetTime, null);
 });
 test("different progress and amendment facts stay separate", () => {
@@ -123,7 +123,7 @@ test("removing the last confirmation source recomputes accepted actions", () => 
   input.actions[0]!.action = "announce";
   addAction(input, "c", "confirm", "2026-10-11T00:00:00Z");
   assert.equal(read(input).events[0]!.status, "completed");
-  input.actions.find(action => action.id === "c")!.sources = [];
+  input.actions = input.actions.filter(action => action.id !== "c");
   assert.equal(read(input).events[0]!.status, "announced");
   for (const action of input.actions) action.sources = [];
   assert.equal(reduceEvent(input.events[0]!, input), null);
@@ -148,12 +148,12 @@ test("bonus lifecycle uses shared completion and progress without clock changes"
   );
   assert.equal(read(input).statistics.resetsLast30Days, 0);
 });
-test("actual dates and UTC intervals preserve their precision", () => {
+test("publication preserves a saved plan and UTC conversion is a write operation", () => {
   const input = fixture();
-  input.actions[0]!.time = bt("2026-10-09");
-  assert.deepEqual(read(input).events[0]!.time, bt("2026-10-09"));
-  input.actions[0]!.time = bt("2026-10-10T18:00:00+08:00");
-  assert.deepEqual(read(input).events[0]!.time, bt("2026-10-10T10:00:00Z"));
+  input.actions[0]!.action = "announce";
+  input.actions[0]!.time = bt("2026-10-09T18:00:00.000000000Z");
+  assert.deepEqual(read(input).events[0]!.time, input.actions[0]!.time);
+  assert.deepEqual(read(input).announcedResetTime, input.actions[0]!.time);
   assert.deepEqual(
     normalizePublicTime(bt("2026-10-10T18:00:00+08:00/2026-10-10T19:00:00+08:00")),
     bt("2026-10-10T10:00:00Z/2026-10-10T11:00:00Z"),

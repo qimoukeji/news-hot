@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { chromium, expect, type Browser } from "@playwright/test";
 import { startWebServer, type WebServer } from "./web-server.ts";
-import { createMonitorFixture, at, day, platforms, instant, date, range } from "./fixtures/reset-monitor.ts";
+import { createMonitorFixture, at, day, platforms, instant, dayInstant, range } from "./fixtures/reset-monitor.ts";
 import { beijingDate } from "@aihot/contracts/time";
 import { formatBusinessTime } from "../../../modules/reset-monitor/business-time.ts";
 
@@ -22,12 +22,11 @@ for (const product of platforms) test(`${product.product} announcement keeps bus
   try {
     for (const [value, headline] of [
       [range("2026-10-31T05:42:26Z", "2026-11-02T05:42:26Z"), "13:42 前重置"],
-      [date("2026-11-02"), "11月2日"],
-      [date("2026-11-02", "America/Los_Angeles"), "11月2日"],
+      [dayInstant("2026-11-02"), "11月3日 02:00"],
       [instant("2026-12-31T23:59:07.123Z"), "1月1日 07:59"],
       [{ kind: "deadline", at: "2026-11-02T05:42:26Z" }, "11月2日 13:42 之前"],
     ] as const) {
-      fixture.state.actionTimes = [value, null];
+      fixture.state.actionTimes = [value, instant(at)];
       await page.goto(`${web.origin}${product.path}/history/${day}`);
       if (value.kind === "range") await expect(page.getByRole("region", { name: "公开预告", exact: true }).getByText(formatBusinessTime(value), { exact: true })).toBeVisible();
       await expect(page.getByRole("region", { name: "公开预告", exact: true }).locator("p").first()).toHaveText(headline);
@@ -46,7 +45,7 @@ for (const width of [320, 1280]) for (const theme of ["light", "dark"]) test(`ra
   await page.addInitScript(theme => localStorage.setItem("aihot-theme", theme), theme);
   await page.clock.install({ time: new Date("2026-11-02T15:59:50Z") });
   fixture.state.status = "announced";
-  fixture.state.actionTimes = [range("2026-10-31T05:42:26Z", "2026-11-02T16:30:26Z"), null];
+  fixture.state.actionTimes = [range("2026-10-31T05:42:26Z", "2026-11-02T16:30:26Z"), instant(at)];
   try {
     await page.goto(`${web.origin}/codex-reset?month=2026-11`);
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
@@ -68,7 +67,7 @@ test("range announcement and exact endpoints are available before hydration", as
   const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
   const page = await context.newPage();
   fixture.state.status = "announced";
-  fixture.state.actionTimes = [range("2020-01-01T00:00:00Z", "2020-01-02T02:30:26Z"), null];
+  fixture.state.actionTimes = [range("2020-01-01T00:00:00Z", "2020-01-02T02:30:26Z"), instant(at)];
   try {
     await page.goto(`${web.origin}/codex-reset?month=2026-11`);
     const card = page.getByRole("region", { name: "公开预告", exact: true });
@@ -83,8 +82,8 @@ for (const product of platforms) test(`${product.product} public and admin timel
   await page.route(`${web.origin}/**`, route => route.continue()); // Each fixture edit must fetch fresh page data.
   fixture.state.actionPublishedAt = ["2026-10-22T16:31:07Z", "2026-10-22T16:30:06Z"];
   try {
-    for (const time of [instant("2026-10-25T02:15:00Z"), date("2026-10-25"), range("2026-10-25T02:15:00Z", "2026-10-25T04:45:00Z"), null]) {
-      fixture.state.actionTimes = [time, null];
+    for (const time of [instant("2026-10-25T02:15:00Z"), dayInstant("2026-10-25"), range("2026-10-25T02:15:00Z", "2026-10-25T04:45:00Z")]) {
+      fixture.state.actionTimes = [time, instant(at)];
       for (const path of [`${product.path}/history/${day}`, `${product.admin}?kind=events`]) {
         await page.goto(`${web.origin}${path}`);
         const row = page.locator("li").filter({ has: page.getByRole("heading", { name: /额度活动预告$/ }) });
@@ -286,19 +285,19 @@ test("a public announcement takes precedence over prediction and keeps the last 
   } finally { fixture.state.status = "completed"; fixture.state.predictedResetTime = "2026-10-28T00:00:00Z"; await page.close(); }
 });
 
-for (const product of platforms) test(`${product.product} unknown announcement stays public without using the prediction`, async () => {
+for (const product of platforms) test(`${product.product} saved announcement default stays public without using the prediction`, async () => {
   const page = await browser.newPage();
   fixture.state.status = "announced";
-  fixture.state.actionTimes = [null, null];
+  fixture.state.actionTimes = [dayInstant("2026-10-22"), instant(at)];
   fixture.state.predictedResetTime = "2030-01-01T00:00:00Z";
   try {
     await page.goto(`${web.origin}${product.path}/history/${day}`);
     const announcement = page.getByRole("region", { name: "公开预告", exact: true });
     await expect(announcement).toHaveAttribute("data-forecast-state", "announced");
-    await expect(announcement.locator("p").first()).toHaveText("时间未公布");
+    await expect(announcement.locator("p").first()).toHaveText("10月23日 02:00");
     await expect(page.getByRole("region", { name: "预估时间", exact: true })).toHaveCount(0);
     const list = page.getByRole("region", { name: "事件列表" });
-    await expect(list.getByText("时间未公布", { exact: true }).first()).toBeVisible();
+    await expect(list.getByText("时间未公布", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: `${day}，1 个事件`, exact: true })).toBeVisible();
   } finally {
     fixture.state.status = "completed"; fixture.state.actionTimes = undefined;
@@ -309,7 +308,7 @@ for (const product of platforms) test(`${product.product} unknown announcement s
 for (const product of platforms) test(`${product.product} forecast follows the API when dates elapse or forecast data is missing`, async () => {
   const page = await browser.newPage();
   fixture.state.status = "announced";
-  fixture.state.actionTimes = [instant("2020-01-01T05:42:26Z"), null];
+  fixture.state.actionTimes = [instant("2020-01-01T05:42:26Z"), instant(at)];
   fixture.state.predictedResetTime = "2030-01-01T00:00:00Z";
   await page.route(`${web.origin}/**`, route => route.continue());
   try {

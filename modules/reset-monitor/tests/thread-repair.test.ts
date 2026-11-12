@@ -20,7 +20,7 @@ function fixture(): ThreadRepairSnapshot {
     posts: [saved("101"), saved("104"), saved("103", { quoted_post: { id: "102", author, relation: "quote", text: "Post 102", publishedAt: at, url: `https://x.com/${author}/status/102` }, processing_status: "needs_attention", review_reason: "Missing context", model_receipt_id: 39 })],
     events: [{ id: "existing-event", type: "direct_reset", title: null, summary: null, scope: null, withdrawn: false, created_at: at, updated_at: at }],
     actions: [{ id: "existing-action", event_id: "existing-event", sequence: 1, action: "announce", invalidates_event: false,
-      title: { en: "Announced" }, summary: null, time: null, sources: [{ postId: "101" }], created_at: at, updated_at: at }],
+      title: { en: "Announced" }, summary: null, time: { kind: "instant", at: "2026-10-28T18:00:00Z" }, sources: [{ postId: "101" }], created_at: at, updated_at: at }],
   };
 }
 const options = { receiptIds: [35], targetPostIds: ["102", "103"] };
@@ -53,7 +53,7 @@ test("new source and relevant fact changes invalidate a reviewed fingerprint, un
   assert.notEqual(threadRepairPlan(changed, options).fingerprint, original);
   const unrelated = fixture(); unrelated.posts[1]!.updated_at = "2026-10-29T02:00:00Z";
   assert.equal(threadRepairPlan(unrelated, options).fingerprint, original);
-  const action = fixture(); action.actions[0]!.time = bt("2026-10-28");
+  const action = fixture(); action.actions[0]!.time = bt("2026-10-29");
   assert.notEqual(threadRepairPlan(action, options).fingerprint, original);
 });
 test("an unconfigured author cannot be restored as an official target", () => {

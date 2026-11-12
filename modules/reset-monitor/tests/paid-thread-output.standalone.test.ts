@@ -61,7 +61,7 @@ test("unverified associations are passed to the saving layer without inventing a
   const facts = input("101", "102");
   const event = (id: string): ThreadRecognitionInput["events"][number] => ({
     id, kind: "direct_reset", status: "completed", publishedAt: material(id).publishedAt, title: title.zh,
-    summary: null, time: null, scope: { type: "unknown", note: null }, sourcePostIds: [], actions: [],
+    summary: null, time: { kind: "instant", at: material(id).publishedAt }, scope: { type: "unknown", note: null }, sourcePostIds: [], actions: [],
   });
   facts.events = [event("event-a"), { ...event("event-b"), actions: [{
     id: "action-b", action: "confirm", sequence: 1, invalidatesEvent: false, title: title.zh, summary: null,
