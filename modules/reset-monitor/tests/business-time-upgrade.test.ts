@@ -37,7 +37,8 @@ test("a scalar database upgrades through backup, preview, resumable apply and gu
   const commandPaths = [dumpCommand, restoreCommand].filter(command => path.isAbsolute(command)).map(command => path.dirname(command));
   const env = { ...process.env, PATH: [...commandPaths, process.env.PATH ?? ""].join(path.delimiter), DATABASE_URL: urlOf(databaseName), MODEL_CALLS_ENABLED: "false", COLLECT_ENABLED: "false", WEBHOOK_PUSH_ENABLED: "false", INDEXNOW_SUBMIT_ENABLED: "false", PGPASSWORD: "" };
   const cli = (...args: string[]) => promisify(execFile)(process.execPath, ["modules/reset-monitor/scripts/migrate-business-time.ts", ...args],
-    { cwd: root, env, encoding: "utf8", windowsHide: true, timeout: 30_000 });
+    // Apply performs a complete backup restore. Allow for contention with other database test files.
+    { cwd: root, env, encoding: "utf8", windowsHide: true, timeout: 90_000 });
   const output = (name: string) => path.join(directory, name);
   try {
     await admin`CREATE DATABASE ${admin(databaseName)}`;
