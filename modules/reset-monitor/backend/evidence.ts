@@ -45,16 +45,27 @@ export function bankedRoundCounts(excerpt: string): { completed: number; total: 
   return Number.isSafeInteger(completed) && Number.isSafeInteger(total) ? { completed, total } : null;
 }
 
+const accountArrival = /(?:\s*,\s*|\s+(?:and|but)\s+)(?=(?:(?:it|they)\s+)?(?:should|will|(?:is|are) expected to)\s+(?:land|arrive|appear|show up)\s+(?:in|on)\b)|[，,]\s*(?=(?:预计|預計|等待|等候)[^，,。]*到[账帳賬])/i;
+const activatedResetCredit = /\b(?:banked resets?|reset (?:credits?|cards?))\s+(?:(?:has|have)\s+(?:(?:already|just)\s+)?been|is|are|was|were)\s+(?:(?:already|just|now)\s+)?activated\b|(?:重置卡|(?:存储|儲存|可存储|可儲存)重置)(?:已经|已經|已)\s*(?:激活|啟用|启用)/i;
+
 /** Inspect the completed assertion rather than an adjacent question or usage instruction. */
 export function confirmsCompletedAction(excerpt: string, verifiedBankedEvent = false, kind?: Proposition["kind"]): boolean {
   const clauses = excerpt.match(/[^.!?。！？;；\n]+[.!?。！？;；]?/g) ?? [];
-  const completedClauses = clauses.filter(clause => {
+  const isCompletedAssertion = (clause: string) => {
     if (/[?？]/.test(clause) || /\b(?:will|would|should|soon|coming|tomorrow|scheduled|planned|expected|if|unless|maybe|perhaps|might|could|not|never|haven['’]t|hasn['’]t|isn['’]t|aren['’]t|wasn['’]t|weren['’]t|didn['’]t|can['’]t|won['’]t)\b|尚未|还未|還未|没有|沒有|并未|並未|将会|將會|如果/i.test(clause)) return false;
     if (/\b(?:feel(?:ing)?|felt|slept|sleep|youth)\b|感觉|感覺|睡醒/i.test(clause)) return false;
     if (/\b(?:my|mine)\b|我的/i.test(clause)) return false;
     if (/\bi\b|我已/i.test(clause) && !/\b(?:all\s+(?:users|accounts|subscriptions)|everyone|users)\b|所有|全部|用户|用戶/i.test(clause)) return false;
     return true;
-  });
+  };
+  // Activation is a fact about the card; account delivery can still be in the future.
+  if (kind === "reset_credit" && clauses.some(clause => {
+    if (/[?？]/.test(clause)) return false;
+    const activation = clause.split(accountArrival, 1)[0]!;
+    return activatedResetCredit.test(activation) && isCompletedAssertion(activation)
+      && !/\b(?:no|once|when|after|later|next)\b|(?:一旦|只要|等到|待到|才会|才會|才可|之后|之後|后才|後才|下周|下週)/i.test(activation);
+  })) return true;
+  const completedClauses = clauses.filter(isCompletedAssertion);
   // Present distribution plus present redemption establishes delivery, not a reset of usage.
   if (kind === "reset_credit"
     && completedClauses.some(clause => /\bwe(?:['’]re|\s+are)\s+(?:giving|issuing|granting)\b/i.test(clause) && /\bresets?\b|重置/i.test(clause)

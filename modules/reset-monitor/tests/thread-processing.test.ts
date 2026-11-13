@@ -11,6 +11,7 @@ import { storeCollectedPost, sourcePost, loadActionInput } from "../backend/acti
 import { applyOfflineRecognition, applyRecognitionGroup } from "../backend/assemble.ts";
 import { processPending } from "../backend/thread-processing.ts";
 import { publicV2Snapshot } from "../backend/public-v2.ts";
+import { sweepConfirmationResults } from "../backend/webhook-events.ts";
 import { monitorPostDetail, previewMonitorReview, submitMonitorReview } from "../backend/manual-review.ts";
 import type { ActionRecognitionBody, ThreadRecognitionInput } from "../backend/recognize.ts";
 import { threadOutputSchema } from "../backend/recognize.ts";
@@ -22,6 +23,8 @@ const posts = {
   "102": { text: "The usage reset lands Oct 29 at 10:00 UTC.", at: "2026-10-29T08:01:00Z" },
   "103": { text: "The usage reset is completed.", at: "2026-10-29T09:00:00Z" },
   "104": { text: "A new website is available.", at: "2026-10-29T09:30:00Z" },
+  "105": { text: "We shipped some good updates to dots today and the banked reset has been activated and should land in everyones accounts sometime soon!", at: "2026-11-12T21:59:39Z" },
+  "106": { text: "We will issue a banked reset on Thursday.", at: "2026-11-11T06:57:08Z" },
 };
 function bodyFor(id: string, existingEventId: string | null = null): ActionRecognitionBody {
   const post = posts[id as keyof typeof posts];
@@ -224,6 +227,38 @@ test("a confirmation flagged by fact checks is visible and can be corrected on t
   assert.equal(corrected.updates[0]!.action, "announce"); assert.equal(corrected.status, "announced");
   assert.equal((await sourcePost("101"))!.processing_status, "processed");
   const before = model.hits(); await processPending(); assert.equal(model.hits(), before);
+}));
+
+test("official banked-reset activation upgrades the existing inferred confirmation and anchors the overview", async () => inMonitor(codex, async () => {
+  await seed(["106"]);
+  const first = (await sourcePost("106"))!;
+  const announce = bodyFor("106");
+  await applyOfflineRecognition(first.id, { ...announce, actions: [{ ...announce.actions[0]!, kind: "reset_credit", timeExcerpt: "Thursday" }] }, first.version);
+  await sweepConfirmationResults([codex], Date.parse("2026-11-12T18:00:01Z"));
+  const before = await publicV2Snapshot(Date.parse(posts["105"].at));
+  const [event] = before.events;
+  const inferred = event!.updates.find(action => action.action === "confirm")!;
+  assert.deepEqual(inferred.sources, []);
+  assert.equal(event!.status, "completed");
+
+  await seed(["105"]);
+  adjustOutput = (_id, body) => ({ actions: [{ ...body.actions[0]!, kind: "reset_credit", action: "confirm" }] });
+  const result = await processPending();
+  assert.equal(inputs[0]?.events[0]?.id, event!.id, "the prior announcement remains visible to the recognizer");
+  assert.equal(result.modelCalls, 1);
+  assert.equal(result.reviewed, 0);
+  assert.equal((await sourcePost("105"))!.processing_status, "processed");
+  const snapshot = await publicV2Snapshot(Date.parse(posts["105"].at));
+  const [completed] = snapshot.events;
+  assert.equal(snapshot.events.length, 1);
+  assert.equal(completed!.id, event!.id);
+  assert.equal(completed!.status, "completed");
+  assert.equal(completed!.updates.length, 2);
+  const official = completed!.updates.find(action => action.id === inferred.id)!;
+  assert.equal(official.action, "confirm");
+  assert.deepEqual(official.sources.map(source => source.postId), ["105"]);
+  assert.equal(snapshot.resetTime, new Date(posts["105"].at).toISOString());
+  assert.equal(snapshot.statistics.cardsLast30Days, 1);
 }));
 
 test("recognizable type conflicts and incomplete fields preserve the model action and other posts", async () => inMonitor(codex, async () => {

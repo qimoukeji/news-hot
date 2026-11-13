@@ -77,3 +77,29 @@ test("explicit deliveries and availability keep their existing completion eviden
   assert.equal(confirmsCompletedAction("Banked 1/2", true, "reset_credit"), true);
   assert.equal(confirmsCompletedAction("Banked 1/2", false, "reset_credit"), false);
 });
+
+test("activation confirms the reset card even when accounts are still waiting for it", () => {
+  for (const source of [
+    "We shipped some good updates to dots today and the banked reset has been activated and should land in everyones accounts sometime soon!",
+    "The banked reset has already been activated.",
+    "Reset cards were activated, but unrelated work continues.",
+    "存储重置已激活，等待到账。",
+    "重置卡已啟用，預計稍後到帳。",
+  ]) assert.equal(completed(source), true, source);
+  assert.equal(confirmsCompletedAction("The banked reset has been activated.", false, "direct_reset"), false);
+});
+
+test("only a definite activation of the reset card can confirm it", () => {
+  for (const source of [
+    "The banked reset will be activated and should land in accounts soon.",
+    "The banked reset has not been activated and should land in accounts soon.",
+    "If the banked reset has been activated, it should land in accounts soon.",
+    "The banked reset is activated after approval.",
+    "The banked reset has been activated and should land in accounts soon?",
+    "My banked reset has been activated.",
+    "The reset button has been activated.",
+    "The new feature has been activated and the banked reset should land in accounts soon.",
+    "The banked reset is still rolling out.",
+    "重置卡尚未激活，预计很快到账。",
+  ]) assert.equal(completed(source), false, source);
+});

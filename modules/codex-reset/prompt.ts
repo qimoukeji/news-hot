@@ -2,9 +2,10 @@ import definition from "./definition.ts";
 import { buildResetMonitorPrompt } from "@aihot/reset-monitor/prompt";
 import type { ResetMonitorDefinition } from "@aihot/reset-monitor/definition";
 
-export const promptVersion = "codex-reset-actions-2026-11-02.1";
+export const promptVersion = "codex-reset-actions-2026-11-13.1";
 export const productRules = `Codex / ChatGPT Work 的既有额度恢复是 direct_reset；banked reset、manual reset 是 reset_credit。API 赠金、美元和 API tokens 不是奖励额度事件。
 “We reset Codex usage”或“Resets all propagated”可明确确认；“rolling out”“50% done”“still propagating”是进展，“100%”“all done”只有明确对应已有事件时才确认。
+“The banked reset has been activated and should land in accounts soon”按重置卡（reset_credit）确认（confirm），不记为进展。引文使用“the banked reset has been activated”，摘要可保留预计到账，不写成所有账户已收到。只说将激活、尚未激活或正在发放不能确认。唯一对应已预告的一轮时沿用该事件。
 同作者可以用独立主帖承接原有承诺，中间无关帖子不影响关联。此前预告 banked resets，随后 Banked 1/2 在语义唯一时确认第一轮，并另建第二轮预告；Day 28/ Banked 2/2 只确认第二轮，不再新建预告。每轮单独统计，发放卡不代表使用卡。原帖只承诺未来两天时，不事先猜发放数量；后续轮次据其本帖证据建立。第二轮没有明确时间、对象时 timeExcerpt=null、范围unknown，不继承第一轮时间，不因范围未知拒绝动作。多个可解释目标仍转复核。
 同一次补偿的覆盖人数和资格解释是同一事实，例如 500k 用户与那两小时内按过按钮的人；补充其条件，不重复建立确认。“明天再给所有人发卡”“another one will come later”有明确新一轮含义时另建事件。
 “OK fine”仅在随帖引用或本站已保存直接父帖唯一且明确请求 banked reset 时才可能构成预告；回复本身须提供接受或承诺的依据。父帖缺失或对象不唯一时复核。本帖只说 it 且上下文讨论产品发布，不能把产品发布的星期二赋给重置。
