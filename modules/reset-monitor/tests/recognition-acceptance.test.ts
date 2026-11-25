@@ -73,16 +73,16 @@ for (const definition of definitions) {
 
   test(`${definition.monitorId}: a valid action survives another fact requiring review and is not retried`, async () => inMonitor(definition, async () => {
     const valid = "We reset usage for everyone.", invalid = "We will reset usage tomorrow.";
-    const saved = await post(definition, `${valid} ${invalid}`), answer = response(valid);
+    const saved = await post(definition, `${valid} Another update is coming tomorrow.`), answer = response(valid);
     answer.needsReview = true;
-    answer.actions.push({ ...structuredClone(answer.actions[0]!), localEventKey: "unresolved", excerpt: invalid });
+    answer.actions.push({ ...structuredClone(answer.actions[0]!), localEventKey: "unresolved", action: "announce", excerpt: invalid });
     const applied = await applyOfflineRecognition(saved.id, answer, saved.version);
     let input = await loadActionInput();
     assert.equal(input.actions.length, 1);
     assert.equal(input.events.length, 1);
     assert.equal(applied.eventIds.length, 1);
     assert.equal(input.posts[0]!.processing_status, "needs_attention");
-    assert.match(input.posts[0]!.review_reason!, /预期或否定/);
+    assert.match(input.posts[0]!.review_reason!, /动作缺少本帖明确依据/);
     assert.equal(input.posts[0]!.title!.zh, answer.title.zh);
     await applyOfflineRecognition(saved.id, answer, saved.version);
     input = await loadActionInput();
@@ -274,7 +274,8 @@ test("different event kinds cannot share a local group and a rejected initial ac
   assert.equal(input.events[0]!.type, "direct_reset");
   assert.equal(input.actions.length, 1);
   assert.equal((await sourcePost(saved.id))!.processing_status, "needs_attention");
-  const rejected = await post(codex, "It is done. The event changed."), bad = response("It is done.");
+  const rejected = await post(codex, "The event changed."), bad = response("We will reset usage tonight.");
+  bad.actions[0]!.action = "announce";
   bad.actions.push({ ...structuredClone(bad.actions[0]!), action: "progress", excerpt: "The event changed." });
   await applyOfflineRecognition(rejected.id, bad, rejected.version);
   assert.equal((await loadActionInput()).events.length, 1);

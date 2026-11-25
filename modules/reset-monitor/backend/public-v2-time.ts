@@ -220,41 +220,6 @@ export function isUsageTime(excerpt: string, postText: string): boolean {
   return false;
 }
 
-const quotaObject = /\b(?:resets?|credits?|quotas?|rewards?)\b|重置卡|额度|額度/i;
-const issuanceVerb = "(?:issue|grant|give|distribute|deliver|credit|receive)";
-const issuedVerb = "(?:issued|granted|given|distributed|delivered|credited|received)";
-const issuingVerb = "(?:issuing|granting|giving|distributing|delivering|crediting|receiving)";
-const issuanceObject = "\\b(?!\\s+(?:(?:an?|the|more|new)\\s+)*(?:updates?|statements?|instructions?|announcements?|details|notices?)\\b)";
-const futureIssuance = new RegExp(`(?:\\b(?:will|plans?\\s+to)\\s+|(?:\\b(?:is|are)|['’](?:s|re))\\s+(?:going|scheduled|set)\\s+to\\s+|['’]ll\\s+)(?:soon\\s+)?(?:${issuanceVerb}|be\\s+(?:${issuedVerb}|${issuingVerb}))${issuanceObject}|(?:将|將|定于|定於)[^，,]{0,40}(?:发放|發放|下发|下發)`, "i");
-const ongoingIssuance = new RegExp(`(?:\\b(?:is|are|am)|['’](?:s|re|m))\\s+(?:${issuingVerb}|being\\s+${issuedVerb})${issuanceObject}`, "i");
-const completedIssuance = new RegExp(`\\b(?:(?:we|they|I)(?:['’]ve|\\s+have)?\\s+(?:(?:already|just)\\s+)?(?:${issuedVerb}|gave)|(?:was|were|(?:has|have)\\s+(?:(?:already|just)\\s+)?been)\\s+(?:(?:already|just)\\s+)?${issuedVerb}|already\\s+available)\\b|已(?:经|經)?\\s*(?:发放|發放|下发|下發)`, "i");
-
-/** Check a verified action excerpt without a model time quote. The post anchors dates on ongoing issuance. */
-export function hasExplicitFutureIssuance(actionExcerpt: string, post?: PublicV2PostRow): boolean {
-  if (/[?？]|^\s*(?:if\b|unless\b|如果|除非)/i.test(actionExcerpt)) return false;
-  const clauses = timeClauses(actionExcerpt);
-  if (clauses.some(clause => completedIssuance.test(clause))) return false;
-  return clauses.some(clause => {
-    if (!quotaObject.test(clause)
-      || /\b(?:if|unless|maybe|perhaps|might|could|would|not|never)\b|(?:won|isn|aren)['’]t|如果|除非|可能|不(?:会|會|再)|尚未/i.test(clause)) return false;
-    if (futureIssuance.test(clause)) return true;
-    const date = calendarTime.exec(clause);
-    if (!post || !date) return false;
-    const before = clause.slice(0, date.index);
-    const issuing = ongoingIssuance.exec(before);
-    if (!issuing || !/\bon\s*$/i.test(before)
-      || /\b(?:who|whose|when|once|after|before|to\s+use|for\s+use)\b/i.test(before.slice(issuing.index + issuing[0].length))
-      || usageAt(before, clause.slice(date.index + date[0].length))) return false;
-    const published = new Date(post.published_at);
-    if (!Number.isFinite(published.getTime())) return false;
-    const activityAnchor = published.toISOString();
-    // This is evidence of a future plan only if the date is ahead without rolling the year forward.
-    const resolved = resolveSourceTime(clause.slice(date.index),
-      { activityAnchor, postText: post.text, activityText: clause, deadline: false, sameYear: true });
-    return resolved !== null && resolved.time.kind !== "unknown" && isFutureSourceTime(resolved.time, activityAnchor);
-  });
-}
-
 /** Normalize date-only source excerpts without replacing clocks or other clauses. */
 function dateOnlyWords(excerpt: string): string {
   return excerpt.replace(/(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号號]/g, (source, year, month, day) =>

@@ -68,9 +68,11 @@ test("offline and paid acceptance share identical action, scope and time checks"
   assert.equal((await sql`SELECT status FROM receipts`)[0]!.status, "completed");
 }));
 
-test("offline fabricated excerpts remain visible for review", async () => inMonitor(codex, async () => {
+test("offline fabricated announcement excerpts remain visible for review", async () => inMonitor(codex, async () => {
   const saved = await post("We will reset usage tomorrow.");
-  await applyOfflineRecognition(saved.id, response(), saved.version);
+  const answer = response();
+  answer.actions[0]!.action = "announce";
+  await applyOfflineRecognition(saved.id, answer, saved.version);
   const row = await sourcePost(saved.id);
   assert.equal(row!.processing_status, "needs_attention");
   assert.match(row!.review_reason!, /本帖明确依据/);
@@ -78,18 +80,20 @@ test("offline fabricated excerpts remain visible for review", async () => inMoni
   assert.equal((await loadActionInput()).events.length, 0);
 }));
 
-test("plural resets explicitly propagated can confirm, while a future reset remains review", async () => inMonitor(codex, async () => {
+test("explicit future announcements remain announcements alongside confirmations", async () => inMonitor(codex, async () => {
   const completed = await post("Resets all propagated. Have a fantastic weekend.");
   await applyOfflineRecognition(completed.id, response("Resets all propagated."), completed.version);
   assert.equal((await sourcePost(completed.id))!.processing_status, "processed");
   assert.equal((await publicV2Snapshot()).events[0]!.status, "completed");
   const future = await post("Resets will land tomorrow.");
-  await applyOfflineRecognition(future.id, response("Resets will land tomorrow."), future.version);
-  assert.equal((await sourcePost(future.id))!.processing_status, "needs_attention");
-  assert.equal((await loadActionInput()).events.length, 1);
+  const announcement = response("Resets will land tomorrow.");
+  announcement.actions[0]!.action = "announce";
+  await applyOfflineRecognition(future.id, announcement, future.version);
+  assert.equal((await sourcePost(future.id))!.processing_status, "processed");
+  assert.deepEqual((await publicV2Snapshot()).events.map(event => event.status).sort(), ["announced", "completed"]);
 }));
 
-test("a quoted post cannot establish the outer action's audience", async () => inMonitor(codex, async () => {
+test("a quoted post cannot establish an announcement’s audience", async () => inMonitor(codex, async () => {
   const grant = "We have added one banked reset to every account.", borrowed = "Only affected subscribers are eligible.";
   const saved = await post(grant);
   await sql`UPDATE monitor_source_posts SET quoted_post=${sql.json({ id: "quoted-scope", author: "another_author", relation: "quote",
@@ -97,6 +101,7 @@ test("a quoted post cannot establish the outer action's audience", async () => i
     WHERE monitor_id=${codex.monitorId} AND id=${saved.id}`;
   const answer = response(grant), action = answer.actions[0]!;
   action.kind = "reset_credit";
+  action.action = "announce";
   action.scope = { type: "selected_users", note: localized("Affected subscribers") };
   action.scopeExcerpt = borrowed;
   await applyOfflineRecognition(saved.id, answer, (await sourcePost(saved.id))!.version);
@@ -105,13 +110,15 @@ test("a quoted post cannot establish the outer action's audience", async () => i
   assert.equal((await loadActionInput()).events.length, 0);
 }));
 
-test("offline bare reply without saved parent cannot establish a reset", async () => inMonitor(codex, async () => {
+test("offline confirmation without the parent keeps an unresolved reply in review", async () => inMonitor(codex, async () => {
   const saved = await post("Done.", { postId: "missing-parent", author: "another_author" });
   const answer = response("Done.");
   answer.actions[0]!.role = "answer";
   answer.actions[0]!.kindExplicit = false;
   await applyOfflineRecognition(saved.id, answer, saved.version);
-  assert.equal((await sourcePost(saved.id))!.processing_status, "needs_attention");
+  const reviewed = (await sourcePost(saved.id))!;
+  assert.equal(reviewed.processing_status, "needs_attention");
+  assert.match(reviewed.review_reason!, /父帖或引用上下文/);
   assert.equal((await loadActionInput()).actions.length, 0);
 }));
 
@@ -127,7 +134,7 @@ test("offline input rejects extra receipt metadata and preserves stale post edit
 
 test("offline instructions contain the bound product rules and strict formal contract", () => inMonitor(codex, () => {
   const prompt = recognitionPrompt();
-  assert.match(prompt, /Every action must quote a literal excerpt from the CURRENT post/);
+  assert.match(prompt, /Announce, progress and amend must quote a literal excerpt from the CURRENT post/);
   assert.match(prompt, /invalidatesEvent/);
   assert.match(prompt, /Codex/i);
   assert.match(prompt, /"localEventKey"/);

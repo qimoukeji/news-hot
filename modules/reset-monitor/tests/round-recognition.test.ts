@@ -192,6 +192,7 @@ for (const relation of ["reply", "quote"] as const) test(`pending numbered ${rel
 function assertIndependentReview(before: ActionInput, after: ActionInput, postId: string, kinds: string[]) {
   const known = new Set(before.events.map(event => event.id));
   assert.deepEqual(after.events.filter(event => known.has(event.id)), [...before.events]);
+  assert.equal(after.events.length, before.events.length + kinds.length);
   assert.deepEqual(after.actions.filter(action => known.has(action.event_id)), [...before.actions]);
   const saved = after.actions.filter(action => !known.has(action.event_id));
   assert.deepEqual(saved.map(action => action.action).sort(), [...kinds].sort());
@@ -200,12 +201,12 @@ function assertIndependentReview(before: ActionInput, after: ActionInput, postId
   assert.equal(after.posts.find(post => post.id === postId)!.processing_status, "needs_attention");
 }
 
-for (const mode of ["wrong-final-target", "review-final-round"] as const) test(`a ${mode} response preserves the confirmation independently of both existing rounds`, async () => inMonitor(codex, async () => {
+for (const mode of ["wrong-final-target", "review-final-round"] as const) test(`a ${mode} response leaves the confirmation for review without creating a new round`, async () => inMonitor(codex, async () => {
   await acceptOriginal(); await seed([firstRound]); await processPending();
   const before = await loadActionInput(); answerMode = mode;
   await seed([secondRound], "reply"); await processPending();
   const after = await loadActionInput();
-  assertIndependentReview(before, after, secondRound.id, ["confirm"]);
+  assertIndependentReview(before, after, secondRound.id, []);
 }));
 
 test("two pending rounds attached to the same numbered source remain genuinely ambiguous", async () => inMonitor(codex, async () => {
@@ -216,7 +217,7 @@ test("two pending rounds attached to the same numbered source remain genuinely a
   const before = await loadActionInput();
   await seed([secondRound], "quote"); await processPending();
   const after = await loadActionInput();
-  assertIndependentReview(before, after, secondRound.id, ["confirm"]);
+  assertIndependentReview(before, after, secondRound.id, []);
 }));
 
 test("a remaining round does not borrow the previous round's audience or schedule", async () => inMonitor(codex, async () => {
@@ -255,17 +256,17 @@ test("competing same-author campaigns keep numbered banked updates under review 
   assert.equal(model.hits(), hits);
 }));
 
-test("a reviewed first-round result retains both proposed actions without changing the known campaign", async () => inMonitor(codex, async () => {
+test("a reviewed first-round result retains the announcement and leaves confirmation for review", async () => inMonitor(codex, async () => {
   await acceptOriginal();
   const initial = await loadActionInput();
   answerMode = "review-first-round";
   await seed([firstRound]);
   await processPending();
   const saved = await loadActionInput();
-  assertIndependentReview(initial, saved, firstRound.id, ["confirm", "announce"]);
+  assertIndependentReview(initial, saved, firstRound.id, ["announce"]);
 }));
 
-for (const target of ["nonexistent", "withdrawn"] as const) test(`a ${target} first-round target does not prevent saving both actions separately for correction`, async () => inMonitor(codex, async () => {
+for (const target of ["nonexistent", "withdrawn"] as const) test(`a ${target} first-round target leaves confirmation for review and preserves the announcement`, async () => inMonitor(codex, async () => {
   const first = await acceptOriginal();
   forcedFirstEventId = target === "nonexistent" ? "missing-campaign-event" : first.event.id;
   if (target === "withdrawn") await sql`UPDATE monitor_event_records SET withdrawn=true,updated_at=clock_timestamp() WHERE monitor_id='codex' AND id=${first.event.id}`;
@@ -273,7 +274,7 @@ for (const target of ["nonexistent", "withdrawn"] as const) test(`a ${target} fi
   await seed([firstRound]);
   await processPending();
   const saved = await loadActionInput();
-  assertIndependentReview(initial, saved, firstRound.id, ["confirm", "announce"]);
+  assertIndependentReview(initial, saved, firstRound.id, ["announce"]);
 }));
 
 test("a completed final round retains an extra model announcement separately for review", async () => inMonitor(codex, async () => {

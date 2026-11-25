@@ -29,16 +29,21 @@ phase=prepare
 migration_started=false
 cleanup_started=false
 worker_was_running=false
+previous_dc() { RELEASE_SHA=$current_sha DEPLOY_IMAGE=news-hot:$current_sha dc "$current" "$@"; }
 restart_previous() {
-  export RELEASE_SHA=$current_sha DEPLOY_IMAGE=news-hot:$current_sha
-  dc "$current" up -d --no-deps api web >&2 || return $?
-  if [[ $worker_was_running == true ]]; then dc "$current" up -d --no-deps worker >&2; fi
+  previous_dc up -d --no-deps api web >&2 || return $?
+  if [[ $worker_was_running == true ]]; then previous_dc up -d --no-deps worker >&2; fi
 }
 failed() {
   result=$?
   trap - EXIT
   if (( result != 0 )) && [[ $phase != prepare ]]; then
-    if [[ $migration_started == true || $cleanup_started == true ]]; then
+    if [[ $phase == worker_preflight ]]; then
+      if [[ $worker_was_running == true ]] && ! previous_dc start worker >&2; then
+        printf '%s\n' "$sha" > "$root/shared/blocked-release"
+        echo 'Previous worker could not restart; operator intervention required.' >&2
+      fi
+    elif [[ $migration_started == true || $cleanup_started == true ]]; then
       dc "$release" stop api worker web >&2 || true
       printf '%s\n' "$sha" > "$root/shared/blocked-release"
       echo 'Migration, history cleanup or subsequent validation failed. Application stays stopped; review backup and database before recovery.' >&2
@@ -121,10 +126,52 @@ elif [[ -n $history_approval && $history_approval != "$history_fingerprint" ]]; 
   echo 'History cleanup approval is stale' >&2; exit 1
 fi
 if [[ $current_sha == "$sha" ]]; then echo 'This release is already published' >&2; exit 0; fi
-worker_id=$(dc "$current" ps --status running -q worker)
-if [[ -n $worker_id ]]; then worker_was_running=true; fi
+# Use the candidate's literal version without importing its application code.
+recognizer=$release/modules/reset-monitor/backend/recognize.ts
+prompt_version=
+if [[ -f $recognizer ]]; then
+  prompt_version=$(node - "$recognizer" <<'NODE'
+const fs = require('fs');
+const source = fs.readFileSync(process.argv[2], 'utf8');
+if (!/\bthreadRecognitionVersion\b/.test(source)) process.exit(0);
+const versions = source.match(/^export const threadRecognitionVersion\s*=\s*(['"])([a-zA-Z0-9._-]+)\1;[ \t]*\r?$/gm);
+if (!versions || versions.length !== 1) throw new Error('Cannot determine candidate thread recognition prompt version');
+console.log(versions[0].split(/['"]/)[1]);
+NODE
+  )
+fi
+worker_state=$(previous_dc ps --all --format '{{.State}}' worker)
+case $worker_state in
+  running) worker_was_running=true;;
+  ''|created|exited) ;;
+  *) echo 'Previous worker is restarting or in an unexpected state; release aborted' >&2; exit 1;;
+esac
+phase=worker_preflight
+if [[ $worker_was_running == true ]]; then previous_dc stop worker >&2; fi
+if [[ -n $prompt_version ]]; then
+  # Match the candidate startup guard after the previous worker can no longer write tasks.
+  if ! incompatible=$(previous_dc exec -T db psql -X -U newshot -d newshot -qAt \
+    -v ON_ERROR_STOP=1 -v prompt_version="$prompt_version" <<'SQL'
+BEGIN READ ONLY;
+SET LOCAL statement_timeout = '10s';
+SELECT EXISTS (
+  SELECT 1 FROM monitor_state WHERE starts_with(key, 'recognition:pending:')
+    AND value->>'promptVersion' IS DISTINCT FROM :'prompt_version'
+);
+ROLLBACK;
+SQL
+  ); then
+    echo 'Could not check pending thread recognition work; release aborted' >&2
+    exit 1
+  fi
+  case $incompatible in
+    f) ;;
+    t) echo 'Incompatible pending thread recognition work; resolve it before deploying' >&2; exit 1;;
+    *) echo 'Unexpected pending thread recognition check result; release aborted' >&2; exit 1;;
+  esac
+fi
 phase=stopping
-dc "$current" stop api worker web >&2
+previous_dc stop api web >&2
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 backup=$root/backups/$stamp-$sha
 mkdir -p "$backup"

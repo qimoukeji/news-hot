@@ -20,6 +20,7 @@ import { webhookPayloadSchema } from "../webhooks.ts";
 import { createMonitorServer } from "../server.ts";
 
 const definitions = [codex, claude, grok];
+const snapshotAt = Date.parse("2026-10-27T00:00:00Z");
 beforeEach(async () => {
   await sql`DELETE FROM monitor_webhook_deliveries`; await sql`DELETE FROM monitor_webhook_notifications`; await sql`DELETE FROM monitor_webhook_subscriptions`;
   await sql`DELETE FROM monitor_event_actions`; await sql`DELETE FROM monitor_event_records`; await sql`DELETE FROM monitor_source_posts`; await sql`DELETE FROM monitor_state`; await sql`DELETE FROM audit_log`;
@@ -41,7 +42,7 @@ for (const definition of definitions) for (const baselineFirst of [true, false])
   const draft = await createMonitorEvent({ type: "direct_reset", title: properName("Manually created event"), summary: null, scope: null }, "test-admin");
   assert.equal((await listMonitorEntries({ kind: "events" })).rows[0]!.kind, "event");
   assert.equal((await publicV2Snapshot()).events.length, 0);
-  assert.equal((await publicV2Snapshot()).statistics.resetsLast30Days, 0);
+  assert.equal((await publicV2Snapshot(snapshotAt)).statistics.resetsLast30Days, 0);
   assert.equal((await sql`SELECT id FROM monitor_event_actions`).length, 0);
   if (!baselineFirst) await subscribe(definition.publicV2!.platform);
   await sweepConfirmationResults(definitions); await sweepConfirmationResults(definitions);
@@ -54,7 +55,7 @@ for (const definition of definitions) for (const baselineFirst of [true, false])
   assert.equal(payload.action, "created"); assert.equal(payload.eventId, draft.id); assert.equal(payload.revision, 1);
   assert.deepEqual(payload.event!.updates[0]!.sources, []);
   assert.equal((await publicV2Snapshot()).events[0]!.id, draft.id);
-  assert.equal((await publicV2Snapshot()).statistics.resetsLast30Days, 1);
+  assert.equal((await publicV2Snapshot(snapshotAt)).statistics.resetsLast30Days, 1);
 }));
 
 test("translating a draft cannot notify early or suppress its first later action", async () => inMonitor(codex, async () => {

@@ -1,4 +1,5 @@
 import type { SourcePostRow } from "../actions.ts";
+import { sourceContentIssue } from "./source-completeness.ts";
 
 export interface ThreadGroup {
   targets: SourcePostRow[];
@@ -16,7 +17,9 @@ export function buildThreadGroups(posts: SourcePostRow[], officialAuthorHandles?
   const targets = posts.filter(post => !post.context_only && post.processing_status === "pending" && officialAuthors.has(authorKey(post.author)));
   const parent = new Map(posts.map(post => [post.id, post.id]));
   const issues = new Map<string, Set<string>>();
+  const bodyIssues = new Map<string, string>();
   const edges = new Map<string, string[]>();
+  const dependents = new Map<string, string[]>();
   const note = (id: string, message: string) => {
     const list = issues.get(id) ?? new Set<string>(); list.add(message); issues.set(id, list);
   };
@@ -29,7 +32,9 @@ export function buildThreadGroups(posts: SourcePostRow[], officialAuthorHandles?
   function join(left: string, right: string) { parent.set(root(left), root(right)); }
   for (const post of posts) {
     const links: string[] = [];
-    if (!post.text?.trim()) note(post.id, `帖子 ${post.id} 缺少可读正文`);
+    const contentIssue = sourceContentIssue(post.text ?? "");
+    if (!post.text?.trim()) bodyIssues.set(post.id, `帖子 ${post.id} 缺少可读正文`);
+    else if (contentIssue) bodyIssues.set(post.id, `帖子 ${post.id}：${contentIssue}`);
     if (!Number.isFinite(at(post))) note(post.id, `帖子 ${post.id} 发布时间无效`);
     const references = [
       ...(post.reply_to ? [{ id: post.reply_to.postId, author: post.reply_to.author, time: null as string | null, kind: "父帖" }] : []),
@@ -47,10 +52,27 @@ export function buildThreadGroups(posts: SourcePostRow[], officialAuthorHandles?
         note(post.id, `帖子 ${post.id} 的${reference.kind} ${reference.id} 身份或时间冲突`); continue;
       }
       links.push(ancestor.id);
-      if (officialAuthors.has(authorKey(post.author)) && officialAuthors.has(authorKey(ancestor.author))) join(post.id, ancestor.id);
+      if (officialAuthors.has(authorKey(post.author))) {
+        const children = dependents.get(ancestor.id) ?? [];
+        children.push(post.id);
+        dependents.set(ancestor.id, children);
+      }
     }
     edges.set(post.id, links);
   }
+
+  // Missing bodies affect only posts that depend on them, following the same edges as context traversal.
+  const incomplete = new Set(bodyIssues.keys());
+  for (const id of incomplete) {
+    for (const child of dependents.get(id) ?? []) incomplete.add(child);
+  }
+  for (const post of posts) {
+    if (incomplete.has(post.id) || !officialAuthors.has(authorKey(post.author))) continue;
+    for (const id of edges.get(post.id) ?? []) {
+      if (officialAuthors.has(authorKey(saved.get(id)!.author))) join(post.id, id);
+    }
+  }
+
   const grouped = new Map<string, SourcePostRow[]>();
   for (const post of targets.sort(chronological)) {
     const key = root(post.id), group = grouped.get(key) ?? [];
@@ -63,11 +85,14 @@ export function buildThreadGroups(posts: SourcePostRow[], officialAuthorHandles?
       if (path.has(id)) { messages.add(`帖子关系存在循环：${id}`); return; }
       if (ancestors.has(id)) return;
       ancestors.add(id);
+      const official = officialAuthors.has(authorKey(saved.get(id)!.author));
+      const bodyIssue = bodyIssues.get(id);
+      if (bodyIssue) messages.add(bodyIssue);
       for (const issue of issues.get(id) ?? []) {
-        if (officialAuthors.has(authorKey(saved.get(id)!.author)) || /缺少可读正文|发布时间无效/.test(issue)) messages.add(issue);
+        if (official || /发布时间无效/.test(issue)) messages.add(issue);
       }
       const nextPath = new Set(path); nextPath.add(id);
-      if (officialAuthors.has(authorKey(saved.get(id)!.author))) for (const reference of edges.get(id) ?? []) visit(reference, nextPath);
+      if (official) for (const reference of edges.get(id) ?? []) visit(reference, nextPath);
     }
     for (const post of groupTargets) visit(post.id, new Set());
     return { targets: groupTargets, context: [...ancestors].filter(id => !targetIds.has(id)).map(id => saved.get(id)!).sort(chronological), issues: [...messages] };

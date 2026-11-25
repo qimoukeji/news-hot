@@ -8,7 +8,7 @@ import { loadActionInput, rowVersion, storeCollectedPost } from "../backend/acti
 import { applyOfflineRecognition, applyRecognitionGroup } from "../backend/assemble.ts";
 import { threadOutputSchema, type ActionRecognitionBody } from "../backend/recognize.ts";
 import { projectRawV2 } from "../backend/public-v2.ts";
-import { reduceEvent } from "../actions.ts";
+import { defaultActionTime, reduceEvent } from "../actions.ts";
 
 const localized = (text: string) => ({ en: text, zh: text, "zh-Hant": text, ja: text, ko: text, ru: text, es: text });
 after(closeDb);
@@ -48,9 +48,9 @@ test("a thread accepts available reset credits without treating their usage dead
 
 type Claim = ActionRecognitionBody["actions"][number];
 const scopeCases: Array<{ name: string; patch: Partial<Claim>; reason: RegExp; verified: boolean }> = [
-  { name: "invalid scope quotation", patch: { scopeExcerpt: "all Enterprise users" }, reason: /范围不在本帖中/, verified: false },
+  { name: "invalid scope quotation", patch: { action: "announce", scopeExcerpt: "all Enterprise users" }, reason: /范围不在本帖中/, verified: false },
   { name: "a missing label for selected users", patch: { scope: { type: "selected_users", note: null } }, reason: /特定用户缺少范围说明/, verified: false },
-  { name: "verified scope despite invalid action quotation", patch: { excerpt: "The model supplied a different issuance statement." },
+  { name: "verified scope despite invalid action quotation", patch: { action: "announce", excerpt: "We will distribute reset credits to Enterprise users." },
     reason: /动作缺少本帖明确依据/, verified: true },
 ];
 
@@ -77,18 +77,19 @@ for (const [index, scenario] of scopeCases.entries()) test(`paid fallback preser
   assert.match(post.review_reason!, scenario.reason);
   if (index === 0) assert.match(post.review_reason!, /模型范围需人工修订/);
   assert.equal(post.model_receipt_id, receipt!.id);
-  assert.equal(reduceEvent(event, after)?.status, "completed");
+  const status = claim.action === "confirm" ? "completed" : "announced";
+  assert.equal(reduceEvent(event, after)?.status, status);
   const actions = after.actions.filter(action => action.event_id === event.id);
   assert.equal(actions.length, 1);
   assert.deepEqual(actions[0]!.sources, [{ postId }]);
-  assert.equal(actions[0]!.action, "confirm");
-  assert.deepEqual(actions[0]!.time, { kind: "instant", at: new Date(publishedAt).toISOString() });
+  assert.equal(actions[0]!.action, claim.action);
+  assert.deepEqual(actions[0]!.time, defaultActionTime(claim.action, new Date(publishedAt)));
   assert.deepEqual(event.scope, scenario.verified ? claim.scope : { type: "unknown", note: null });
   assert.deepEqual(event.summary, claim.summary);
   assert.deepEqual(actions[0]!.summary, claim.summary);
   const published = projectRawV2(after, claude).events.find(candidate => candidate.id === event.id)!;
   assert.ok(published, "reviewed model action stays publicly visible");
-  assert.equal(published.status, "completed");
+  assert.equal(published.status, status);
   assert.equal(published.scope.type, event.scope!.type);
   assert.equal(published.updates[0]!.id, actions[0]!.id);
 }));

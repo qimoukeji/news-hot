@@ -35,7 +35,7 @@ fi
 command -v node > /dev/null
 
 die() { echo "FAIL: $*" >&2; if [[ -f ${root:-}/output ]]; then cat "$root/output" >&2; fi; exit 1; }
-assert_no_stop() { ! grep -q ' stop api worker web' "$log" || die "$case_name stopped the running site"; }
+assert_no_stop() { ! grep -q ' stop ' "$log" || die "$case_name stopped a running service"; }
 assert_old_restart() {
   grep -q "$old_sha .* up -d --no-deps api web" "$log" || die "$case_name did not restore previous app";
   if [[ $TEST_WORKER_RUNNING == true ]]; then
@@ -91,15 +91,49 @@ while [[ $1 == -* ]]; do
   case $1 in -p|--env-file|-f) shift 2;; *) exit 91;; esac
 done
 case $1 in
-  config|stop) exit 0;;
+  config) exit 0;;
+  stop)
+    if [[ $* == 'stop worker' ]]; then
+      [[ $RELEASE_SHA == "$TEST_OLD_SHA" && $TEST_WORKER_RUNNING == true ]] || exit 27
+      if flock -n "$NEWSHOT_ROOT/shared/release.lock" true; then exit 28; fi
+      if [[ -n $TEST_PENDING_ON_STOP ]]; then printf '%s\n' "$TEST_PENDING_ON_STOP" > "$NEWSHOT_ROOT/pending-version"; fi
+      touch "$NEWSHOT_ROOT/worker-stopped"
+      [[ $FAIL_STAGE != stop_worker ]] || exit 29
+    fi;;
+  start)
+    [[ $* == 'start worker' && $RELEASE_SHA == "$TEST_OLD_SHA" && -e $NEWSHOT_ROOT/worker-stopped ]] || exit 30
+    [[ $FAIL_PREVIOUS_START != true ]] || exit 18;;
   ps)
     [[ $FAIL_STAGE != worker_state ]] || exit 17
-    if [[ $TEST_WORKER_RUNNING == true ]]; then echo fake-worker; fi;;
+    [[ $* == "ps --all --format {{.State}} worker" && $RELEASE_SHA == "$TEST_OLD_SHA" ]] || exit 36
+    if [[ $FAIL_STAGE == worker_restarting ]]; then
+      echo restarting
+    elif [[ $TEST_WORKER_RUNNING == true ]]; then
+      echo running
+    else
+      echo exited
+    fi;;
   up)
     if [[ $FAIL_PREVIOUS_START == true && $RELEASE_SHA == "$TEST_OLD_SHA" ]]; then exit 18; fi
     if [[ $FAIL_STAGE == start && $RELEASE_SHA != "$TEST_OLD_SHA" ]]; then exit 15; fi;;
   exec)
-    if [[ $* == *' db psql '* ]]; then cat "$TEST_LEDGER";
+    if [[ $* == *' db psql '*'SELECT name FROM schema_migrations ORDER BY name' ]]; then
+      cat "$TEST_LEDGER"
+    elif [[ $* == *' db psql '* ]]; then
+      [[ $RELEASE_SHA == "$TEST_OLD_SHA" && $* == 'exec -T db psql -X -U newshot -d newshot -qAt -v ON_ERROR_STOP=1 -v prompt_version=reset-monitor-thread-2026-11-25.1' ]] || exit 31
+      if flock -n "$NEWSHOT_ROOT/shared/release.lock" true; then exit 32; fi
+      if [[ $TEST_WORKER_RUNNING == true && ! -e $NEWSHOT_ROOT/worker-stopped ]]; then exit 33; fi
+      sql=$(cat)
+      [[ $sql == *'BEGIN READ ONLY;'*'SELECT EXISTS ('*"starts_with(key, 'recognition:pending:')"*"value->>'promptVersion' IS DISTINCT FROM :'prompt_version'"*'ROLLBACK;' ]] || exit 34
+      case $FAIL_STAGE in
+        recognition_probe) exit 35;;
+        recognition_output) printf 'invalid result\n'; exit 0;;
+      esac
+      if [[ ! -f $NEWSHOT_ROOT/pending-version || $(cat "$NEWSHOT_ROOT/pending-version") == reset-monitor-thread-2026-11-25.1 ]]; then
+        printf 'f\n'
+      else
+        printf 't\n'
+      fi
     elif [[ $* == *' db pg_dump '* ]]; then
       [[ $FAIL_STAGE != backup ]] || exit 12
       printf 'fake-database-dump\n'
@@ -152,7 +186,7 @@ exit 0
 SLEEP
   chmod +x "$root/bin/"*
   export NEWSHOT_ROOT=$root TEST_LOG=$log TEST_APP_ID=$app_id TEST_LEDGER=$root/ledger TEST_OLD_SHA=$old_sha FAIL_STAGE=none
-  export TEST_WORKER_RUNNING=true TEST_HISTORY_FINGERPRINT=$(printf 'c%.0s' {1..64}) TEST_HISTORY_CHANGES=true FAIL_PREVIOUS_START=false
+  export TEST_WORKER_RUNNING=true TEST_HISTORY_FINGERPRINT=$(printf 'c%.0s' {1..64}) TEST_HISTORY_CHANGES=true FAIL_PREVIOUS_START=false TEST_PENDING_ON_STOP=
   export PATH="$root/bin:$PATH"
 }
 
@@ -225,6 +259,107 @@ assert_current "$old_sha"
 grep -q 'approval is stale' "$root/output" || die 'stale approval reason absent'
 ok
 
+recognition_candidate() {
+  local recognizer=modules/reset-monitor/backend/recognize.ts
+  mkdir -p "$source/$(dirname "$recognizer")" "$root/releases/$old_sha/$(dirname "$recognizer")"
+  printf 'export const threadRecognitionVersion = "reset-monitor-thread-2026-11-11.3";\n' > "$root/releases/$old_sha/$recognizer"
+  printf 'export const threadRecognitionVersion = "reset-monitor-thread-2026-11-25.1";\n' > "$source/$recognizer"
+  candidate "$@"
+}
+
+assert_preflight_abort() {
+  assert_current "$old_sha"
+  [[ ! -e $root/backups && ! -e $root/shared/published-sha && ! -e $root/current.next ]] || die "$case_name reached backup or publication"
+  ! grep -Eq ' stop api| (up|start).* (api|web)( |$)| pg_dump | run --rm' "$log" || die "$case_name touched API/web or reached backup or setup"
+}
+
+fixture recognition_pending_from_worker_shutdown
+recognition_candidate migration
+approved=$(approval)
+! grep -Eq ' stop |prompt_version=' "$log" || die 'prepare ran the apply-only preflight'
+export TEST_PENDING_ON_STOP=reset-monitor-thread-2026-11-11.3
+expect_failure "$approved"
+assert_preflight_abort
+grep -q 'Incompatible pending thread recognition work' "$root/output" || die 'missing pending-work diagnosis'
+grep -q "$old_sha .* start worker$" "$log" || die 'preflight did not restart the old worker'
+[[ ! -e $root/shared/blocked-release ]] || die 'recoverable pending work blocked future attempts'
+ok
+
+for stage in recognition_probe recognition_output stop_worker; do
+  fixture "$stage"
+  recognition_candidate
+  export FAIL_STAGE=$stage
+  expect_failure
+  assert_preflight_abort
+  grep -q "$old_sha .* start worker$" "$log" || die "$case_name did not restart the old worker"
+  case $stage in
+    recognition_probe) grep -q 'Could not check pending thread recognition work' "$root/output" || die 'missing probe error';;
+    recognition_output) grep -q 'Unexpected pending thread recognition check result' "$root/output" || die 'missing probe output error';;
+    stop_worker) ! grep -q 'prompt_version=' "$log" || die 'probe ran before successful worker shutdown';;
+  esac
+  ok
+done
+
+fixture recognition_pending_stopped_worker
+recognition_candidate
+export TEST_WORKER_RUNNING=false
+printf 'missing promptVersion\n' > "$root/pending-version"
+expect_failure
+assert_no_stop
+assert_preflight_abort
+grep -q 'Incompatible pending thread recognition work' "$root/output" || die 'missing-version work did not block'
+! grep -Eq ' (start|up).* worker$' "$log" || die 'preflight restarted an already-stopped worker'
+ok
+
+fixture recognition_worker_restarting
+recognition_candidate
+export FAIL_STAGE=worker_restarting
+expect_failure
+assert_no_stop
+assert_preflight_abort
+! grep -Eq 'prompt_version=| start worker' "$log" || die 'preflight treated a restarting worker as stopped'
+grep -q 'Previous worker is restarting' "$root/output" || die 'missing restarting worker diagnosis'
+ok
+
+fixture recognition_candidate_version_invalid
+recognition_candidate
+# Rebuild the bundle with a declaration that cannot be read without executing code.
+printf 'export const threadRecognitionVersion = getVersion();\n' > "$source/modules/reset-monitor/backend/recognize.ts"
+candidate
+expect_failure
+assert_no_stop
+assert_preflight_abort
+grep -q 'Cannot determine candidate thread recognition prompt version' "$root/output" || die 'missing invalid version diagnosis'
+ok
+
+fixture recognition_preflight_worker_restart_failure
+recognition_candidate
+export FAIL_STAGE=recognition_probe FAIL_PREVIOUS_START=true
+expect_failure
+assert_preflight_abort
+[[ $(cat "$root/shared/blocked-release") == "$new_sha" ]] || die 'failed worker recovery did not block future attempts'
+grep -q 'Previous worker could not restart' "$root/output" || die 'missing worker recovery error'
+ok
+
+fixture recognition_matching_pending_version
+recognition_candidate
+# The previous release may lack version metadata, but its database is still checked.
+rm "$root/releases/$old_sha/modules/reset-monitor/backend/recognize.ts"
+printf 'reset-monitor-thread-2026-11-25.1\n' > "$root/pending-version"
+bash "$release_script" apply "$new_sha" > "$root/output" 2>&1 || die 'compatible pending work blocked release'
+assert_current "$new_sha"
+node - "$log" <<'NODE'
+const lines = require('node:fs').readFileSync(process.argv[2], 'utf8').trim().split(/\r?\n/);
+const stop = lines.findIndex(line => line.endsWith(' stop worker'));
+const probe = lines.findIndex(line => line.includes('prompt_version='));
+const stopSite = lines.findIndex(line => line.endsWith(' stop api web'));
+const backup = lines.findIndex(line => line.includes(' db pg_dump '));
+if (!(stop >= 0 && probe === stop + 1 && stopSite === probe + 1 && backup > stopSite)) {
+  throw new Error('Expected worker shutdown, recognition probe, API/web shutdown, then backup');
+}
+NODE
+ok
+
 fixture backup_failure
 candidate
 export FAIL_STAGE=backup
@@ -246,9 +381,13 @@ assert_current "$old_sha"
 ok
 
 fixture ordinary_success
+# Early releases had a recognizer before versioned thread recognition was added.
+mkdir -p "$source/modules/reset-monitor/backend"
+printf 'export function recognize() {}\n' > "$source/modules/reset-monitor/backend/recognize.ts"
 candidate
 bash "$release_script" apply "$new_sha" > "$root/output" 2>&1 || { cat "$root/output" >&2; die 'ordinary update failed'; }
 assert_current "$new_sha"
+! grep -q 'prompt_version=' "$log" || die 'legacy candidate ran a thread recognition probe'
 [[ $(cat "$root/shared/published-sha") == "$new_sha" ]] || die 'published SHA missing'
 [[ -s $(find "$root/backups" -name newshot.dump -print -quit) ]] || die 'database backup missing'
 ok
@@ -351,7 +490,7 @@ assert_current "$new_sha"
 node - "$log" <<'NODE'
 const fs = require('fs');
 const log = fs.readFileSync(process.argv[2], 'utf8').split('\n');
-const steps = [' stop api worker web', ' db pg_dump ', ' db pg_restore ', 'scripts/cleanup-monitor-history.ts --apply', ' up -d --no-deps api web', 'scripts/smoke.ts'];
+const steps = [' stop worker', ' stop api web', ' db pg_dump ', ' db pg_restore ', 'scripts/cleanup-monitor-history.ts --apply', ' up -d --no-deps api web', 'scripts/smoke.ts'];
 let previous = -1;
 for (const step of steps) {
   const index = log.findIndex(line => line.includes(step));
@@ -490,7 +629,7 @@ for state in legacy partial empty; do
   node - "$log" <<'NODE'
 const fs = require('fs');
 const log = fs.readFileSync(process.argv[2], 'utf8').split('\n');
-const steps = ['accessSync(', ' stop api worker web', ' db pg_dump ', ' db pg_restore ', ' run --rm --network none ', 'scripts/migrate.ts --through 0146_monitor_actions_business_time.sql', 'modules/reset-monitor/scripts/migrate-business-time.ts --apply', ' run --rm --no-deps setup', ' up -d --no-deps api web', 'scripts/smoke.ts'];
+const steps = ['accessSync(', ' stop worker', ' stop api web', ' db pg_dump ', ' db pg_restore ', ' run --rm --network none ', 'scripts/migrate.ts --through 0146_monitor_actions_business_time.sql', 'modules/reset-monitor/scripts/migrate-business-time.ts --apply', ' run --rm --no-deps setup', ' up -d --no-deps api web', 'scripts/smoke.ts'];
 let previous = -1;
 for (const step of steps) {
   const index = log.findIndex(line => line.includes(step));

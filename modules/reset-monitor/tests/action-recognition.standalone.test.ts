@@ -37,7 +37,7 @@ test("thread output removes only the observed JSON-mode metadata and requires on
 
 test("recognition instructions distinguish banked issuance, present usability and redemption deadlines", () => inMonitor(claude, () => {
   const prompt = threadRecognitionPrompt();
-  assert.match(prompt, /present issuance combined with explicit present usability supports confirm/);
+  assert.match(prompt, /An official present offer of a banked reset to a stated audience is confirm/);
   assert.match(prompt, /Use them anytime by March 8 belongs in the summary, with timeExcerpt=null/);
   assert.match(prompt, /root has exactly one key, posts/);
   const schema = JSON.parse(prompt.split("Required JSON Schema (field types, enum values and required keys are authoritative):\n")[1]!.split("\nReturn no extra keys.")[0]!);

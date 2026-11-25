@@ -12,7 +12,6 @@ import { buildThreadGroups, type ThreadGroup } from "./thread-groups.ts";
 import { openEvents } from "./open-events.ts";
 import { postContext } from "./post-context.ts";
 import { recognizeThread, threadRecognitionVersion, threadModelRevision, type ThreadRecognitionInput, type ThreadRecognition } from "./recognize.ts";
-import { sourceContentIssue } from "./source-completeness.ts";
 import type { ActionInput, SourcePostRow } from "../actions.ts";
 
 interface Revision { id: string; version: string }
@@ -69,8 +68,7 @@ export async function processPending(limit = Infinity): Promise<{ processed: num
   for (const group of buildThreadGroups(saved.posts, authorHandles())) {
     if (result.processed >= limit) break; // Never split one connected group to satisfy a per-call cap.
     if (group.targets.some(post => !allowed.has(post.author.toLowerCase()))) continue;
-    const issues = [...group.issues, ...group.targets.flatMap(post => sourceContentIssue(post.text ?? "") ? ["资料不完整：原帖只有文章链接或缺少正文"] : [])];
-    if (issues.length) { await review(group.targets, [...new Set(issues)].join("；")); continue; }
+    if (group.issues.length) { await review(group.targets, group.issues.join("；")); continue; }
     const latest = await loadActionInput();
     const { baseline, context } = await relevantFacts(group, latest);
     group.context = context;

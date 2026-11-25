@@ -2,8 +2,8 @@ import { bt } from "./business-time-fixture.ts";
 import "../../../tests/standalone.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { hasExplicitFutureIssuance, isUsageTime, resolveActionTime as resolveAt } from "../backend/public-v2-time.ts";
-import { actionEvidence, confirmsCompletedAction } from "../backend/evidence.ts";
+import { isUsageTime, resolveActionTime as resolveAt } from "../backend/public-v2-time.ts";
+import { actionEvidence } from "../backend/evidence.ts";
 import { actionRecognitionSchema, recognitionPrompt } from "../backend/recognize.ts";
 import { properName } from "../backend/public-v2.ts";
 import { inMonitor } from "../backend/context.ts";
@@ -145,52 +145,6 @@ test("a repeated date needs usage wording to identify the selected occurrence as
   }
 });
 
-test("future issuance evidence does not depend on a selected time quote", () => {
-  for (const excerpt of [
-    "We will issue reset credits.",
-    "We'll be giving users another batch of resets.",
-    "Reset credits are scheduled to be issued on Nov 12.",
-    "We’re going to grant reset credits.",
-    "重置卡将于明天发放。",
-  ]) {
-    assert.equal(hasExplicitFutureIssuance(excerpt), true, excerpt);
-    assert.deepEqual(resolveActionTime(claim(), post(excerpt)), { time: bt(at), issue: null });
-  }
-  for (const excerpt of [
-    "Reset credits are usable until Nov 12.",
-    "You'll be able to redeem reset credits tomorrow.",
-    "We will not issue reset credits.",
-    "If the rollout works, we will issue reset credits.",
-    "Will we issue reset credits tomorrow?",
-    "We issued reset credits earlier. We will issue more reset credits tomorrow.",
-    "We will post instructions for reset credits tomorrow.",
-    "We will issue an update about reset credits tomorrow.",
-    "重置卡将于明天到期。",
-  ]) assert.equal(hasExplicitFutureIssuance(excerpt), false, excerpt);
-});
-
-test("an ongoing issuance statement can schedule a future date without rolling past dates forward", () => {
-  const text = "We're giving users reset credits on November 12. Use them anytime.";
-  for (const published_at of ["2026-10-29T12:00:00Z", "2026-11-10T12:00:00Z"]) {
-    const source = { text, published_at };
-    assert.equal(hasExplicitFutureIssuance(text, source), true, published_at);
-    assert.deepEqual(resolveActionTime(claim(), source), { time: bt(new Date(published_at).toISOString()), issue: null });
-  }
-  for (const published_at of ["2026-11-12T12:00:00Z", "2026-11-13T12:00:00Z", "2027-01-02T12:00:00Z"]) {
-    const excerpt = published_at.startsWith("2027") ? text.replace("November 12", "November 12, 2026") : text;
-    assert.equal(hasExplicitFutureIssuance(excerpt, { text: excerpt, published_at }), false, published_at);
-  }
-  const nextYear = text.replace("November 12", "January 2, 2027");
-  assert.equal(hasExplicitFutureIssuance(nextYear, { text: nextYear, published_at: "2026-12-31T12:00:00Z" }), true);
-  const sameDayPst = text.replace("November 12", "November 12 PST");
-  assert.equal(hasExplicitFutureIssuance(sameDayPst, { text: sameDayPst, published_at: "2026-11-12T03:00:00Z" }), true);
-  for (const excerpt of [
-    "We're giving users reset credits to use on November 12.",
-    "We're giving users reset credits usable until November 12.",
-    "We're giving reset credits to users who subscribed on November 12.",
-  ]) assert.equal(hasExplicitFutureIssuance(excerpt, post(excerpt)), false, excerpt);
-});
-
 test("date-only progress uses publication while preserving closure and expiry evidence", () => {
   for (const source of ["Reset credits expired on Oct 22, 2026.", "Claims closed on Oct 22, 2026.", "重置卡于 Oct 22, 2026 到期。"])
     assert.deepEqual(resolveActionTime({ action: "progress", invalidatesEvent: false, timeExcerpt: "Oct 22, 2026" }, post(source)),
@@ -258,17 +212,6 @@ test("announcement precision is normalized and confirmation quotes never replace
   assert.deepEqual(resolveActionTime({ action: "announce", invalidatesEvent: false, timeExcerpt: expression }, post(`We will reset usage on ${expression}.`)), { time: bt(expression), issue: null });
   const deadline = "before Oct 24, 2026 at 3pm UTC";
   assert.deepEqual(resolveActionTime({ ...claim(), timeExcerpt: deadline }, post(`We reset usage ${deadline}.`)), { time: bt(at), issue: null }, "a future upper bound does not place the completed action in the future");
-});
-
-test("clear retrospective completions do not require a time excerpt or fabricated event association", () => {
-  for (const expression of ["earlier", "previously", "yesterday", "last week"]) {
-    const action = { ...claim(), excerpt: `We reset usage ${expression}.` };
-    assert.equal(confirmsCompletedAction(action.excerpt), true);
-    assert.equal(actionEvidence(action, []), "action");
-    assert.deepEqual(resolveActionTime(action, post(action.excerpt)).time, bt(at));
-  }
-  for (const source of ["We will reset usage tomorrow.", "We have not reset usage.", "My usage was reset.", "We reset usage?", "If we reset usage, wait."])
-    assert.equal(confirmsCompletedAction(source), false, source);
 });
 
 test("a linked follow-up announcement does not require explicit timing to provide action evidence", () => {

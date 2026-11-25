@@ -57,6 +57,26 @@ test("only unrecognizable types are omitted; malformed details do not erase a re
   assert.match(result.posts[0]!.reviewReason!, /部分动作/);
 });
 
+test("valid claims default to confirmation when the action is unknown, null or omitted", () => {
+  const unknown = related("101", { ...claim, action: "unknown", excerpt: undefined, scopeExcerpt: undefined });
+  const unset = related("102", { ...claim, action: null, excerpt: "" });
+  const missing = related("103", { ...claim, action: undefined });
+  const unfamiliar = related("104", { ...claim, action: "complete" });
+  const expected = { posts: [related("101", { ...claim, excerpt: "" }), related("102", { ...claim, excerpt: "" }), related("103", claim), related("104", claim)] };
+
+  assert.deepEqual(paidThreadOutputSchema(input("101", "102", "103", "104")).parse({ posts: [unknown, unset, missing, unfamiliar] }), expected);
+  assert.equal(threadOutputSchema(["104"]).safeParse({ posts: [related("104", { ...claim, action: "amend", excerpt: "" })] }).success, false);
+});
+
+test("missing or malformed authenticity stays in review without a real action", () => {
+  for (const real of [undefined, null, "maybe"]) {
+    const result = paidThreadOutputSchema(input("101")).parse({ posts: [related("101", { ...claim, action: undefined, real })] });
+    assert.equal(result.posts[0]!.needsReview, true);
+    assert.match(result.posts[0]!.reviewReason!, /真实性/);
+    assert.equal(result.posts[0]!.actions[0]!.real, false);
+  }
+});
+
 test("unverified associations are passed to the saving layer without inventing a target", () => {
   const facts = input("101", "102");
   const event = (id: string): ThreadRecognitionInput["events"][number] => ({
@@ -75,7 +95,7 @@ test("only exact unique targets with a recognizable result are returned", () => 
   const result = paidThreadOutputSchema(input("101", "102", "103", "104", "105", "106", "107")).parse({ posts: [
     related("context", claim), related("unknown", claim), null, { ...related("101", claim), postId: 101 },
     related(" 101", claim), related("102", claim), { postId: "102" },
-    related("103", { ...claim, action: "unknown" }), { ...unrelated("104"), actions: null },
+    related("103", { ...claim, action: 17 }), { ...unrelated("104"), actions: null },
     unrelated("105"), related("106"), { ...unrelated("107"), relevant: undefined },
   ] });
   assert.deepEqual(result, { posts: [unrelated("105"), related("106")], failedPostIds: ["101", "102", "103", "104", "107"] });

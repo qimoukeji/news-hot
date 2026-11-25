@@ -12,7 +12,7 @@ import { backendDefinition as codex } from "../../codex-reset/backend-definition
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
 import { inMonitor, type ResetMonitorBackendDefinition } from "../backend/context.ts";
-import { applyRecognition as acceptRecognition } from "../backend/assemble.ts";
+import { applyRecognition as acceptRecognition, applyRecognitionGroup } from "../backend/assemble.ts";
 import { storeCollectedPost, sourcePost, loadActionInput, writePostActions } from "../backend/action-store.ts";
 import { processPending, collectPosts, monitorTick, openEvents } from "../backend/scan.ts";
 import { cursorKey } from "../config.ts";
@@ -207,9 +207,9 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: r
   assert.equal(model.hits() - before, 1, "saving review text must not buy another recognition");
 });
 
-for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: rejected action evidence retains the recognized post text`, async () => {
+for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: rejected announcement evidence retains the recognized post text`, async () => {
   const post = await addPost(definition, "We will reset usage.");
-  const answer = recognition(post.text, post.modelReceiptId, [claim("We reset usage for everyone.")]);
+  const answer = recognition(post.text, post.modelReceiptId, [claim("We reset usage for everyone.", { action: "announce" })]);
   await inMonitor(definition, () => applyRecognition(post.id, answer));
   const saved = (await inMonitor(definition, () => sourcePost(post.id)))!;
   assert.equal(saved.processing_status, "needs_attention"); assert.match(saved.review_reason!, /本帖明确依据/);
@@ -285,10 +285,10 @@ test("bare replies without parents are reviewed, while explicit independent quot
   assert.equal((await inMonitor(definition, () => publicV2Snapshot())).events[0]!.status, "completed");
 });
 
-test("reply context can identify an object but cannot supply the reply's missing action evidence", async () => {
+test("reply context cannot supply the reply’s missing announcement evidence", async () => {
   const parent = await addPost(codex, "We reset usage.", { publishedAt: "2026-10-23T11:00:00Z" });
   const reply = await addPost(codex, "That is the plan.", { replyTo: { postId: parent.id, author: codex.authors[0]!.handle } });
-  await inMonitor(codex, () => applyRecognition(reply.id, recognition(reply.text, reply.modelReceiptId, [claim(parent.text)])));
+  await inMonitor(codex, () => applyRecognition(reply.id, recognition(reply.text, reply.modelReceiptId, [claim(parent.text, { action: "announce" })])));
   assert.equal((await inMonitor(codex, () => sourcePost(reply.id)))!.processing_status, "needs_attention");
   assert.equal((await inMonitor(codex, () => publicV2Snapshot())).events.length, 0);
 });
@@ -306,17 +306,55 @@ test("a saved direct reply verifies cross-author association and prioritizes old
   assert.equal((await inMonitor(definition, () => publicV2Snapshot())).events[0]!.status, "completed");
 });
 
-test("a bare reply cannot be attached to another event merely because the author matches", async () => {
+test("a reply to one saved event cannot update a different event of the same kind", async () => {
   const first = await addPost(codex, "We will reset usage.", { publishedAt: "2026-10-23T10:00:00Z" });
   await inMonitor(codex, () => applyRecognition(first.id, recognition(first.text, first.modelReceiptId, [claim(first.text, { action: "announce" })])));
   const firstId = (await inMonitor(codex, () => loadActionInput())).events[0]!.id;
-  const other = await addPost(codex, "We will issue a banked reset.", { publishedAt: "2026-10-23T11:00:00Z" });
-  await inMonitor(codex, () => applyRecognition(other.id, recognition(other.text, other.modelReceiptId, [claim(other.text, { action: "announce", kind: "reset_credit" })])));
+  const other = await addPost(codex, "We will reset usage for pilot users.", { publishedAt: "2026-10-23T11:00:00Z" });
+  await inMonitor(codex, () => applyRecognition(other.id, recognition(other.text, other.modelReceiptId, [claim(other.text, { action: "announce" })])));
   const reply = await addPost(codex, "All done", { replyTo: { postId: other.id, author: codex.authors[0]!.handle } });
   await inMonitor(codex, () => applyRecognition(reply.id, recognition(reply.text, reply.modelReceiptId, [claim(reply.text, { eventId: firstId, localEventKey: null })])));
   assert.equal((await inMonitor(codex, () => sourcePost(reply.id)))!.processing_status, "needs_attention");
   assert.equal((await inMonitor(codex, () => publicV2Snapshot())).events.find(event => event.id === firstId)!.status, "announced");
 });
+
+test("a paid confirmation cannot update or replace an event outside its reply relationship", async () => inMonitor(codex, async () => {
+  const first = await addPost(codex, "We will reset usage.", { publishedAt: "2026-10-23T10:00:00Z" });
+  await applyRecognition(first.id, recognition(first.text, first.modelReceiptId, [claim(first.text, { action: "announce" })]));
+  const wrongEvent = (await loadActionInput()).events[0]!;
+  const parent = await addPost(codex, "We will issue a banked reset.", { publishedAt: "2026-10-23T11:00:00Z" });
+  await applyRecognition(parent.id, recognition(parent.text, parent.modelReceiptId, [claim(parent.text, { action: "announce", kind: "reset_credit" })]));
+
+  for (const eventId of [wrongEvent.id, null]) {
+    const reply = await addPost(codex, "All done", { replyTo: { postId: parent.id, author: codex.authors[0]!.handle } });
+    const baseline = await loadActionInput();
+    const source = baseline.posts.find(post => post.id === reply.id)!;
+    const answer = recognition(reply.text, reply.modelReceiptId,
+      [claim("", { eventId, localEventKey: eventId ? null : "unlinked-confirmation" })]);
+    const result = await applyRecognitionGroup([source], [], baseline, {
+      ...answer, reused: false, posts: [{ ...answer, postId: reply.id, reviewReason: null }],
+    });
+    assert.deepEqual(result.eventIds, []);
+    const reviewed = (await sourcePost(reply.id))!;
+    assert.equal(reviewed.processing_status, "needs_attention");
+    assert.match(reviewed.review_reason!, /上下文关联冲突/);
+    assert.equal((await loadActionInput()).actions.length, 2);
+  }
+  assert.ok((await publicV2Snapshot()).events.every(event => event.status === "announced"));
+}));
+
+test("a separate next round can be announced after a confirmation without its own excerpt", async () => inMonitor(codex, async () => {
+  const text = "Your banked reset is here. Another one will come later.";
+  const saved = await addPost(codex, text);
+  const actions = [
+    claim("", { kind: "reset_credit", localEventKey: "first-round" }),
+    claim("Another one will come later.", { kind: "reset_credit", action: "announce", localEventKey: "second-round" }),
+  ];
+  await applyRecognition(saved.id, recognition(saved.text, saved.modelReceiptId, actions));
+  const snapshot = await publicV2Snapshot();
+  assert.deepEqual(snapshot.events.map(event => event.status).sort(), ["announced", "completed"]);
+  assert.equal((await sourcePost(saved.id))!.processing_status, "processed");
+}));
 
 test("an official reply can announce a new reset when its saved parent supplies a unique object", async () => {
   const parent = await addPost(codex, "Please grant a banked reset.", { publishedAt: "2026-10-23T11:00:00Z" });
@@ -358,12 +396,12 @@ test("a repeated accepted action adds its source and does not overwrite accepted
   assert.equal(event.updates[0]!.sources.length, 2); assert.equal(event.updates[0]!.publishedAt, at);
 });
 
-test("valid facts survive review flags while fabricated action or audience evidence stays blocked", async () => {
+test("valid facts survive review flags while fabricated announcement evidence stays blocked", async () => {
   const cases: Array<{ text: string; patch: Partial<Claim>; needsReview?: boolean; accepted: boolean; review: boolean }> = [
     { text: "We reset usage.", patch: {}, needsReview: true, accepted: true, review: true },
-    { text: "We will reset usage.", patch: { excerpt: "We reset usage for everyone." }, accepted: false, review: true },
+    { text: "We will reset usage.", patch: { action: "announce", excerpt: "We reset usage for everyone." }, accepted: false, review: true },
     { text: "We will reset usage soon.", patch: { action: "announce", timeExcerpt: "soon" }, accepted: true, review: true },
-    { text: "We reset usage for paid users.", patch: { scopeExcerpt: "for everyone" }, accepted: false, review: true },
+    { text: "We will reset usage for paid users.", patch: { action: "announce", scopeExcerpt: "for everyone" }, accepted: false, review: true },
     { text: "We reset usage.", patch: {}, accepted: true, review: false },
   ];
   for (const value of cases) {
@@ -402,9 +440,9 @@ test("a missing saved body requires review instead of reading the collection rec
   assert.equal(model.hits(), before);
 });
 
-test("a saved quote cannot supply the outer post's action evidence", async () => {
+test("a saved quote cannot supply the outer post’s announcement evidence", async () => {
   const post = await addPost(codex, "No update today.", { quotedPost: { id: "quoted-1", author: "thsottiaux", relation: "quote", text: "We reset usage.", publishedAt: at, url: "https://x.com/thsottiaux/status/quoted-1" } });
-  await inMonitor(codex, () => applyRecognition(post.id, recognition(post.text, post.modelReceiptId, [claim("We reset usage.")])));
+  await inMonitor(codex, () => applyRecognition(post.id, recognition(post.text, post.modelReceiptId, [claim("We reset usage.", { action: "announce" })])));
   assert.equal((await inMonitor(codex, () => sourcePost(post.id)))!.processing_status, "needs_attention");
   assert.equal((await inMonitor(codex, () => loadActionInput())).actions.length, 0);
 });
@@ -694,12 +732,18 @@ test("official cancellation is terminal across later announcements and confirmat
   assert.equal((await update("Usage reset is still propagating for some accounts.", "progress", "2026-10-23T17:00:00Z")).status, "cancelled");
 });
 
-test("future/conditional confirmation and account-specific campaign closure do not change event state", async () => {
-  for (const text of ["We will reset usage tomorrow.", "We have not yet reset usage.", "My usage has reset.", "If usage has reset, try it again.", "Has usage reset?"]) {
-    const post = await addPost(codex, text);
-    await inMonitor(codex, () => applyRecognition(post.id, recognition(text, post.modelReceiptId)));
-    assert.equal((await inMonitor(codex, () => sourcePost(post.id)))!.processing_status, "needs_attention");
-  }
+test("a model confirmation uses publication time even with a future excerpt", async () => {
+  const text = "We will reset usage tomorrow.";
+  const post = await addPost(codex, text);
+  await inMonitor(codex, () => applyRecognition(post.id, recognition(text, post.modelReceiptId,
+    [claim(text, { timeExcerpt: "tomorrow" })])));
+  const snapshot = await inMonitor(codex, () => publicV2Snapshot());
+  assert.equal((await inMonitor(codex, () => sourcePost(post.id)))!.processing_status, "processed");
+  assert.equal(snapshot.events[0]!.status, "completed");
+  assert.deepEqual(snapshot.events[0]!.time, bt(at));
+});
+
+test("account-specific campaign closure does not change event state", async () => {
   const text = "My one-time bonus credit for cloud sessions has expired.";
   const post = await addPost(claude, text);
   await inMonitor(claude, () => applyRecognition(post.id, recognition(text, post.modelReceiptId,
@@ -734,7 +778,8 @@ test("reward closure, reopening and expiry are progress and preserve confirmatio
     assert.equal(snapshot.events[0]!.status, "completed");
     assert.deepEqual(snapshot.events[0]!.time, bt(at));
     assert.equal(snapshot.events[0]!.updates[0]!.action, "progress");
-    assert.equal(snapshot.statistics.bonusesLast30Days, 1);
+    const onEventDay = await inMonitor(claude, () => publicV2Snapshot(Date.parse("2026-10-24T00:00:00Z")));
+    assert.equal(onEventDay.statistics.bonusesLast30Days, 1);
   }
   const futureText = "The bonus credit has expired on Oct 24 at 11:00 UTC.";
   const future = await addPost(claude, futureText, { publishedAt: "2026-10-23T16:00:00Z" });

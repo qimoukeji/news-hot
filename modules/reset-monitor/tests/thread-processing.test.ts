@@ -101,6 +101,29 @@ test("ABC form one recognition group and independent D forms another, with sourc
   const before = model.hits(); await processPending(); assert.equal(model.hits(), before);
 }));
 
+test("a media-only self-reply is reviewed separately while the parent and sibling produce actions", async () => inMonitor(codex, async () => {
+  await seed(["101", "102"]);
+  await storeCollectedPost({ id: "107", author, publishedAt: "2026-10-29T08:00:30Z", text: "",
+    url: `https://x.com/${author}/status/107`, receiptId: null, replyTo: { postId: "101", author: null } });
+
+  const result = await processPending();
+  assert.equal(result.reviewed, 1);
+  assert.equal(result.modelCalls, 1);
+  assert.equal(result.processed, 3);
+  assert.deepEqual(inputs[0]!.targets.map(post => post.id), ["101", "102"]);
+  assert.deepEqual(inputs[0]!.context, []);
+  const saved = await loadActionInput();
+  const empty = saved.posts.find(post => post.id === "107")!;
+  assert.equal(empty.processing_status, "needs_attention");
+  assert.equal(empty.review_reason, "帖子 107 缺少可读正文");
+  assert.equal(empty.model_receipt_id, null);
+  assert.ok(saved.posts.filter(post => post.id !== "107").every(post => post.processing_status === "processed"));
+  assert.equal(saved.events.length, 1);
+  assert.deepEqual(saved.actions.sort((a, b) => a.sequence - b.sequence).map(action => action.sources), [
+    [{ postId: "101" }], [{ postId: "102" }],
+  ]);
+}));
+
 test("accepted A is read-only context while B and C share one new model response and the same existing event", async () => inMonitor(codex, async () => {
   await seed(["101", "102", "103", "104"]);
   const first = (await sourcePost("101"))!;
@@ -201,11 +224,45 @@ test("JSON-mode metadata cannot discard a connected group's valid and unrelated 
   const before = model.hits(); await processPending(); assert.equal(model.hits(), before);
 }));
 
-test("a confirmation flagged by fact checks is visible and can be corrected on the same action", async () => inMonitor(codex, async () => {
+test("a real card action with unknown classification confirms at publication without evidence quotes", async () => inMonitor(codex, async () => {
+  await seed(["101", "104"]);
+  await sql`UPDATE monitor_source_posts SET text='To all the ChatGPT Business teams out there. We have two small things for you, a banked reset and fast mode at no extra charge through Dec 31. Have fun!' WHERE monitor_id='codex' AND id='101'`;
+  adjustOutput = (id, body) => id === "101" ? { actions: [{ ...body.actions[0]!, kind: "reset_credit", action: "complete",
+    excerpt: undefined, timeExcerpt: "through Dec 31", scope: { type: "selected_users", note: local("ChatGPT Business users") },
+    scopeExcerpt: undefined }] } : {};
+
+  const result = await processPending();
+  assert.equal(result.reviewed, 0);
+  assert.equal(result.schemaFailures, 0);
+  const saved = await loadActionInput();
+  assert.ok(saved.posts.every(post => post.processing_status === "processed"));
+  assert.equal(saved.events.length, 1);
+  assert.equal(saved.events[0]!.scope?.note?.en, "ChatGPT Business users");
+  assert.equal(saved.actions.length, 1);
+  const [action] = saved.actions;
+  assert.equal(action!.action, "confirm");
+  assert.deepEqual(action!.time, { kind: "instant", at: new Date(posts["101"].at).toISOString() });
+  assert.deepEqual(action!.sources, [{ postId: "101" }]);
+}));
+
+test("an incomplete response never publishes a default confirmation", async () => inMonitor(codex, async () => {
+  await seed(["101"]);
+  adjustOutput = () => ({ actions: [{ kind: "reset_credit" }] });
+  const result = await processPending();
+  assert.equal(result.reviewed, 1);
+  const input = await loadActionInput();
+  const [post] = input.posts;
+  assert.equal(post!.processing_status, "needs_attention");
+  assert.match(post!.review_reason!, /真实性/);
+  assert.equal(input.actions.length, 0);
+  assert.equal(input.events.length, 0);
+}));
+
+test("a confirmation flagged by the model is visible and can be corrected on the same action", async () => inMonitor(codex, async () => {
   await seed(["101"]);
   const excerpt = "We're giving users reset credits on November 12. Use them anytime.";
   await sql`UPDATE monitor_source_posts SET text=${excerpt} WHERE monitor_id='codex' AND id='101'`;
-  adjustOutput = (_id, body) => ({ actions: [{ ...body.actions[0]!, kind: "reset_credit", action: "confirm", excerpt, timeExcerpt: null }] });
+  adjustOutput = (_id, body) => ({ needsReview: true, reviewReason: "发放时间待核对", actions: [{ ...body.actions[0]!, kind: "reset_credit", action: "confirm", excerpt, timeExcerpt: null }] });
   const result = await processPending();
   assert.equal(result.reviewed, 1);
   const snapshot = await publicV2Snapshot();
@@ -216,7 +273,7 @@ test("a confirmation flagged by fact checks is visible and can be corrected on t
   assert.equal(snapshot.resetTime, published);
   const [action] = event!.updates;
   assert.equal(action!.action, "confirm"); assert.equal(action!.sources[0]!.postId, "101");
-  assert.match((await sourcePost("101"))!.review_reason!, /尚未|预期|未来/);
+  assert.match((await sourcePost("101"))!.review_reason!, /发放时间待核对/);
   const detail = (await monitorPostDetail("101"))!;
   const command = { version: detail.version, versions: detail.versions, reason: "核对原帖发放日期", completeProcessing: true,
     actions: { update: [{ id: action!.id, action: "announce", time: { kind: "instant", at: "2026-11-12T18:00:00Z" }, title: local("Planned reset credits"), summary: null }] } };
@@ -266,7 +323,7 @@ test("recognizable type conflicts and incomplete fields preserve the model actio
   const excerpt = "We have granted users two resets that they can redeem anytime.";
   await sql`UPDATE monitor_source_posts SET text=${excerpt} WHERE monitor_id='codex' AND id='101'`;
   await sql`UPDATE monitor_source_posts SET reply_to=${sql.json({ postId: "101", author })} WHERE monitor_id='codex' AND id='104'`;
-  adjustOutput = (id, body) => id === "101" ? { actions: [{ ...body.actions[0]!, action: "confirm", excerpt, title: { zh: "发放重置次数" },
+  adjustOutput = (id, body) => id === "101" ? { actions: [{ ...body.actions[0]!, action: "announce", excerpt, title: { zh: "发放重置次数" },
     scope: { ...body.actions[0]!.scope, type: "paid" } }] } : {};
   const result = await processPending();
   assert.equal(result.modelCalls, 1); assert.equal(result.schemaFailures, 1); assert.equal(result.failed, 0);
@@ -275,7 +332,7 @@ test("recognizable type conflicts and incomplete fields preserve the model actio
   assert.equal(post.processing_status, "needs_attention");
   assert.match(post.review_reason!, /动作范围无法确认/); assert.match(post.review_reason!, /可兑换的重置次数/);
   const [event] = (await publicV2Snapshot()).events;
-  assert.equal(event!.type, "direct_reset"); assert.equal(event!.status, "completed");
+  assert.equal(event!.type, "direct_reset"); assert.equal(event!.status, "announced");
   assert.equal(event!.updates[0]!.title.zh, "发放重置次数");
 }));
 

@@ -3,12 +3,12 @@ import { sql, type Db } from "@aihot/backend/db";
 import { completeReceipt } from "@aihot/backend/providers/receipts";
 import { monitor, isAuthor } from "./context.ts";
 import { sourcePost, loadActionInput, saveAcceptedPost, markPostReview, markPostFailure, StalePostWork, lockActionRecords, rowVersion, type ActionDraft, type EventWrite } from "./action-store.ts";
-import { actionEvidence, quotedInPost, confirmsCompletedAction, bankedRoundCounts } from "./evidence.ts";
+import { actionEvidence, quotedInPost, bankedRoundCounts } from "./evidence.ts";
 export { quotedInPost } from "./evidence.ts";
 import { recognizedScope } from "./recognition-scope.ts";
 import { relatedContextEvents, uniqueContextEvent, uniqueRoundContextEvent } from "./context-association.ts";
-import { defaultActionTime, reduceEvent, type ActionKind, type ActionInput, type SourcePostRow } from "../actions.ts";
-import { hasExplicitAnnouncementClock, hasExplicitFutureIssuance, resolveActionTime } from "./public-v2-time.ts";
+import { reduceEvent, type ActionKind, type ActionInput, type SourcePostRow } from "../actions.ts";
+import { hasExplicitAnnouncementClock, resolveActionTime } from "./public-v2-time.ts";
 import { actionRecognitionSchema, type ActionRecognition, type ActionRecognitionBody, type Proposition, type ThreadRecognition } from "./recognize.ts";
 import { postContext, needsReplyContext } from "./post-context.ts";
 
@@ -30,7 +30,7 @@ export async function applyRecognition(postId: string, recognition: ActionRecogn
   return applyRecognitionBody(postId, recognition, expectedVersion, recognition.receiptId);
 }
 
-/** Browser evidence has no paid receipt. Its claims still pass every production fact check. */
+/** Browser-sourced claims use the same action rules without a paid receipt. */
 export async function applyOfflineRecognition(postId: string, body: unknown, expectedVersion: string): Promise<Applied> {
   return applyRecognitionBody(postId, actionRecognitionSchema.parse(body), expectedVersion, null);
 }
@@ -102,8 +102,9 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
   const input = await loadActionInput(db);
   const context = postContext(post, input.posts);
   const drafts: ActionDraft[] = [], localEvents = new Map<string, string>(sharedEvents), acceptedClaims: Proposition[] = [], events = new Map<string, EventWrite>();
-  const reasons: string[] = needsReplyContext(post, context) ? ["回复缺少可核验的父帖或引用上下文"] : [];
-  const blockedPost = reasons.length > 0 || !recognition.relevant && recognition.actions.length > 0;
+  const missingReplyContext = needsReplyContext(post, context);
+  const reasons: string[] = missingReplyContext ? ["回复缺少可核验的父帖或引用上下文"] : [];
+  const blockedPost = !recognition.relevant && recognition.actions.length > 0;
   const standaloneFollowups = new Set<string>();
   const refineAnnouncementIds = new Set<string>();
   const processingNow = Date.now();
@@ -111,13 +112,16 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
   if (recognition.needsReview && reviewDetail) reasons.push(reviewDetail);
   function planClaim(original: ActionRecognitionBody["actions"][number]) {
     const claim = structuredClone(original);
+    const confirmation = claim.action === "confirm";
+    if (confirmation && !claim.real) return;
+    const rejectLink = (reason: string) => { reasons.push(reason); return false; };
     const earlierSource = claim.existingActionId?.startsWith("source:") && earlierTargets?.has(claim.existingActionId.slice(7))
       ? claim.existingActionId.slice(7) : null;
     if (paidBaseline && (claim.eventId && !paidBaseline.events.some(event => event.id === claim.eventId)
       || claim.existingActionId && !earlierSource && !paidBaseline.actions.some(action => action.id === claim.existingActionId))) {
-      reasons.push("识别结果引用了输入之外的事件或动作"); return;
+      return rejectLink("识别结果引用了输入之外的事件或动作");
     }
-    if (paidBaseline && claim.kind === "direct_reset" && quotedInPost(claim.excerpt, text)
+    if (!confirmation && paidBaseline && claim.kind === "direct_reset" && quotedInPost(claim.excerpt, text)
       && (/\b(?:banked resets?|reset (?:credits?|cards?))\b|重置卡/i.test(claim.excerpt)
         || /\b(?:resets?\b.{0,100}\b(?:redeem|use (?:them|these) anytime)|redeem\b.{0,40}\bresets?)\b/i.test(claim.excerpt))) {
       reasons.push("模型识别为额度重置，但原帖描述可兑换的重置次数"); return;
@@ -132,54 +136,51 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
       claim.eventId = localEvents.get(claim.localEventKey)!; claim.localEventKey = null;
     }
     const followup = claim.action !== "announce" || !/\b(?:resets?|banked|quota|credits?|usage|limits?)\b|重置|额度|額度/i.test(claim.excerpt);
-    const related = followup ? relatedContextEvents(post, input, claim.kind) : [];
+    const linkedEvents = confirmation ? relatedContextEvents(post, input) : null;
+    const related = linkedEvents ? linkedEvents.filter(event => event.type === claim.kind)
+      : followup ? relatedContextEvents(post, input, claim.kind) : [];
+    if (linkedEvents?.length && !related.length) return rejectLink("识别目标与原帖上下文关联冲突");
     const roundTarget = related.length > 1 && claim.action === "confirm" && claim.eventId && !recognition.needsReview
       ? uniqueRoundContextEvent(post, input, claim.kind) : null;
     const contextual = followup ? uniqueContextEvent(post, input, claim.kind) ?? roundTarget : null;
-    if (related.length > 1 && roundTarget?.id !== claim.eventId) { reasons.push("上下文存在多个可能事件，需人工确定目标"); return; }
+    if (related.length > 1 && roundTarget?.id !== claim.eventId) return rejectLink("上下文存在多个可能事件，需人工确定目标");
     if (!claim.eventId && related.length && (!contextual || related.length !== 1)) {
-      reasons.push("上下文关联不唯一或事件已取消、撤回"); return;
+      return rejectLink("上下文关联不唯一或事件已取消、撤回");
     }
     if (claim.eventId && related.length && !related.some(event => event.id === claim.eventId)) {
-      reasons.push("识别目标与原帖上下文关联冲突"); return;
+      return rejectLink("识别目标与原帖上下文关联冲突");
     }
     if (!claim.eventId && contextual) {
       claim.eventId = contextual.id;
       claim.localEventKey = null;
     }
     const target = claim.eventId ? input.events.find(event => event.id === claim.eventId) : undefined;
-    if (target && followup && recognition.needsReview && contextual?.id !== target.id) { reasons.push("待复核的已有事件关联缺少唯一原帖关系"); return; }
-    if (target && ["announce", "confirm"].includes(claim.action) && !/\b(?:reset(?:s|ting)?|banked|quota|credits?|usage|limits?)\b|重置|额度|額度/i.test(claim.excerpt) && contextual?.id !== target.id) {
+    if (target && followup && recognition.needsReview && contextual?.id !== target.id) return rejectLink("待复核的已有事件关联缺少唯一原帖关系");
+    if (target && claim.action === "announce" && !/\b(?:reset(?:s|ting)?|banked|quota|credits?|usage|limits?)\b|重置|额度|額度/i.test(claim.excerpt) && contextual?.id !== target.id) {
       reasons.push("泛指动作与目标事件缺少唯一可核验的上下文关联"); return;
     }
-    const exclusion = !monitor().eventKinds.includes(claim.kind) ? "此监控未启用该类型" : monitor().excludeProposition?.(claim, text,
-      { trustedEventKinds: target ? [target.type] : [] });
-    if (exclusion) { if (paidBaseline && claim.real) reasons.push(exclusion); return; }
-    const evidence = actionEvidence(claim, context, acceptedClaims);
-    if (!claim.real || evidence === "related") return;
-    if (evidence !== "action" || !quotedInPost(claim.excerpt, text)) {
-      reasons.push("动作缺少本帖明确依据"); return;
+    if (!monitor().eventKinds.includes(claim.kind)) {
+      if (paidBaseline && claim.real) reasons.push("此监控未启用该类型");
+      return;
     }
-    if (!explicitLifecycle(claim)) { reasons.push("活动结果缺少明确整体状态依据"); return; }
-    const verifiedBankedEvent = target?.type === "reset_credit" && !recognition.needsReview
-      && input.actions.some(action => action.event_id === target.id && action.sources.some(ref => input.posts.some(source => source.id === ref.postId
-        && isAuthor(source.author) && source.author.toLowerCase() === post.author.toLowerCase()
-        && new Date(source.published_at).getTime() < new Date(post.published_at).getTime())));
-    if (claim.action === "confirm" && !confirmsCompletedAction(claim.excerpt, verifiedBankedEvent, claim.kind)) {
-      reasons.push("预期或否定不能确认完成"); return;
-    }
-    if (paidBaseline && claim.action === "confirm" && hasExplicitFutureIssuance(claim.excerpt, { text, published_at: post.published_at })) {
-      reasons.push("原帖描述未来发放，模型确认需人工核实"); return;
+    if (!confirmation) {
+      const exclusion = monitor().excludeProposition?.(claim, text, { trustedEventKinds: target ? [target.type] : [] });
+      if (exclusion) { if (paidBaseline && claim.real) reasons.push(exclusion); return; }
+      const evidence = actionEvidence(claim, context, acceptedClaims);
+      if (!claim.real || evidence === "related") return;
+      if (evidence !== "action" || !quotedInPost(claim.excerpt, text)) {
+        reasons.push("动作缺少本帖明确依据"); return;
+      }
+      if (!explicitLifecycle(claim)) { reasons.push("活动结果缺少明确整体状态依据"); return; }
     }
     const samePostEvent = claim.localEventKey && localEvents.has(claim.localEventKey);
     if (samePostEvent && events.get(localEvents.get(claim.localEventKey!)!)?.type !== claim.kind) {
-      reasons.push("同帖分组包含不同事件类型"); return;
+      return rejectLink("同帖分组包含不同事件类型");
     }
-    if (claim.action === "confirm" && !target && !samePostEvent && claim.kind !== "bonus_credit" && !/\b(?:resets?|restored?|banked)\b|重置|恢复额度|恢復額度/i.test(claim.excerpt)) {
-      reasons.push("独立确认缺少明确额度动作对象"); return;
+    if (claim.eventId && (!target || target.withdrawn || target.type !== claim.kind || reduceEvent(target, input)?.status === "cancelled")) {
+      return rejectLink("事件关联不存在、已取消或类型冲突");
     }
-    if (claim.eventId && (!target || target.withdrawn || target.type !== claim.kind || reduceEvent(target, input)?.status === "cancelled")) { reasons.push("事件关联不存在、已取消或类型冲突"); return; }
-    if (post.reply_to && target && !/\b(?:reset(?:s|ting)?|banked|quota|credits?|usage|limits?)\b|重置|额度|額度/i.test(claim.excerpt)) {
+    if (!confirmation && post.reply_to && target && !/\b(?:reset(?:s|ting)?|banked|quota|credits?|usage|limits?)\b|重置|额度|額度/i.test(claim.excerpt)) {
       const linked = new Set(input.actions.filter(action => action.event_id === target.id).flatMap(action => action.sources.map(source => source.postId)));
       if (!context.some(source => linked.has(source.id))) { reasons.push("泛指回复与目标事件缺少可核验的上下文关联"); return; }
     }
@@ -195,28 +196,30 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
             return linked.hostname === saved.hostname && linked.pathname.replace(/\/$/, "") === saved.pathname.replace(/\/$/, "");
           } catch { return false; }
         }));
-      if (!explicit) { reasons.push("跨作者关联缺少原帖依据"); return; }
+      if (!explicit) return rejectLink("跨作者关联缺少原帖依据");
     }
     let eventId = claim.eventId;
     if (!eventId) {
-      if (!claim.localEventKey) { reasons.push("新事件缺少分组标识"); return; }
+      if (!claim.localEventKey) return rejectLink("新事件缺少分组标识");
       eventId = localEvents.get(claim.localEventKey) ?? null;
       if (!eventId) {
         if (!["announce", "confirm"].includes(claim.action)) { reasons.push("新事件必须从预告或确认开始"); return; }
         eventId = randomUUID();
       }
-    } else if (claim.localEventKey) { reasons.push("已有事件不能指定本地分组"); return; }
+    } else if (claim.localEventKey) return rejectLink("已有事件不能指定本地分组");
     if (earlierSource) {
       const candidates = input.actions.filter(action => action.event_id === eventId && action.action === "announce"
         && action.sources.some(source => source.postId === earlierSource));
       if (claim.action !== "announce" || candidates.length !== 1) {
-        reasons.push("同组补充时间未关联唯一预告动作"); return;
+        return rejectLink("同组补充时间未关联唯一预告动作");
       }
       claim.existingActionId = candidates[0]!.id;
     }
     if (claim.existingActionId) {
       const prior = input.actions.find(action => action.id === claim.existingActionId);
-      if (!prior || prior.event_id !== eventId || prior.action !== claim.action || prior.invalidates_event !== claim.invalidatesEvent) { reasons.push("重复事实没有匹配的已有动作"); return; }
+      if (!prior || prior.event_id !== eventId || prior.action !== claim.action || prior.invalidates_event !== claim.invalidatesEvent) {
+        return rejectLink("重复事实没有匹配的已有动作");
+      }
     }
     const resolvedTime = resolveActionTime(claim, { text, published_at: post.published_at }, target ? new Date(target.created_at).toISOString() : undefined, processingNow);
     if (resolvedTime.issue) reasons.push(resolvedTime.issue);
@@ -241,8 +244,11 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     acceptedClaims.push(claim);
   }
   for (const claim of recognition.actions) {
+    const confirmation = claim.action === "confirm";
+    if (confirmation && missingReplyContext) continue;
     const count = drafts.length, before = reasons.length;
-    if (!paidBaseline || !blockedPost) planClaim(claim);
+    const linkRejected = (!paidBaseline || !blockedPost) && !missingReplyContext && planClaim(claim) === false;
+    if (confirmation && linkRejected) continue;
     if (!paidBaseline || drafts.length !== count || !claim.real || !monitor().eventKinds.includes(claim.kind)) continue;
 
     // Preserve a model action without attaching an unverified update to an existing event.
@@ -253,8 +259,6 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     const eventId = sameNewGroup ?? (key ? localEvents.get(key) : undefined) ?? randomUUID();
     const initial = !events.has(eventId) && !input.events.some(event => event.id === eventId);
     const { time, issue } = resolveActionTime(claim, { text, published_at: post.published_at }, undefined, processingNow);
-    const future = claim.action === "confirm" && quotedInPost(claim.excerpt, text)
-      && hasExplicitFutureIssuance(claim.excerpt, { text, published_at: post.published_at });
     if (issue) reasons.push(issue);
     if (initial) {
       const scope = recognizedScope(claim, text);
@@ -265,7 +269,7 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     if (key) localEvents.set(key, eventId);
     if (claim.localEventKey && !proposed) localEvents.set(claim.localEventKey, eventId);
     drafts.push({ eventId, action: claim.action, title: claim.title, summary: claim.summary,
-      time: future && !issue ? defaultActionTime(claim.action, post.published_at, processingNow) : time, invalidatesEvent: claim.invalidatesEvent });
+      time, invalidatesEvent: claim.invalidatesEvent });
   }
   if ((!paidBaseline && blockedPost) || (!drafts.length && (recognition.needsReview || reasons.length))) {
     await transaction(async db => {

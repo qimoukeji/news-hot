@@ -33,6 +33,22 @@ test("equal-time cycles cannot be treated as complete context",()=>{
   const a=post("1",1,{reply_to:{postId:"2",author:null}}),b=post("2",1,{reply_to:{postId:"1",author:null}});
   const groups=buildThreadGroups([a,b]);assert.equal(groups.length,1);assert.match(groups[0].issues.join(" "),/循环/);
 });
+test("missing body only affects the reply and posts that depend on it", () => {
+  const parent = post("1", 1);
+  const sibling = post("3", 3, { reply_to: { postId: parent.id, author: null } });
+  const missingBody = post("2", 2, { text: "", reply_to: { postId: parent.id, author: null } });
+  const dependent = post("4", 4, { reply_to: { postId: missingBody.id, author: null } });
+
+  for (const missing of [missingBody, { ...missingBody, text: "https://x.com/i/article/123" }]) {
+    const groups = buildThreadGroups([dependent, sibling, missing, parent]);
+    assert.deepEqual(groups.map(group => group.targets.map(target => target.id)), [["1", "3"], ["2"], ["4"]]);
+    assert.deepEqual(groups[0].context, []);
+    assert.deepEqual(groups[0].issues, []);
+    assert.match(groups[1].issues.join(" "), /^帖子 2.*(?:缺少可读正文|X Article 正文未保存)/);
+    assert.deepEqual(groups[2].issues, groups[1].issues);
+  }
+});
+
 test("context-only and already-reviewed posts never become automatic targets",()=>{
   const a=post("1",1,{context_only:true}),b=post("2",2,{processing_status:"needs_attention"});
   assert.deepEqual(buildThreadGroups([a,b]),[]);

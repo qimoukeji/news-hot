@@ -11,7 +11,7 @@ function sourceLink(value: string): string | null {
 }
 
 /** Relations survive cancellation/withdrawal, so an unavailable target is not mistaken for a new event. */
-export function relatedContextEvents(post: SourcePostRow, input: ActionInput, kind: EventRow["type"]): EventRow[] {
+export function relatedContextEvents(post: SourcePostRow, input: ActionInput, kind?: EventRow["type"]): EventRow[] {
   const context = postContext(post, input.posts);
   const saved = new Map(input.posts.map(row => [row.id, row]));
   const ancestorIds = new Set(context.filter(row => {
@@ -28,7 +28,7 @@ export function relatedContextEvents(post: SourcePostRow, input: ActionInput, ki
   const relatedIds = new Set(input.posts.filter(source => source.id !== post.id && source.text?.trim()
     && new Date(source.published_at).getTime() <= before
     && (ancestorIds.has(source.id) || links.has(sourceLink(source.url) ?? ""))).map(source => source.id));
-  return input.events.filter(event => event.type === kind
+  return input.events.filter(event => (kind === undefined || event.type === kind)
     && input.actions.some(action => action.event_id === event.id && action.sources.some(source => relatedIds.has(source.postId))))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
