@@ -90,11 +90,16 @@ after(async()=>{
 test('SSR list and visited query variants return offline without another read',async()=>{
   const context=await safari.newContext({viewport:{width:390,height:844}});
   const page=await context.newPage();
+  const documents:string[]=[];
+  page.on('request',request=>{if(request.isNavigationRequest()&&request.frame()===page.mainFrame())documents.push(new URL(request.url()).pathname);});
   try{
     await page.goto(origin+'/');
     await expect(page.getByRole('link',{name:'性能检查文章',exact:true})).toBeVisible();
+    // The article link is present in SSR HTML. The search overlay mounts only after the router is interactive.
+    await page.locator('[role="dialog"][aria-label="搜索"]').waitFor({state:'attached'});
     await page.getByRole('link',{name:'性能检查文章',exact:true}).click();
     await expect(page.getByText('固定正文',{exact:true})).toBeVisible();
+    assert.deepEqual(documents,['/'],'opening the article uses the client router');
     await context.setOffline(true);
     await page.goBack();
     await expect(page.getByRole('link',{name:'性能检查文章',exact:true})).toBeVisible({timeout:1500});
