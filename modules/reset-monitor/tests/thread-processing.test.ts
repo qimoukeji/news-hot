@@ -224,7 +224,7 @@ test("JSON-mode metadata cannot discard a connected group's valid and unrelated 
   const before = model.hits(); await processPending(); assert.equal(model.hits(), before);
 }));
 
-test("a real card action with unknown classification confirms at publication without evidence quotes", async () => inMonitor(codex, async () => {
+test("a real card action with unknown classification confirms at publication and reviews unsupported scope", async () => inMonitor(codex, async () => {
   await seed(["101", "104"]);
   await sql`UPDATE monitor_source_posts SET text='To all the ChatGPT Business teams out there. We have two small things for you, a banked reset and fast mode at no extra charge through Dec 31. Have fun!' WHERE monitor_id='codex' AND id='101'`;
   adjustOutput = (id, body) => id === "101" ? { actions: [{ ...body.actions[0]!, kind: "reset_credit", action: "complete",
@@ -232,12 +232,16 @@ test("a real card action with unknown classification confirms at publication wit
     scopeExcerpt: undefined }] } : {};
 
   const result = await processPending();
-  assert.equal(result.reviewed, 0);
+  assert.equal(result.reviewed, 1);
   assert.equal(result.schemaFailures, 0);
   const saved = await loadActionInput();
-  assert.ok(saved.posts.every(post => post.processing_status === "processed"));
+  const source = saved.posts.find(post => post.id === "101")!;
+  assert.equal(source.processing_status, "needs_attention");
+  assert.match(source.review_reason!, /缺少范围原文依据/);
+  assert.equal(saved.posts.find(post => post.id === "104")?.processing_status, "processed");
   assert.equal(saved.events.length, 1);
-  assert.equal(saved.events[0]!.scope?.note?.en, "ChatGPT Business users");
+  assert.equal(saved.events[0]!.scope?.type, "unknown");
+  assert.equal(saved.events[0]!.scope?.note?.en, "All users");
   assert.equal(saved.actions.length, 1);
   const [action] = saved.actions;
   assert.equal(action!.action, "confirm");

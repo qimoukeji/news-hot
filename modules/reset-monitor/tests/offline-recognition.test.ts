@@ -107,7 +107,12 @@ test("a quoted post cannot establish an announcement’s audience", async () => 
   await applyOfflineRecognition(saved.id, answer, (await sourcePost(saved.id))!.version);
   assert.equal((await sourcePost(saved.id))!.processing_status, "needs_attention");
   assert.match((await sourcePost(saved.id))!.review_reason!, /范围不在本帖中/);
-  assert.equal((await loadActionInput()).events.length, 0);
+  const input = await loadActionInput();
+  assert.equal(input.events.length, 1);
+  assert.equal(input.events[0]!.scope?.type, "unknown");
+  assert.equal(input.events[0]!.scope?.note?.zh, "所有用户");
+  assert.equal(input.actions[0]?.action, "announce");
+  assert.deepEqual(input.actions[0]?.sources, [{ postId: saved.id }]);
 }));
 
 test("offline confirmation without the parent keeps an unresolved reply in review", async () => inMonitor(codex, async () => {
