@@ -1,3 +1,4 @@
+import { scopeForWrite } from "./scope-labels.ts";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { sql } from "@aihot/backend/db";
@@ -207,7 +208,7 @@ function eventEditToken(before: EventRow, patch: z.infer<typeof edit>["patch"], 
   return rowVersion({ before, patch, actions, posts: data.posts.filter(post => postIds.has(post.id)) });
 }
 function prepareEventEdit(before: EventRow, patch: z.infer<typeof edit>["patch"], data: Awaited<ReturnType<typeof loadActionInput>>) {
-  const next = { ...before, ...patch };
+  const next = { ...before, ...patch, scope: patch.scope === undefined ? before.scope : scopeForWrite(patch.scope) };
   if (next.scope) validateScope(next.scope);
   if (!monitor().eventKinds.includes(next.type))
     throw Object.assign(new Error("当前监控不支持事件类型"), { statusCode: 400 });
@@ -223,7 +224,7 @@ export async function createMonitorEvent(value: unknown, actor: string) {
   const input = create.parse(value);
   return sql.begin(async tx => {
     const at = new Date().toISOString();
-    const event: EventRow = { id: randomUUID(), ...input, withdrawn: false, created_at: at, updated_at: at };
+    const event: EventRow = { id: randomUUID(), ...input, scope: scopeForWrite(input.scope), withdrawn: false, created_at: at, updated_at: at };
     prepareEventEdit(event, {}, { events: [event], actions: [], posts: [] });
     const [saved] = await tx<EventRow[]>`INSERT INTO monitor_event_records(monitor_id,id,type,title,summary,scope,withdrawn,created_at,updated_at)
       VALUES(${monitorId()},${event.id},${event.type},${tx.json(event.title!)},${event.summary ? tx.json(event.summary) : null},${event.scope ? tx.json(event.scope) : null},false,${at},${at})

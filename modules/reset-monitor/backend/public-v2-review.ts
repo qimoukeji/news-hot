@@ -1,4 +1,6 @@
+import { scopeForWrite } from "./scope-labels.ts";
 import { z } from "zod";
+import { stableJson } from "@aihot/backend/lib/ids";
 import { sql, type Db } from "@aihot/backend/db";
 import { audit, Conflict } from "@aihot/backend/audit";
 import {
@@ -127,20 +129,23 @@ async function prepare(
           throw new Error("Only event display scope is editorial");
         if (review.kind === "action" && !review.editorial.title)
           throw new Error("Action title is required");
-        if (review.editorial.scope) validateScope(review.editorial.scope);
+        const editorial = "scope" in review.editorial && stableJson("scope" in row ? row.scope : null) !== stableJson(review.editorial.scope)
+          ? { ...review.editorial, scope: scopeForWrite(review.editorial.scope) }
+          : review.editorial;
+        if (editorial.scope) validateScope(editorial.scope);
         const before = {
           title: row.title,
           summary: row.summary,
           ...("scope" in row ? { scope: row.scope } : {}),
         };
         if (review.kind === "event" && editorialRecordVersion(row) !== editorialRecordVersion(review.editorial)) editedEvents.add(row.id);
-        Object.assign(row, review.editorial);
+        Object.assign(row, editorial);
         changes.push({
           monitorId: monitorId(),
           kind: review.kind,
           id: row.id,
           before,
-          after: review.editorial,
+          after: editorial,
         });
         if (review.kind === "event") affected.add(row.id);
         else if ("event_id" in row) affected.add(row.event_id);
@@ -154,15 +159,15 @@ async function prepare(
                 ? "monitor_event_actions"
                 : "monitor_source_posts";
           await db`UPDATE ${db(table)} SET title=${row.title ? db.json(row.title) : null},summary=${row.summary ? db.json(row.summary) : null},updated_at=clock_timestamp() WHERE monitor_id=${monitorId()} AND id=${row.id}`;
-          if ("scope" in review.editorial)
-            await db`UPDATE ${db(table)} SET scope=${review.editorial.scope ? db.json(review.editorial.scope) : null} WHERE monitor_id=${monitorId()} AND id=${row.id}`;
+          if ("scope" in editorial)
+            await db`UPDATE ${db(table)} SET scope=${editorial.scope ? db.json(editorial.scope) : null} WHERE monitor_id=${monitorId()} AND id=${row.id}`;
           await audit(
             actor,
             auditAction("editorial"),
             auditSubject(review.kind === "post" ? "post" : "event", row.id),
             reason,
             before,
-            review.editorial,
+            editorial,
             { db },
           );
         }

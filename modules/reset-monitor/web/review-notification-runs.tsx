@@ -25,7 +25,7 @@ export default function ReviewNotificationRuns({ data }: { data: unknown }) {
     <div className="flex max-h-72 flex-col border-t border-line">
       <h3 className="px-4 py-2 text-[12.5px] font-medium text-ink-2">近期发送失败或结果未知的轮次</h3>
       {issues.length ? <DataTable dense scrollable rows={issues} rowKey={issue => `${issue.monitorId}:${issue.postId}:${issue.attemptedAt}`} columns={[
-        { key: "post", label: "帖子", render: issue => <Link className="text-accent hover:underline" to={`${monitors[issue.monitorId].adminPath}?${new URLSearchParams({ kind: "posts", q: issue.postId, collectionFilter: "all" })}`}>{monitors[issue.monitorId].product} · {issue.postId}</Link> },
+        { key: "post", label: "帖子", render: issue => <Link className="text-accent hover:underline" to={`${monitors[issue.monitorId].adminPath}?${new URLSearchParams({ kind: "posts", q: issue.postId })}`}>{monitors[issue.monitorId].product} · {issue.postId}</Link> },
         { key: "status", label: "发送结果", render: issue => <Badge tone={issue.status === "failed" ? "bad" : "warn"}>{issue.status === "failed" ? "发送失败" : "结果未知"}</Badge> },
         { key: "time", label: "尝试时间", render: issue => <Time at={issue.attemptedAt} /> },
         { key: "error", label: "原因", render: issue => issue.error ? reviewNotificationErrorMessage(issue.error) : issue.status === "unknown" ? "发送结果未确认；不重试" : "未记录原因" },

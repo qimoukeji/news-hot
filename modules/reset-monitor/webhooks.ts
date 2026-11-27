@@ -10,7 +10,7 @@ export const webhookPayloadSchema = z.strictObject({
   "Only withdrawals have no event, and event IDs must match");
 export type WebhookPayload = z.infer<typeof webhookPayloadSchema>;
 export type WebhookPlatform = z.infer<typeof platformSchema>;
-export const webhookPlatforms = platformSchema.options;
+export type WebhookPlatformOption = { id: WebhookPlatform; label: string };
 
 export interface WebhookSubscription {
   id: string; name: string; url: string; platforms: WebhookPlatform[]; enabled: boolean;
@@ -24,7 +24,7 @@ export interface WebhookDelivery {
   createdAt: string; sentAt: string | null;
 }
 export interface WebhookAdminData {
-  subscriptions: WebhookSubscription[]; pushEnabled: boolean;
+  subscriptions: WebhookSubscription[]; pushEnabled: boolean; platforms: WebhookPlatformOption[];
 }
 export interface WebhookSubscriptionInput {
   name: string; url: string; platforms: WebhookPlatform[]; enabled?: boolean; reason: string;

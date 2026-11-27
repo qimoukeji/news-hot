@@ -10,6 +10,7 @@ import { buildApp } from "../../../apps/api/src/app.ts";
 import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
+import { backendDefinition as gemini } from "../../gemini-reset/backend-definition.ts";
 import { inMonitor } from "../backend/context.ts";
 import { setWithdrawn } from "../backend/admin.ts";
 import { monitorEventDetail, previewMonitorEventReview, submitMonitorEventReview } from "../backend/manual-review.ts";
@@ -27,7 +28,7 @@ import { createSubscription, updateSubscription, listSubscriptions, rotateSubscr
 import { createSubscriptionsServer } from "../subscriptions-server.ts";
 import { webhookPayloadSchema, type WebhookPlatform } from "../webhooks.ts";
 
-const definitions = [codex, claude, grok];
+const definitions = [codex, claude, grok, gemini];
 const sourceAt = "2026-10-01T12:00:00Z";
 const eventId = "shared-event";
 const scope = { type: "all_users" as const, note: null };
@@ -168,6 +169,7 @@ async function mutateAction(patch: Partial<ActionDraft>) {
 test("complete seven-language actions notify immediately and isolate identical IDs across all platforms", async () => {
   await initializeWebhookBaselines(definitions);
   const subscriptions = await Promise.all(definitions.map(definition => subscriber([definition.publicV2!.platform])));
+  const { subscription: allPlatforms } = await subscriber(["codex", "claude-code", "grok", "gemini"]);
   for (const definition of definitions) {
     await addEvent(definition, true);
     await capture(definition); await capture(definition);
@@ -179,7 +181,8 @@ test("complete seven-language actions notify immediately and isolate identical I
     assert.equal(Object.keys(event.updates[0]!.title).length, 7);
     assert.deepEqual(event.updates[0]!.sources.map(source => source.postId), ["source-post"]);
   }
-  assert.equal((await notifications()).length, 3);
+  assert.equal((await notifications()).length, definitions.length);
+  assert.equal((await listWebhookDeliveries(allPlatforms.id))!.deliveries.length, definitions.length);
   for (const { subscription } of subscriptions) {
     const deliveries = (await listWebhookDeliveries(subscription.id))!.deliveries;
     assert.equal(deliveries.length, 1); assert.equal(deliveries[0]!.platform, subscription.platforms[0]);
@@ -355,12 +358,30 @@ test("manual withdrawal and restoration keep monotonic revisions and require no 
   assert.deepEqual((await notifications()).map(row => row.action), ["created", "withdrawn", "restored"]);
   assert.deepEqual((await notifications()).map(row => row.revision), [1, 2, 3]);
 });
+test("a newly installed platform can be selected and receive events through a five-platform subscription", async () => {
+  const future = { ...gemini, monitorId: "future-monitor", product: "Future product", publicV2: { platform: "future-platform" } };
+  const installed = [...definitions, future];
+  const input = { name: "All current platforms", url: "https://8.8.8.8/hook", reason: "Add a monitor",
+    platforms: ["codex", "claude-code", "grok", "gemini", "future-platform"], enabled: true };
+  const before = await subscriber(["codex"]);
+  assert.deepEqual((await listSubscriptions(installed)).platforms.at(-1), { id: "future-platform", label: "Future product" });
+  await assert.rejects(createSubscription(input, "admin", definitions), /未启用/);
+  await assert.rejects(updateSubscription(before.subscription.id, { platforms: input.platforms, reason: input.reason }, "admin", definitions), /未启用/);
+  const { subscription } = await createSubscription(input, "admin", installed);
+  assert.deepEqual(subscription.platforms, input.platforms);
+  assert.deepEqual((await listSubscriptions(installed)).subscriptions.find(row => row.id === before.subscription.id)!.platforms, ["codex"]);
+  await addEvent(future, true);
+  await capture(future);
+  assert.equal((await listWebhookDeliveries(subscription.id))!.deliveries[0]!.platform, "future-platform");
+  assert.deepEqual((await listWebhookDeliveries(before.subscription.id))!.deliveries, []);
+});
+
 test("subscription defaults, one-time secrets and audit redaction preserve administrator accountability", async () => {
   const saved = await createSubscription({ name: "Synthetic subscriber", url: "https://8.8.8.8/private-path?token=synthetic-query-secret",
     platforms: ["codex", "grok"], reason: "Add callback" }, "admin-a", definitions);
   assert.equal(saved.subscription.enabled, false); assert.equal(saved.subscription.enabledAt, null);
   assert.ok(saved.secret.length >= 32);
-  const listed = JSON.stringify(await listSubscriptions());
+  const listed = JSON.stringify(await listSubscriptions(definitions));
   assert.equal(listed.includes(saved.secret), false);
   const rotated = await rotateSubscriptionSecret(saved.subscription.id, "Rotate test key", "admin-b");
   assert.ok(rotated); assert.notEqual(rotated.secret, saved.secret);
@@ -509,7 +530,7 @@ test("subscription HTTP management is inaccessible to anonymous readers", async 
       { method: "GET" as const, url: "/api/admin/reset-subscriptions" },
       { method: "POST" as const, url: "/api/admin/reset-subscriptions", payload: { name: "Anonymous", url: "https://8.8.8.8/hook", platforms: ["codex"], reason: "Unauthorized" } },
     ]) assert.equal((await app.inject(request)).statusCode, 401);
-    assert.equal((await listSubscriptions()).subscriptions.length, 0);
+    assert.equal((await listSubscriptions(definitions)).subscriptions.length, 0);
     assert.equal((await sql`SELECT count(*)::int AS n FROM audit_log`)[0]!.n, 0);
   } finally { config.devAdmin = oldAdmin; await app.close(); }
 });

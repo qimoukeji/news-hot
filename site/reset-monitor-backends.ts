@@ -2,5 +2,6 @@
 import { backendDefinition as codex } from "../modules/codex-reset/backend-definition.ts";
 import { backendDefinition as claude } from "../modules/claude-reset/backend-definition.ts";
 import { backendDefinition as grok } from "../modules/grok-reset/backend-definition.ts";
+import { backendDefinition as gemini } from "../modules/gemini-reset/backend-definition.ts";
 
-export const RESET_MONITOR_BACKENDS = [codex, claude, grok];
+export const RESET_MONITOR_BACKENDS = [codex, claude, grok, gemini];

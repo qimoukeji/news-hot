@@ -15,7 +15,12 @@ export const RESET_MONITORS = {
   grok: {
     collection: { includeReplies: false, includeSelfReplies: true, resetOnly: false, keywords: ["reset", "resets", "resetting", "banked", "credit", "credits", "重置", "额度", "額度"], maxPagesPerRun: 5 },
     publicV2: { platform: "grok" },
-    authors: [{ handle: "bot", name: "Grok Bot" }, { handle: "grok", name: "Grok" }],
+    authors: [{ handle: "bot", name: "Grok Bot" }],
+  },
+  gemini: {
+    collection: { includeReplies: false, includeSelfReplies: true, resetOnly: false, keywords: ["reset", "resets", "resetting", "banked", "credit", "credits", "重置", "额度", "額度"] },
+    publicV2: { platform: "gemini" },
+    authors: [{ handle: "_mohansolo", name: "Varun Mohan" }],
   },
 } satisfies Record<string, ResetMonitorSiteConfig>;
 

@@ -105,7 +105,7 @@ for (const product of platforms) test(`${product.product} public page reads v2 a
   try {
     await page.goto(`${web.origin}${product.path}/history/${day}`);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(`${product.product} 今天会重置吗？`);
-    const accounts = { codex: "@thsottiaux", "claude-code": "@ClaudeDevs", grok: "@bot、@grok" }[product.platform];
+    const accounts = { codex: "@thsottiaux", "claude-code": "@ClaudeDevs", grok: "@bot", gemini: "@_mohansolo" }[product.platform];
     await expect(page.getByText(`关注 ${accounts} 发布的消息，筛选重置信号，推送提醒，省得你反复刷推`, { exact: true })).toBeVisible();
     const overview = page.locator('dl[aria-label="重置概览"]');
     await expect(overview.getByText(formatBusinessTime(instant(at)), { exact: true })).toBeVisible();

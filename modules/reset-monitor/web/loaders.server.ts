@@ -41,7 +41,8 @@ export function createAdminLoader(profile: ResetMonitorWebDefinition) {
     const posts = url.searchParams.get("kind") === "posts";
     for (const name of ["from", "to"]) if (url.searchParams.get(name)) query.set(name, url.searchParams.get(name)!);
     if (posts) {
-      for (const name of ["q", "filter", "association", "collectionFilter"]) if (url.searchParams.get(name)) query.set(name, url.searchParams.get(name)!);
+      for (const name of ["q", "filter", "association"]) if (url.searchParams.get(name)) query.set(name, url.searchParams.get(name)!);
+      query.set("collectionFilter", "all");
       const result = await adminGet<AdminPosts>(request, `${profile.adminApiPath}/posts?${query}`);
       return { ...result, rows: result.rows.map(post => ({ kind: "post", post, latestAt: post.publishedAt })) };
     }

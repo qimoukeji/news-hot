@@ -45,7 +45,7 @@ async function stageNewEvent(page: Page, title: string) {
   const form = child(page, "新建事件并关联");
   await form.getByLabel("标题（中文）", { exact: true }).fill(title);
   await form.getByLabel("摘要（中文）", { exact: true }).fill("新一期活动说明");
-  await form.getByLabel("影响范围（中文）", { exact: true }).fill("所有付费用户");
+  await form.getByLabel("影响范围", { exact: true }).selectOption("paid_users");
   await expect(form.getByLabel("动作", { exact: true })).toHaveValue("announce");
   const [actionBounds, timeBounds] = await Promise.all([form.getByLabel("动作", { exact: true }).boundingBox(), form.getByLabel("业务时间", { exact: true }).boundingBox()]);
   assert.ok(actionBounds && timeBounds && Math.abs(actionBounds.y - timeBounds.y) < 1 && actionBounds.x + actionBounds.width <= timeBounds.x);

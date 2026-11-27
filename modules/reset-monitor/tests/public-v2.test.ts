@@ -10,6 +10,7 @@ import { buildApp } from "../../../apps/api/src/app.ts";
 import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
+import { backendDefinition as gemini } from "../../gemini-reset/backend-definition.ts";
 import { createMonitorServer } from "../server.ts";
 import { createOverviewServer } from "../overview-server.ts";
 import { inMonitor } from "../backend/context.ts";
@@ -38,7 +39,7 @@ import {
 } from "../backend/public-v2-review.ts";
 import { properName, publicV2Snapshot } from "../backend/public-v2.ts";
 import { eventListSchema, overviewSchema } from "../public-v2.ts";
-const definitions = [codex, claude, grok],
+const definitions = [codex, claude, grok, gemini],
   sourceAt = "2026-10-01T12:00:00Z";
 after(async () => {
   installModules([]);
@@ -119,7 +120,9 @@ test("all platforms expose action updates through v2 only and support ETag", asy
     const overview = overviewSchema.parse(
       (await app.inject("/api/v2/overview")).json(),
     );
-    assert.equal(overview.platforms.length, 3);
+    assert.deepEqual(overview.platforms.map(platform => platform.platform), ["codex", "claude-code", "grok", "gemini"]);
+    assert.deepEqual(overview.platforms.find(platform => platform.platform === "grok")?.sources.map(source => source.url), ["https://x.com/bot"]);
+    assert.ok(overview.platforms.find(platform => platform.platform === "gemini")?.sources.some(source => source.url === "https://x.com/_mohansolo"));
     assert.ok(overview.platforms.every(platform => !("catalog" in platform)));
     assert.ok(
       overview.platforms.every(

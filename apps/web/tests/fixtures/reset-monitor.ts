@@ -13,6 +13,7 @@ export const platforms = [
   { platform: "codex", product: "Codex", path: "/codex-reset", admin: "/admin/codex-reset", api: "/api/admin/codex-reset", list: "/api/v2/codex-resets" },
   { platform: "claude-code", product: "Claude", path: "/claude-reset", admin: "/admin/claude-reset", api: "/api/admin/claude-reset", list: "/api/v2/claude-resets" },
   { platform: "grok", product: "Grok", path: "/grok-reset", admin: "/admin/grok-reset", api: "/api/admin/grok-reset", list: "/api/v2/grok-resets" },
+  { platform: "gemini", product: "Gemini", path: "/gemini-reset", admin: "/admin/gemini-reset", api: "/api/admin/gemini-reset", list: "/api/v2/gemini-resets" },
 ] as const;
 export type Product = typeof platforms[number];
 export const scope = { type: "paid_users", note: null } as const;

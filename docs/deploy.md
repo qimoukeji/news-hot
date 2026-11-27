@@ -308,13 +308,13 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 ### 动作模型与 v2 切换
 
-三个产品后台基础页分为“事件列表”和“帖子列表”两个 tab，默认事件列表。事件下默认展开动作时间线及全部来源，帖子列表包含已关联与未关联帖子，各自分页。`kind=events/posts` 切换列表，只保留北京时间开始日期 from、结束日期 to 筛选（包含当天），切换保留日期并清除页码；事件按最新来源时间筛选，帖子按发布时间筛选。`/events/:id` 是共用时间线的事件详情；帖子通过列表弹框编辑和管理关联，保留及人工完成复核仍有理由和影响预览。旧 `/posts/:id/review` 和独立 `/posts` 页面均不提供。Codex 后台与 API 基础路径分别为 `/admin/codex-reset`、`/api/admin/codex-reset`，不保留旧路径或 tab/manage 查询方式。
+各平台后台基础页分为“事件列表”和“帖子列表”两个 tab，默认事件列表。事件下默认展开动作时间线及全部来源，帖子列表包含已关联与未关联帖子，各自分页。`kind=events/posts` 切换列表，只保留北京时间开始日期 from、结束日期 to 筛选（包含当天），切换保留日期并清除页码；事件按最新来源时间筛选，帖子按发布时间筛选。`/events/:id` 是共用时间线的事件详情；帖子通过列表弹框编辑和管理关联，保留及人工完成复核仍有理由和影响预览。旧 `/posts/:id/review` 和独立 `/posts` 页面均不提供。Codex 后台与 API 基础路径分别为 `/admin/codex-reset`、`/api/admin/codex-reset`，不保留旧路径或 tab/manage 查询方式。
 
 最终业务只有三张表：帖子 monitor_source_posts、事件 monitor_event_records、动作 monitor_event_actions。关系为事件包含动作、动作以 sources 的 {postId} 引用帖子，不保留帖子事件绑定或独立动作来源表。动作的 sequence 是事件内事实顺序，增删来源不改变顺序；不保存 result、scope、fact_key，影响范围只保存在事件。
 
 帖子保存原文 text、必要的单层随帖引用 quoted_post、七语言标题摘要及处理记录，不保存全文翻译或供应商原始 JSON。运行识别直接读取帖子，不从采集回执恢复正文。原文只供后台管理员读取，不进入动作、事件、公开响应或业务审计；供应商响应仍保留在内部付费回执，供计费与请求续处理。正文与引用分开，不能把引用当作外层帖子的动作依据。
 
-事件摘要直接使用保存值，空值不回退动作摘要，不保存 summary_edited。独立翻译能力按编辑版本补全七语言，使用已配置的监控模型，仅受 MODEL_CALLS_ENABLED 控制，不依赖采集开关。站点允许 `cron.codex-reset.translate`、`cron.claude-reset.translate`、`cron.grok-reset.translate` 三个独立分钟任务；事件、动作和全部识别状态的帖子在创建或编辑后补齐标题、摘要及事件范围说明的缺失语言，原帖全文不进入翻译输入。保留已填写语言和业务字段，旧翻译不能覆盖新编辑；相同完整版本不重复请求，失败版本等待人工处理，新编辑形成新版本后重新判断。缺失语言在完成前仍使用安全公开文案，不会在采集 tick 补跑翻译。事件文案编辑不要求原因；动作、来源和重排操作仍要求理由、影响预览和相关记录版本核验。
+事件摘要直接使用保存值，空值不回退动作摘要，不保存 summary_edited。独立翻译能力按编辑版本补全七语言，使用已配置的监控模型，仅受 MODEL_CALLS_ENABLED 控制，不依赖采集开关。站点允许 `cron.codex-reset.translate`、`cron.claude-reset.translate`、`cron.grok-reset.translate` 和 `cron.gemini-reset.translate` 四个独立分钟任务；事件、动作和全部识别状态的帖子在创建或编辑后补齐标题、摘要及事件范围说明的缺失语言，原帖全文不进入翻译输入。保留已填写语言和业务字段，旧翻译不能覆盖新编辑；相同完整版本不重复请求，失败版本等待人工处理，新编辑形成新版本后重新判断。缺失语言在完成前仍使用安全公开文案，不会在采集 tick 补跑翻译。事件文案编辑不要求原因；动作、来源和重排操作仍要求理由、影响预览和相关记录版本核验。
 
 数据库升级先在独立测试副本验证，再按使用者本次授权执行。正式写入前停止相关服务和脚本，验证完整备份并保留可恢复代码，不修改历史迁移或迁移账本。维护工具的备份校验要求 custom-format 包含所有业务表的结构和数据，并实际恢复到同一数据库服务中的独立空库；恢复成功或失败均删除该临时库。运行维护工具的连接账号须能建库；无权限或恢复失败则拒绝清理和修复，不回退到只检查文件目录。当前维护工具按各自文档要求核验停写条件、备份和预览。
 
@@ -334,15 +334,15 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 ### 增量采集与运行
 
-账号、显示名与 collection 在 `site/reset-monitors.ts`。主帖始终开启，includeReplies（回复他人）、includeSelfReplies（自回复）与 resetOnly 分别控制，三个平台可独立修改；本站 includeSelfReplies=true，其余两项为 false；关键词按字面 OR 查询，模型复用现有调用确认三类额度事件及其后续消息。英文忽略大小写、不自动扩展词形，中文按包含匹配；启用过滤时词表非空。“All done”等未命中关键词的相关短回复可能遗漏，模型无法补回。
+账号、显示名与 collection 在 `site/reset-monitors.ts`。主帖始终开启，includeReplies（回复他人）、includeSelfReplies（自回复）与 resetOnly 分别控制，各平台可独立修改；本站 includeSelfReplies=true，其余两项为 false；关键词按字面 OR 查询，模型复用现有调用确认三类额度事件及其后续消息。英文忽略大小写、不自动扩展词形，中文按包含匹配；启用过滤时词表非空。“All done”等未命中关键词的相关短回复可能遗漏，模型无法补回。
 
-两个回复开关均关闭时只采主帖；只开 includeReplies 时加采回复他人，只开 includeSelfReplies 时加采自回复，两者都开时加采全部回复。仅采配置账号自己发布的内容，不采其他人的回复；纯转推排除，引用帖保留。第三方查询负责回复类别筛选，本地不重复判断，目标账号缺失不丢弃帖子。reply_to 保存供应商提供的父帖 ID 和账号，引用对象保留自身回复关系；上下文先复用本轮响应和当前监控已存材料，缺失时按明确父帖或引用 ID 付费补采，不抓整个评论区。明确无关且无需复核的帖子保留 filtered_out，后台默认隐藏未关联帖子，可切换“采集记录”查看、人工保留或作为动作来源；文案编辑不解除过滤。
+两个回复开关均关闭时只采主帖；只开 includeReplies 时加采回复他人，只开 includeSelfReplies 时加采自回复，两者都开时加采全部回复。仅采配置账号自己发布的内容，不采其他人的回复；纯转推排除，引用帖保留。第三方查询负责回复类别筛选，本地不重复判断，目标账号缺失不丢弃帖子。reply_to 保存供应商提供的父帖 ID 和账号，引用对象保留自身回复关系；上下文先复用本轮响应和当前监控已存材料，缺失时按明确父帖或引用 ID 付费补采，不抓整个评论区。明确无关且无需复核的帖子保留 filtered_out，后台帖子列表保留这些记录并标记为“被过滤”，可人工保留或作为动作来源；文案编辑不解除过滤。
 
-升级时在各平台 collection 中补上 includeSelfReplies。旧配置 includeReplies=true 曾包含全部回复；若要保持原范围，升级后须同时设 includeReplies=true、includeSelfReplies=true。本站三个平台设为 includeReplies=false、includeSelfReplies=true，采集主帖及自回复。此项配置拆分不需要数据库迁移，不删除已有数据，不重置成功截止，也不回补历史回复；修改后重启 API 与 worker。
+升级时在各平台 collection 中补上 includeSelfReplies。旧配置 includeReplies=true 曾包含全部回复；若要保持原范围，升级后须同时设 includeReplies=true、includeSelfReplies=true。本站各平台设为 includeReplies=false、includeSelfReplies=true，采集主帖及自回复。此项配置拆分不需要数据库迁移，不删除已有数据，不重置成功截止，也不回补历史回复；修改后重启 API 与 worker。
 
 升级新增 `0131_monitor_posts_reply_to.sql` 与 `0132_monitor_posts_filtered_out.sql`，分别添加可空的 reply_to 和默认 false 的 filtered_out；不删除数据、不回填或重新识别历史。已有动作模型库先按上节完成至 0130，再运行正常迁移并重启 API、worker。本地实施只在隔离测试库验证，不自动迁移现有库。
 
-配置修改不重置成功截止，不回补已完成窗口的历史回复或漏词帖子，不重筛已完成记录；未完成窗口和待识别记录使用当前配置。新增或重新添加账号先保存观察起点，已有账号沿成功截止补齐完整窗口；失败不移动起点或跳过停机数据。空结果或全部被过滤可正常完成窗口，不恢复旧处理模式、历史初始化和每日查漏。
+配置修改不重置成功截止，不回补已完成窗口的历史回复或漏词帖子，不重筛已完成记录；仅移除采集账号时，未完成窗口保留其余账号的查询、分页和回执身份。其余查询或时间下界不一致时停止采集并提示核对。新增或重新添加账号先保存观察起点，已有账号沿成功截止补齐完整窗口；失败不移动起点或跳过停机数据。空结果或全部被过滤可正常完成窗口，不恢复旧处理模式、历史初始化和每日查漏。
 
 采集在发起付费请求前持久保存固定窗口和执行标识。搜索页失败后停止当前账号，本次不重发，其他账号继续；停机、安全阀和预算拒绝立即停止。下一次任务保留窗口、查询与续页位置，已收到并保存的页面直接复用。明确未受理的可重试 HTTP 拒绝沿原 key 恢复；网络结果未知的搜索页保留原回执与计费未知记录，下一次任务使用关联原回执的新请求身份补采，可能再次计费，仍计入每轮搜索请求上限并检查预算和安全阀。收到响应但 schema 无效或不可重试的拒绝等待人工处理，不反复购买。上下文补采、识别和翻译的计费未知请求不适用搜索页恢复规则。固定窗口全部采集与识别持久完成后才推进截止并清除窗口状态。
 
@@ -350,9 +350,9 @@ cd apps/web && NODE_ENV=production node --env-file=../../.env server.ts   # 网�
 
 付费请求经过回执、预算和安全阀。worker 只识别 pending 帖子，成功、待人工处理或失败写入均核验本轮原始版本及 pending 状态，过期任务不能覆盖人工处理。成功无论有无动作均为 processed；动作更正、来源增删和重排不改识别状态，帖子处理入口明确完成识别才设 processed 并清空 review_reason。翻译只补文案，不改帖子处理状态。采集完成且识别结果已保存才推进检查点；已收到模型响应的结构失败和文案待复核不阻断截止。持久化失败复用 received 响应，同版本翻译任务待复核不反复购买，计费未知不自动重发。
 
-发卡识别使用完整 JSON Schema；付费响应中可辨认的动作按模型类型保存并展示，校验问题留在来源帖待人工修订。使用截止不进入发放计划，预告缺时间按写入规则填入默认时刻。无法核实的范围保存 unknown，不扩大为全体用户。后台更正动作类型后保持已有事件可展示；编辑动作可原位调整到同类型未撤回事件，保留动作 ID、来源、创建时间及帖子回执，预览和事务提交覆盖新旧事件。此更新无需数据库迁移或新增环境变量。发布前查三个监控是否有 `recognition:pending:` 在途组，优先由旧 worker 写入已收到的响应；旧版本在途组若未完成，切换后转人工复核并保留回执，不重新付费。新识别组使用新规则，已有待人工处理记录不会自动重跑。历史定点恢复须先备份和预览，不回退成功截止或补发历史通知；重新付费识别须单独得到授权。
+发卡识别使用完整 JSON Schema；付费响应中可辨认的动作按模型类型保存并展示，校验问题留在来源帖待人工修订。使用截止不进入发放计划，预告缺时间按写入规则填入默认时刻。无法核实的范围保存 unknown，不扩大为全体用户。后台更正动作类型后保持已有事件可展示；编辑动作可原位调整到同类型未撤回事件，保留动作 ID、来源、创建时间及帖子回执，预览和事务提交覆盖新旧事件。此更新无需数据库迁移或新增环境变量。发布前核对各平台的 `recognition:pending:` 在途组。不兼容的线程版本会中止发布并恢复旧 worker，先由旧 worker 写入已收到的响应并完成在途组，再切换。新识别组使用新规则，已有待人工处理记录不会自动重跑。历史定点恢复须先备份和预览，不回退成功截止或补发历史通知；重新付费识别须单独得到授权。
 
-本站采集队列为 `cron.monitor.tick`、`cron.claude-reset.tick`、`cron.grok-reset.tick`；多语言补全分别由 `cron.codex-reset.translate`、`cron.claude-reset.translate`、`cron.grok-reset.translate` 每分钟独立执行。另外保留事件确认检查和订阅 sweep、deliver 队列。`site/site.ts` 的 `DEPLOYMENT.queues` 限制所有生产者、消费者和定时注册，`engineSchedules=[]` 停用框架定时任务；新闻处理、通用全文翻译及运维队列不会因 worker 重启或后台请求重新创建。禁用任务的后台操作返回明确的站点配置停用错误。三个采集 cron 在采集和模型安全阀关闭时仍保留定义，执行立即跳过；翻译 cron 仅在模型安全阀打开时注册，关闭后重启 worker 会移除对应定时定义，不在 tick 中补跑。
+本站采集队列为 `cron.monitor.tick`、`cron.claude-reset.tick`、`cron.grok-reset.tick` 和 `cron.gemini-reset.tick`；多语言补全分别由 `cron.codex-reset.translate`、`cron.claude-reset.translate`、`cron.grok-reset.translate` 和 `cron.gemini-reset.translate` 每分钟独立执行。另外保留事件确认检查和订阅 sweep、deliver 队列。`site/site.ts` 的 `DEPLOYMENT.queues` 限制所有生产者、消费者和定时注册，`engineSchedules=[]` 停用框架定时任务；新闻处理、通用全文翻译及运维队列不会因 worker 重启或后台请求重新创建。禁用任务的后台操作返回明确的站点配置停用错误。四个采集 cron 在采集和模型安全阀关闭时仍保留定义，执行立即跳过；翻译 cron 仅在模型安全阀打开时注册，关闭后重启 worker 会移除对应定时定义，不在 tick 中补跑。
 
 调整任务时保持全部 worker 停止，先运行 `node --env-file=.env scripts/reconcile-schedules.ts` 查看只读清单，再在核对后加 `--apply --worker-stopped` 同步；存在活跃 cron 时拒绝操作。同步不执行任务、不启动调度、不改 schema、不删除付费回执、运行审计和非 cron 队列。清空测试业务与付费记录另须明确授权并先备份，不以任务配置替代数据清理。
 
@@ -366,13 +366,21 @@ Webhook 扫描每分钟维护比较基线及待发任务，仅在 `WEBHOOK_PUSH_
 
 停用时先停止全部 worker，将 worker 的 `SERVERCHAN_ENABLED` 设为 `false`，再在同一部署的后端运行环境执行 `node modules/reset-monitor/scripts/disable-review-notifications.ts --worker-stopped`。直接运行时可以在 `node` 后加 `--env-file=.env` 载入本环境配置。此命令持久作废旧待发资格，不发送通知；重新启用前也须完成这一步，即使关闭期间没有启动 worker。若已经以关闭配置启动 worker，启动检查也会登记停用。再次启用后旧待发不补发。
 
-三平台合计按北京时间每天最多 5 次发送尝试，失败及中断导致的未知结果计次；明确未发起请求的取消不占额度。单帖单次，不汇总、不催办；当天超额及跨日未发送永久跳过。同帖退出异常后再次进入可以重新通知，编辑和翻译不触发。已发起的请求保留结果，失败、超时和未知均不重试。后台“运行”的人工核对通知模块显示发送、失败、未知、取消和跳过数量，以及近期需要查看的轮次。
+所有平台合计按北京时间每天最多 5 次发送尝试，失败及中断导致的未知结果计次；明确未发起请求的取消不占额度。单帖单次，不汇总、不催办；当天超额及跨日未发送永久跳过。同帖退出异常后再次进入可以重新通知，编辑和翻译不触发。已发起的请求保留结果，失败、超时和未知均不重试。后台“运行”的人工核对通知模块显示发送、失败、未知、取消和跳过数量，以及近期需要查看的轮次。
 
 通知只发送固定原因及原帖和后台链接，详细原因须由管理员登录后台查看。开发与测试保持 `SERVERCHAN_ENABLED=false`；实现、测试不代表授权配置真实凭据、打开推送或部署。
 
 ### 平台配置
 
-Codex、Claude、Grok 统一支持直接重置、重置卡和奖励额度。初始账号、采集规则和平台专属事件规则分别见 [Codex](../modules/codex-reset/README.md)、[Claude](../modules/claude-reset/README.md)、[Grok](../modules/grok-reset/README.md)。新监控使用共享表并由 `monitor_id` 复合关系隔离，不复制业务实现或另建产品表。
+Codex、Claude、Grok 和 Gemini 统一支持直接重置、重置卡和奖励额度。初始账号、采集规则和平台专属事件规则分别见 [Codex](../modules/codex-reset/README.md)、[Claude](../modules/claude-reset/README.md)、[Grok](../modules/grok-reset/README.md) 和 [Gemini](../modules/gemini-reset/README.md)。新监控使用共享表并由 `monitor_id` 复合关系隔离，不复制业务实现或另建产品表。
+
+启用 Gemini Webhook 订阅前，先运行 0154–0156 迁移。迁移扩大现有订阅表的可选平台范围，保留既有订阅及平台选择。使用严格平台枚举的 v2 客户端也需要接受 `gemini`。
+
+### 统一影响范围标签
+
+先运行 `node --env-file=.env modules/reset-monitor/scripts/scope-label-backfill.ts --inventory <新清单>`，核对特定用户记录和带有自定义范围说明的历史事件。清单包含需保密的原帖、动作 ID 和现有摘要。审核文件形如 `{fingerprint,selected:[{monitorId,id,audience,note?,summary?,actions?}]}`。`audience` 可选 `single`、`multiple`、`all`、`paid` 或 `unknown`，仅 `single` 填七语言 `note`。证据不足选 `unknown`。资格只写在旧说明时，核对来源后用 `actions: [{id,summary}]` 将其保存到对应有来源动作的七语言摘要。仅有无来源确认时可使用确认摘要，无动作草稿使用事件 `summary`。已经写清的摘要可省略。
+
+先处理清单中的 `unpublished` 事件和待发、发送中的 Webhook，再停止写入者、核验完整备份并重新盘点。在隔离恢复副本演练，再按授权使用 `--apply <审核文件> --worker-stopped --database-backup <备份>` 执行。用 `--verification-database-env <变量名>` 指定独立备份验证库。工具在同一事务保存审核结果并重算已核实的 Webhook 指纹，保留修订号和草稿的首次通知资格。
 
 ### 影响范围契约切换
 

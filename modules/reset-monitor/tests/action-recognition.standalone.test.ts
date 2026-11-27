@@ -42,7 +42,7 @@ test("recognition instructions distinguish banked issuance, present usability an
   assert.match(prompt, /root has exactly one key, posts/);
   const schema = JSON.parse(prompt.split("Required JSON Schema (field types, enum values and required keys are authoritative):\n")[1]!.split("\nReturn no extra keys.")[0]!);
   const properties = schema.properties.posts.items.properties.actions.items.properties;
-  assert.deepEqual(Object.keys(properties.scope.properties).sort(), ["note", "type"]);
+  assert.deepEqual(Object.keys(properties.scope.properties).sort(), ["multipleAudiences", "note", "type"]);
   assert.equal(properties.scope.additionalProperties, false);
   assert.deepEqual(properties.scope.properties.type.enum, ["all_users", "paid_users", "selected_users", "unknown"]);
   assert.equal(properties.rawScope, undefined);

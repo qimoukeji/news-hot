@@ -4,8 +4,9 @@
 import codexReset from "@aihot/codex-reset/module";
 import claudeReset from "@aihot/claude-reset/module";
 import grokReset from "@aihot/grok-reset/module";
+import geminiReset from "@aihot/gemini-reset/module";
 import type { ModuleDeclaration } from "@aihot/contracts/modules";
 import { overviewModule } from "@aihot/reset-monitor/overview-module";
 import { subscriptionsModule } from "@aihot/reset-monitor/subscriptions-module";
 
-export const MODULES: readonly ModuleDeclaration[] = [codexReset, claudeReset, grokReset, overviewModule, subscriptionsModule];
+export const MODULES: readonly ModuleDeclaration[] = [codexReset, claudeReset, grokReset, geminiReset, overviewModule, subscriptionsModule];

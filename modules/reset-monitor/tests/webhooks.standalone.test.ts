@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import { config } from "@aihot/backend/config";
+import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
 import { guardedFetch } from "@aihot/backend/lib/http-fetch";
 import { webhookPayloadSchema, type WebhookPayload } from "../webhooks.ts";
 import { createSubscription, subscriptionInputSchema, webhookSignature, webhookPushEnabled } from "../backend/webhooks.ts";
@@ -48,13 +49,13 @@ test("webhook and API share the optional-source confirmation contract without re
   assert.equal(webhookPayloadSchema.safeParse({ ...payload, event: { ...event, confirmation: null } }).success, false);
 });
 
-test("webhook contract rejects internal fields, unknown platforms and nonpositive revisions", () => {
+test("webhook contract rejects internal fields, malformed platform IDs and nonpositive revisions", () => {
   for (const change of [
-    { platform: "claude" }, { revision: 0 }, { revision: 1.5 }, { schemaVersion: 1 },
+    { platform: "Claude Code" }, { revision: 0 }, { revision: 1.5 }, { schemaVersion: 1 },
     { occurredAt: "not-a-date" }, { secret: "must-not-leak" },
     { event: { ...payload.event, recognition: { raw: "internal model output" } } },
   ]) assert.equal(webhookPayloadSchema.safeParse({ ...payload, ...change }).success, false);
-  for (const platform of ["codex", "claude-code", "grok"]) {
+  for (const platform of ["codex", "claude-code", "grok", "future-platform"]) {
     assert.equal(webhookPayloadSchema.safeParse({ ...payload, platform }).success, true);
   }
 });
@@ -71,11 +72,12 @@ test("webhook signature authenticates timestamp and exact UTF-8 body bytes", () 
 test("subscription validation refuses private addresses, credentials and insecure callbacks before database access", async () => {
   const input = { name: "Synthetic subscriber", url: "https://8.8.8.8/hook", platforms: ["codex"], reason: "Synthetic test" };
   assert.equal(subscriptionInputSchema.parse(input).enabled, false);
+  await assert.rejects(createSubscription({ ...input, platforms: ["disabled-platform"] }, "test-reviewer", [codex]), /未启用/);
   for (const url of ["http://8.8.8.8/hook", "https://127.0.0.1/hook", "https://10.0.0.1/hook", "https://[::1]/hook",
     "https://user:password@8.8.8.8/hook", "https://8.8.8.8/hook#fragment"]) {
-    await assert.rejects(createSubscription({ ...input, url }, "test-reviewer"), /回调地址/);
+    await assert.rejects(createSubscription({ ...input, url }, "test-reviewer", [codex]), /回调地址/);
   }
-  for (const platforms of [[], ["claude"], ["codex", "codex"]]) {
+  for (const platforms of [[], ["Claude!"], ["codex", "codex"]]) {
     assert.equal(subscriptionInputSchema.safeParse({ ...input, platforms }).success, false);
   }
 });

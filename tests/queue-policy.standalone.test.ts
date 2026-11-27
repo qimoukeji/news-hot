@@ -12,7 +12,7 @@ import type { PgBoss } from "pg-boss";
 
 afterEach(() => { DEPLOYMENT.queues = null; installModules([]); });
 test("the site queue selection allows independent monitor translation, collection, confirmation checks, review notifications and subscription delivery", () => {
-  assert.deepEqual(siteQueueSelection?.slice().sort(), ["cron.claude-reset.tick", "cron.claude-reset.translate", "cron.codex-reset.translate", "cron.grok-reset.tick", "cron.grok-reset.translate", "cron.monitor.tick", "cron.reset-confirmations.check", "cron.reset-review.notify", "cron.reset-subscriptions.sweep", "reset-subscriptions.deliver"]);
+  assert.deepEqual(siteQueueSelection?.slice().sort(), ["cron.claude-reset.tick", "cron.claude-reset.translate", "cron.codex-reset.translate", "cron.gemini-reset.tick", "cron.gemini-reset.translate", "cron.grok-reset.tick", "cron.grok-reset.translate", "cron.monitor.tick", "cron.reset-confirmations.check", "cron.reset-review.notify", "cron.reset-subscriptions.sweep", "reset-subscriptions.deliver"]);
   DEPLOYMENT.queues = siteQueueSelection;
   for (const name of siteQueueSelection!) assert.equal(queueEnabled(name), true);
   for (const name of ["content.analyze", "content.translate", "cron.content.translate", "sources.fetch", "reset.webhook", "cron.ops.recover"])

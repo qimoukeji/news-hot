@@ -1,0 +1,1 @@
+ALTER TABLE monitor_webhook_subscriptions VALIDATE CONSTRAINT monitor_webhook_subscriptions_nonempty_platforms_check;

@@ -1,3 +1,4 @@
+import { scopeForWrite } from "../backend/scope-labels.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
@@ -129,7 +130,7 @@ test("cutover rejects stale inventories and never disposes of pending work or de
   await assert.rejects(assertScopeCutoverComplete(), /reviewed reset-monitor scope cutover/);
 });
 
-test("empty retired arrays need no invented summary and unknown never retains the historical all-users label", async () => {
+test("empty retired arrays need no invented summary and unknown persists the standard display label", async () => {
   await sql`UPDATE monitor_event_records SET scope=${sql.json({ type: "unknown", note: properName("All users"),
     productCodes: [], planCodes: [], quotaWindowCodes: [] })} WHERE id=${event}`;
   await saveOldFingerprint();
@@ -140,7 +141,8 @@ test("empty retired arrays need no invented summary and unknown never retains th
   assert.deepEqual(await apply({ fingerprint: inventory.fingerprint, events: [] }), { events: 1, actions: 0 });
   const input = await inMonitor(codex, () => loadActionInput());
   assert.equal(input.events[0]!.scope?.type, "unknown");
-  assert.equal(input.events[0]!.scope?.note?.en, "Eligibility unspecified");
+  assert.equal(input.events[0]!.scope?.note?.en, "All users");
+  assert.equal(input.events[0]!.scope?.note?.zh, "所有用户");
   assert.equal(input.events[0]!.summary, null);
   await sweepConfirmationResults([codex], Date.parse(at) + 1);
   const [baseline] = await sql`SELECT value FROM monitor_state WHERE monitor_id='codex' AND key=${`webhook:event:${event}`}`;
@@ -157,7 +159,7 @@ test("reviewed empty-code records can correct an audience or add a sourced summa
   assert.deepEqual(await apply({ fingerprint: inventory.fingerprint, events: [{ monitorId: "codex", eventId: event,
     reviewed: true, scope: { type: "unknown", note: null }, actions: [{ id: "legacy-confirm", summary }] }] }), { events: 1, actions: 1 });
   const input = await inMonitor(codex, () => loadActionInput());
-  assert.deepEqual(input.events[0]!.scope, { type: "unknown", note: null });
+  assert.deepEqual(input.events[0]!.scope, scopeForWrite());
   assert.deepEqual(input.actions[0]!.summary, summary);
 });
 

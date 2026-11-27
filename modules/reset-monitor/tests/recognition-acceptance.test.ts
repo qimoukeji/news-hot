@@ -1,3 +1,4 @@
+import { scopeForWrite } from "../backend/scope-labels.ts";
 import { bt } from "./business-time-fixture.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
@@ -68,7 +69,7 @@ for (const definition of definitions) {
     assert.equal((await publicV2Snapshot()).events[0]!.status, "completed");
     const input = await loadActionInput();
     assert.deepEqual(input.actions[0]!.time, bt(at));
-    assert.deepEqual(input.events[0]!.scope, { type: "unknown", note: null });
+    assert.deepEqual(input.events[0]!.scope, scopeForWrite());
   }));
 
   test(`${definition.monitorId}: a valid action survives another fact requiring review and is not retried`, async () => inMonitor(definition, async () => {
@@ -202,7 +203,7 @@ test("supplemental sources keep accepted facts; a sourced amendment changes the 
   assert.deepEqual((await applyOfflineRecognition(repeat.id, repeated, repeat.version)).eventIds, [eventId]);
   const afterRepeat = await loadActionInput();
   assert.equal(afterRepeat.events.length, 1);
-  assert.deepEqual(afterRepeat.events[0]!.scope, claim.scope);
+  assert.deepEqual(afterRepeat.events[0]!.scope, scopeForWrite(claim.scope));
   assert.equal(afterRepeat.actions.length, 1);
   assert.equal(afterRepeat.actions[0]!.id, prior!.id);
   assert.deepEqual(afterRepeat.actions[0]!.summary, claim.summary);

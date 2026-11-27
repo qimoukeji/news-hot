@@ -2,7 +2,7 @@ import type { BusinessTime, EventList, EventStatus } from "../public-v2.ts";
 
 export type LocalizedText = Partial<Record<"en" | "zh" | "zh-Hant" | "ja" | "ko" | "ru" | "es", string>>;
 export type EventKind = EventList["list"][number]["type"];
-export type EventDraft = { type: EventKind; title: string; summary: string; scope: string };
+export type EventDraft = { type: EventKind; title: string; summary: string; scopeMode: Scope["type"] | "multiple_users"; scope: string };
 export type Scope = Omit<EventList["list"][number]["scope"], "note"> & { note: LocalizedText | null };
 export type ActionKind = EventList["list"][number]["updates"][number]["action"];
 export type Pagination = { page: number; total: number; totalPages: number; pageSize: number };
@@ -36,4 +36,8 @@ export type ReviewPreview = {
   orderChanges: Array<{ eventId: string; before: string[]; after: string[] }>;
   lastSourceRemovals: Array<{ actionId: string; eventId: string; message: string }>;
 };
-export const emptyScope = (): Scope => ({ type: "unknown", note: null });
+export function eventDraftScope(draft: EventDraft): Scope {
+  if (draft.scopeMode === "multiple_users") return { type: "selected_users", note: { zh: "付费用户" } };
+  if (draft.scopeMode === "selected_users") return { type: draft.scopeMode, note: { zh: draft.scope.trim() } };
+  return { type: draft.scopeMode, note: null };
+}

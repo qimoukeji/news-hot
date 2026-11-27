@@ -29,7 +29,7 @@
 | `/admin/claude-reset` | 事件列表与帖子列表两个 tab，默认事件列表；帖子包含已关联与未关联记录，只保留北京时间日期范围筛选，各自分页 |
 | `/admin/claude-reset/events/:id` | 事件详情及动作、来源管理 |
 | `/admin/claude-reset/posts/:id/review` | 帖子处理、动作及来源复核 |
-| `/api/v2/overview` | 三平台来源、统计和最近事件时间 |
+| `/api/v2/overview` | 各平台来源、统计和最近事件时间 |
 | `/api/v2/claude-resets` | 事件列表及完整动作 `updates` |
 | MCP `get_claude_resets`（带站点前缀） | 同一 v2 投影的文本和结构化数据 |
 

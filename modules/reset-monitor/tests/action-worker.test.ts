@@ -11,6 +11,7 @@ import { createMonitorServer } from "../server.ts";
 import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
+import { backendDefinition as gemini } from "../../gemini-reset/backend-definition.ts";
 import { inMonitor, type ResetMonitorBackendDefinition } from "../backend/context.ts";
 import { applyRecognition as acceptRecognition, applyRecognitionGroup } from "../backend/assemble.ts";
 import { storeCollectedPost, sourcePost, loadActionInput, writePostActions } from "../backend/action-store.ts";
@@ -55,14 +56,19 @@ const answers = new Map<string, ActionRecognition>();
 const modelInputs = new Map<string, any>();
 const editorialInputs: Record<string, unknown>[] = [];
 const collectionQueries: URL[] = [];
+const secondGrokAuthor = { handle: "otherofficial", name: "Synthetic official" };
+const multiAuthorGrok = { ...grok, authors: [...grok.authors, secondGrokAuthor] };
+const geminiResetText = "We have reset everyone's Gemini quota on Antigravity.";
 let collectionFailure = false;
+let paginateBot = false;
 const collector = await stub((_hit, request) => {
   const url = new URL(request.url, "http://localhost"); collectionQueries.push(url);
   const handle = /from:(\w+)/.exec(url.searchParams.get("query")!)![1]!;
-  if (collectionFailure && handle === grok.authors[1]!.handle.toLowerCase()) return new Reply(429, { error: "Synthetic page refusal" });
-  const id = handle === "bot" ? "900101" : "900201";
-  const root = { id_str: id, full_text: "We reset usage.", tweet_created_at: at, user: { name: handle, screen_name: handle } };
-  return { tweets: [root], next_cursor: null };
+  if (collectionFailure && handle === secondGrokAuthor.handle) return new Reply(429, { error: "Synthetic page refusal" });
+  if (paginateBot && handle === "bot" && url.searchParams.get("cursor") === "bot-page-2") return { tweets: [], next_cursor: null };
+  const id = handle === "bot" ? "900101" : handle === "_mohansolo" ? "900301" : "900201";
+  const root = { id_str: id, full_text: handle === "_mohansolo" ? geminiResetText : "We reset usage.", tweet_created_at: at, user: { name: handle, screen_name: handle } };
+  return { tweets: [root], next_cursor: paginateBot && handle === "bot" ? "bot-page-2" : null };
 });
 let transportFailure = false, invalidOutput = false;
 let beforeModelReply: (() => Promise<void>) | null = null;
@@ -102,7 +108,7 @@ const model = await stub(async (_hit, request) => {
 Object.assign(process.env, { MONITOR_MODEL: "default", LLM_BASE_URL: `${model.url}/v1`, LLM_API_KEY: "synthetic", LLM_MODEL: "synthetic-actions",
   SOCIALDATA_BASE_URL: collector.url, SOCIALDATA_API_KEY: "synthetic", GROK_RESET_PROVIDER: "socialdata" });
 config.allowPrivateNetworkFetch = true;
-installModules([codex, claude, grok].map(createMonitorServer));
+installModules([codex, claude, grok, gemini].map(createMonitorServer));
 beforeEach(async () => {
  await sql`DELETE FROM monitor_event_actions`;
   await sql`DELETE FROM monitor_event_records`; await sql`DELETE FROM monitor_source_posts`;
@@ -111,7 +117,7 @@ beforeEach(async () => {
   editorialInputs.length = 0;
   invalidTranslation = false;
   beforeModelReply = null;
-  collectionFailure = false; collectionQueries.length = 0;
+  collectionFailure = false; paginateBot = false; collectionQueries.length = 0;
   config.modelCallsEnabled = true; process.env.COLLECT_ENABLED = "true";
 });
 after(async () => { await model.close(); await collector.close(); installModules([]); await closeDb(); });
@@ -137,7 +143,7 @@ test("model candidates retain official state and fallback titles after public in
 }));
 
 test("post-backed worker accepts a first confirmation and keeps original bodies outside actions and public responses", async () => {
-  for (const definition of [codex, claude, grok]) {
+  for (const definition of [codex, claude, grok, gemini]) {
     const post = await addPost(definition, "We reset usage for everyone.");
     await inMonitor(definition, () => applyRecognition(post.id, recognition(post.text, post.modelReceiptId)));
     const input = await inMonitor(definition, () => loadActionInput());
@@ -155,6 +161,26 @@ test("post-backed worker accepts a first confirmation and keeps original bodies 
     assert.doesNotMatch(JSON.stringify(snapshot), /"(?:text|quoted_post|translation)":/);
     const [receipt] = await sql`SELECT status FROM receipts WHERE id=${post.modelReceiptId}`;
     assert.equal(receipt!.status, "completed");
+  }
+});
+
+test("a valid action stays public when its audience evidence fails, while separate groups use the fixed paid label", async () => {
+  const source = "We have reset usage for Free and Pro users.";
+  for (const [excerpt, type, note] of [
+    ["for Free and Pro users", "selected_users", "付费用户"],
+    ["for Enterprise users", "unknown", "所有用户"],
+  ] as const) {
+    const post = await addPost(codex, source);
+    const action = claim(source, { scope: { type: "selected_users", note: null, multipleAudiences: true }, scopeExcerpt: excerpt });
+    await inMonitor(codex, () => applyRecognition(post.id, recognition(source, post.modelReceiptId, [action])));
+    const stored = await inMonitor(codex, () => sourcePost(post.id));
+    const event = (await inMonitor(codex, () => publicV2Snapshot())).events.find(item =>
+      item.updates.some(update => update.sources.some(item => item.postId === post.id)));
+    assert.equal(event?.status, "completed");
+    assert.equal(event?.scope.type, type);
+    assert.equal(event?.scope.note?.zh, note);
+    assert.equal(Object.keys(event!.scope.note!).length, 7);
+    assert.equal(stored?.processing_status, type === "unknown" ? "needs_attention" : "processed");
   }
 });
 
@@ -401,7 +427,7 @@ test("valid facts survive review flags while fabricated announcement evidence st
     { text: "We reset usage.", patch: {}, needsReview: true, accepted: true, review: true },
     { text: "We will reset usage.", patch: { action: "announce", excerpt: "We reset usage for everyone." }, accepted: false, review: true },
     { text: "We will reset usage soon.", patch: { action: "announce", timeExcerpt: "soon" }, accepted: true, review: true },
-    { text: "We will reset usage for paid users.", patch: { action: "announce", scopeExcerpt: "for everyone" }, accepted: false, review: true },
+    { text: "We will reset usage for paid users.", patch: { action: "announce", scopeExcerpt: "for everyone" }, accepted: true, review: true },
     { text: "We reset usage.", patch: {}, accepted: true, review: false },
   ];
   for (const value of cases) {
@@ -417,7 +443,7 @@ test("valid facts survive review flags while fabricated announcement evidence st
     if (value.patch.timeExcerpt === "soon") assert.deepEqual(input.actions.find(action => action.sources.some(source => source.postId === post.id))!.time,
       { kind: "instant", at: "2026-10-23T18:00:00Z" });
   }
-  assert.equal((await inMonitor(codex, () => loadActionInput())).actions.length, 3);
+  assert.equal((await inMonitor(codex, () => loadActionInput())).actions.length, 4);
 });
 
 test("recognition reads saved original text even when the collection receipt no longer contains a body", async () => {
@@ -520,7 +546,7 @@ test("event edits translate title, summary and scope independently of collection
   await inMonitor(codex, async () => {
     const event = (await listEvents()).events[0]!;
     await updateMonitorEvent(event.id, { version: event.version, patch: { title: { zh: "人工标题" }, summary: { zh: "人工摘要" },
-      scope: { ...scope, note: { zh: "仅适用明确范围" } } } }, "reviewer");
+      scope: { type: "selected_users", note: { zh: "仅适用明确范围" } } } }, "reviewer");
     const edited = (await loadActionInput()).events[0]!;
     assert.deepEqual(edited.title, { zh: "人工标题" });
     assert.deepEqual(edited.summary, { zh: "人工摘要" });
@@ -630,7 +656,7 @@ test("collection, recognition and translation safety valves prevent external cal
 test("all authors use the fixed collection window, replies are excluded and only a successful round advances the checkpoint", async () => {
   mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T13:00:00Z") });
   const since = "2026-10-23T11:00:00.000Z";
-  await inMonitor(grok, async () => {
+  await inMonitor(multiAuthorGrok, async () => {
     await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES('grok',${cursorKey()},${sql.json({ checkpointVersion: 2, scannedThrough: since })})`;
     const collected = await collectPosts({ startedAt: new Date("2026-10-23T12:30:00Z"), roundId: "fixed-round" });
     assert.equal(collected.stored, 2); assert.equal(collected.pages, 2);
@@ -653,6 +679,49 @@ test("all authors use the fixed collection window, replies are excluded and only
   });
 });
 
+test("removing an author resumes the retained author's paid window without buying the first page again", async () => {
+  const started = "2026-10-23T13:00:00.000Z";
+  const since = "2026-10-23T11:00:00.000Z";
+  mock.timers.enable({ apis: ["Date"], now: new Date(started) });
+  paginateBot = true;
+  await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES('grok',${inMonitor(grok, cursorKey)},${sql.json({ checkpointVersion: 2, scannedThrough: since })})`;
+  const beforeRemoval = { ...multiAuthorGrok, collection: { ...multiAuthorGrok.collection, maxPagesPerRun: 1 } };
+  const first = await inMonitor(beforeRemoval, monitorTick);
+  assert.ok("pageLimitReached" in first && first.pageLimitReached);
+  const post = await inMonitor(grok, () => sourcePost("900101"));
+  assert.ok(post?.source_receipt_id);
+
+  const otherQuery = { ...grok, collection: { ...grok.collection, resetOnly: true } };
+  await assert.rejects(inMonitor(otherQuery, monitorTick), /Collection window configuration changed/);
+  assert.equal(collectionQueries.length, 1);
+
+  answers.set("900101", recognition(post.text!, 0));
+  mock.timers.setTime(Date.parse("2026-10-23T14:00:00Z"));
+  const resumed = await inMonitor(grok, monitorTick);
+  assert.ok("verifiedAt" in resumed && resumed.complete);
+  assert.equal(resumed.verifiedAt, started);
+  assert.deepEqual(collectionQueries.map(url => [url.searchParams.get("query"), url.searchParams.get("cursor")]),
+    [[collectionQueries[0]!.searchParams.get("query"), null], [collectionQueries[0]!.searchParams.get("query"), "bot-page-2"]]);
+  assert.equal((await inMonitor(grok, () => sourcePost("900101")))!.source_receipt_id, post.source_receipt_id);
+  const [checkpoint] = await sql`SELECT value FROM monitor_state WHERE monitor_id='grok' AND key=${inMonitor(grok, cursorKey)}`;
+  assert.equal(checkpoint!.value.scannedThrough, started);
+});
+
+test("Gemini scans the configured account and publishes its quota confirmation with the original source", async () => inMonitor(gemini, async () => {
+  mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T13:00:00Z") });
+  await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES('gemini',${cursorKey()},${sql.json({ checkpointVersion: 2, scannedThrough: "2026-10-23T11:00:00Z" })})`;
+  answers.set("900301", recognition(geminiResetText, 0));
+  const result = await monitorTick();
+  assert.ok("pending" in result && result.pending === 0);
+  assert.equal(collectionQueries.length, 1);
+  assert.match(collectionQueries[0]!.searchParams.get("query")!, /from:_mohansolo\b/);
+  const snapshot = await publicV2Snapshot();
+  assert.equal(snapshot.platform, "gemini");
+  assert.equal(snapshot.events.length, 1);
+  assert.equal(snapshot.events[0]!.status, "completed");
+  assert.equal(snapshot.events[0]!.updates[0]!.sources[0]!.url, "https://x.com/_mohansolo/status/900301");
+}));
+
 test("pending editorial translation never blocks a completed collection checkpoint", async () => {
   mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T13:00:00Z") });
   const checkpointKey = inMonitor(grok, () => cursorKey());
@@ -661,10 +730,11 @@ test("pending editorial translation never blocks a completed collection checkpoi
   const event = (await inMonitor(grok, () => loadActionInput())).events[0]!;
   await sql`UPDATE monitor_event_records SET title='{"zh":"待翻译标题"}'::jsonb WHERE monitor_id='grok' AND id=${event.id}`;
   await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES('grok',${checkpointKey},${sql.json({ checkpointVersion: 2, scannedThrough: "2026-10-23T11:00:00Z" })})`;
-  for (const id of ["900101", "900201"]) answers.set(id, recognition("We reset usage.", 0));
+  answers.set("900101", recognition("We reset usage.", 0));
   const result = await inMonitor(grok, () => monitorTick());
   assert.ok("pending" in result && result.pending === 0);
   assert.equal("enriched" in result, false);
+  assert.deepEqual(collectionQueries.map(query => /from:(\w+)/.exec(query.searchParams.get("query")!)?.[1]), ["bot"]);
   assert.deepEqual((await inMonitor(grok, () => loadActionInput())).events.find(item => item.id === event.id)!.title, { zh: "待翻译标题" });
   const [advanced] = await sql`SELECT value FROM monitor_state WHERE monitor_id='grok' AND key=${checkpointKey}`;
   assert.equal(advanced!.value.scannedThrough, "2026-10-23T13:00:00.000Z");
@@ -674,7 +744,7 @@ test("pending editorial translation never blocks a completed collection checkpoi
   assert.deepEqual(unchanged!.value, advanced!.value);
 });
 
-test("a settled model format failure does not stall another post's event or the next collection window", async () => inMonitor(grok, async () => {
+test("a settled model format failure does not stall another post's event or the next collection window", async () => inMonitor(multiAuthorGrok, async () => {
   mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T13:00:00Z") });
   await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES('grok',${cursorKey()},${sql.json({ checkpointVersion: 2, scannedThrough: "2026-10-23T11:00:00Z" })})`;
   answers.set("900101", recognition("We reset usage.", 0));
@@ -693,7 +763,7 @@ test("a preflight model budget refusal stays pending and resumes after the windo
   const since = "2026-10-23T11:00:00.000Z", before = model.hits();
   for (const id of ["900101", "900201"]) answers.set(id, recognition("We reset usage.", 0));
   await sql`INSERT INTO budgets(service,per_minute,per_hour,per_day) VALUES('llm',1,100,100)`;
-  await inMonitor(grok, async () => {
+  await inMonitor(multiAuthorGrok, async () => {
     await sql`INSERT INTO monitor_state(monitor_id,key,value) VALUES('grok',${cursorKey()},${sql.json({ checkpointVersion: 2, scannedThrough: since })})`;
     await assert.rejects(monitorTick(), /Budget for llm exhausted \(minute\)/);
     const first = await loadActionInput();
@@ -753,16 +823,16 @@ test("account-specific campaign closure does not change event state", async () =
 });
 
 test("cross-author follow-ups require the event's exact saved source link", async () => {
-  const initial = await addPost(grok, "We will reset usage.", { id: "991001" });
-  await inMonitor(grok, () => applyRecognition(initial.id, recognition(initial.text, initial.modelReceiptId, [claim(initial.text, { action: "announce" })])));
-  const event = (await inMonitor(grok, () => loadActionInput())).events[0]!;
+  const initial = await addPost(multiAuthorGrok, "We will reset usage.", { id: "991001" });
+  await inMonitor(multiAuthorGrok, () => applyRecognition(initial.id, recognition(initial.text, initial.modelReceiptId, [claim(initial.text, { action: "announce" })])));
+  const event = (await inMonitor(multiAuthorGrok, () => loadActionInput())).events[0]!;
   for (const [url, accepted] of [[`https://x.com/bot/status/9910019`, false], [`https://x.com/bot/status/991001?ref=test`, true]] as const) {
-    const post = await addPost(grok, `All done. ${url}`, { author: grok.authors[1]!.handle, publishedAt: "2026-10-23T13:00:00Z" });
-    await inMonitor(grok, () => applyRecognition(post.id, recognition(post.text, post.modelReceiptId,
+    const post = await addPost(multiAuthorGrok, `All done. ${url}`, { author: secondGrokAuthor.handle, publishedAt: "2026-10-23T13:00:00Z" });
+    await inMonitor(multiAuthorGrok, () => applyRecognition(post.id, recognition(post.text, post.modelReceiptId,
       [claim("All done", { eventId: event.id, localEventKey: null })])));
-    assert.equal((await inMonitor(grok, () => sourcePost(post.id)))!.processing_status, accepted ? "processed" : "needs_attention");
+    assert.equal((await inMonitor(multiAuthorGrok, () => sourcePost(post.id)))!.processing_status, accepted ? "processed" : "needs_attention");
   }
-  assert.equal((await inMonitor(grok, () => publicV2Snapshot())).events[0]!.status, "completed");
+  assert.equal((await inMonitor(multiAuthorGrok, () => publicV2Snapshot())).events[0]!.status, "completed");
 });
 
 test("reward closure, reopening and expiry are progress and preserve confirmation", async () => {

@@ -23,6 +23,7 @@ for (const product of platforms) test(`${product.product} creates an event first
     const title = `${product.product} 人工创建事件`;
     await dialog.getByLabel("标题（中文）", { exact: true }).fill(title);
     await dialog.getByLabel("摘要（中文）", { exact: true }).fill("管理员创建的活动");
+    await dialog.getByLabel("影响范围", { exact: true }).selectOption("selected_users");
     await dialog.getByLabel("影响范围（中文）", { exact: true }).fill("仅限特定用户");
     await dialog.getByRole("button", { name: "创建", exact: true }).click();
     await expect(dialog).toHaveCount(0);

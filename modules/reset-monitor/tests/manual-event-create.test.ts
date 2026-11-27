@@ -77,7 +77,7 @@ test("manual creation requires a Chinese title and rejects business facts, forei
   await assert.rejects(inMonitor({ ...codex, eventKinds: ["direct_reset"] }, () => createMonitorEvent({ ...valid, type: "bonus_credit" }, "manual-admin")), /不支持事件类型/);
   assert.equal((await loadActionInput()).events.length, 0); assert.equal((await sql`SELECT 1 FROM audit_log`).length, 0);
   const saved = await createMonitorEvent({ ...valid, title: { zh: "  人工创建  " }, summary: null, scope: null }, "manual-admin");
-  assert.equal(saved.title!.zh, "人工创建"); assert.equal(saved.summary, null); assert.equal(saved.scope, null);
+  assert.equal(saved.title!.zh, "人工创建"); assert.equal(saved.summary, null); assert.equal(saved.scope?.type, "unknown"); assert.equal(saved.scope.note?.zh, "所有用户");
 }));
 
 test("manual event POST requires an administrator and CSRF and creates no actions or notifications", async () => {

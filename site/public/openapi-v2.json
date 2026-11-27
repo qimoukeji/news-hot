@@ -245,6 +245,80 @@
         }
       }
     },
+    "/api/v2/gemini-resets": {
+      "get": {
+        "summary": "gemini events with accepted actions and all source links",
+        "description": "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Event and action time are required saved values: instant {at}, range {from,through}, or deadline {at}. Business timestamps use UTC; publishedAt separately records source publication or source-free action creation. Individual quota status remains subject to the account display.",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Inclusive local start date; default start of selected month."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Inclusive local end date; at most six calendar months."
+          },
+          {
+            "name": "timeZone",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "UTC"
+            },
+            "description": "IANA time zone; the site uses Asia/Shanghai."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Omit to return all events in range."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Opaque cursor bound to platform, dates, time zone and limit."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventList"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged ETag"
+          },
+          "400": {
+            "description": "Invalid query"
+          },
+          "503": {
+            "description": "Publication unavailable"
+          }
+        }
+      }
+    },
     "/api/v2/agent/codex-resets": {
       "get": {
         "summary": "codex quota events for agents",
@@ -282,6 +356,23 @@
     "/api/v2/agent/grok-resets": {
       "get": {
         "summary": "grok quota events for agents",
+        "responses": {
+          "200": {
+            "description": "Read-only answer derived from the same v2 events and actions",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/agent/gemini-resets": {
+      "get": {
+        "summary": "gemini quota events for agents",
         "responses": {
           "200": {
             "description": "Read-only answer derived from the same v2 events and actions",
@@ -1637,7 +1728,7 @@
                         "selected_users",
                         "unknown"
                       ],
-                      "description": "unknown means the audience is unverified and must not be interpreted as eligibility for everyone."
+                      "description": "unknown means the source did not establish an audience; its All users display label does not establish eligibility."
                     },
                     "note": {
                       "anyOf": [
@@ -1789,11 +1880,8 @@
               "properties": {
                 "platform": {
                   "type": "string",
-                  "enum": [
-                    "codex",
-                    "claude-code",
-                    "grok"
-                  ]
+                  "pattern": "^[a-z][a-z0-9-]*$",
+                  "description": "Platform ID configured by the site."
                 },
                 "sources": {
                   "type": "array",

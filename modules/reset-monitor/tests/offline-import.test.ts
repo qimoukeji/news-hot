@@ -146,7 +146,7 @@ test("historical author trust is limited to observed sources in this monitor and
   const quotedPost = { id: "201", author: historicalAuthor, relation: "quote" as const, text: original, publishedAt: at,
     url: `https://x.com/${historicalAuthor}/status/201` };
   const bundle: OfflineBundle = { version: 1, capturedAt: at, sources: [
-    { ...observed("202", "grok", repeated, "2026-10-10T12:01:00.000Z"), quotedPost, recognition: reset(repeated, "201") },
+    { ...observed("202", "bot", repeated, "2026-10-10T12:01:00.000Z"), quotedPost, recognition: reset(repeated, "201") },
     { ...observed("201", historicalAuthor, original, at), recognition: reset(original) },
   ] };
   const [before] = await sql`SELECT count(*)::integer AS count FROM receipts`;

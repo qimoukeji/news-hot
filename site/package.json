@@ -15,8 +15,9 @@
     "./brand/*": "./brand/*"
   },
   "dependencies": {
-    "@aihot/codex-reset": "*",
     "@aihot/claude-reset": "*",
+    "@aihot/codex-reset": "*",
+    "@aihot/gemini-reset": "*",
     "@aihot/grok-reset": "*"
   }
 }

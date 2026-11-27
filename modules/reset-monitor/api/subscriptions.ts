@@ -12,7 +12,7 @@ function found(req: FastifyRequest, reply: FastifyReply, value: unknown) {
 }
 export function registerSubscriptionsHttp(app: FastifyInstance, definitions: readonly ResetMonitorBackendDefinition[]) {
   const path = "/api/admin/reset-subscriptions";
-  app.get(path,adminHandler(async () => webhooks.listSubscriptions()));
+  app.get(path,adminHandler(async () => webhooks.listSubscriptions(definitions)));
   app.post(path,adminHandler(async (req,reply,who) => {
     reply.header("Cache-Control","no-store");
     return webhooks.createSubscription(req.body,actorOf(who),definitions);

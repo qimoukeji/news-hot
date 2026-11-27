@@ -1,3 +1,4 @@
+import { scopeForWrite } from "../backend/scope-labels.ts";
 import "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
@@ -84,7 +85,7 @@ for (const [index, scenario] of scopeCases.entries()) test(`paid fallback preser
   assert.deepEqual(actions[0]!.sources, [{ postId }]);
   assert.equal(actions[0]!.action, claim.action);
   assert.deepEqual(actions[0]!.time, defaultActionTime(claim.action, new Date(publishedAt)));
-  assert.deepEqual(event.scope, scenario.verified ? claim.scope : { type: "unknown", note: null });
+  assert.deepEqual(event.scope, scenario.verified ? claim.scope : scopeForWrite());
   assert.deepEqual(event.summary, claim.summary);
   assert.deepEqual(actions[0]!.summary, claim.summary);
   const published = projectRawV2(after, claude).events.find(candidate => candidate.id === event.id)!;

@@ -27,7 +27,7 @@ export const localizedTextSchema = z.strictObject({
   en: text, zh: text, "zh-Hant": text, ja: text, ko: text, ru: text, es: text,
 });
 const identifier = text;
-export const platformSchema = z.enum(["codex", "claude-code", "grok"]);
+export const platformSchema = z.string().regex(/^[a-z][a-z0-9-]*$/).describe("Platform ID configured by the site.");
 export const updateSourceSchema = z.strictObject({ postId: identifier, sourceId: identifier, url: sourceUrlSchema });
 export const updateActions = ["announce", "confirm", "progress", "amend"] as const;
 export const businessTimeSchema = z.discriminatedUnion("kind", [
@@ -78,7 +78,7 @@ export function isFutureBusinessTime(time: BusinessTime, at: string): boolean {
 export const eventStatuses = ["announced", "in_progress", "completed", "cancelled"] as const;
 export type EventStatus = (typeof eventStatuses)[number];
 export const scopeSchema = z.strictObject({
-  type: z.enum(["all_users", "paid_users", "selected_users", "unknown"]).describe("unknown means the audience is unverified and must not be interpreted as eligibility for everyone."),
+  type: z.enum(["all_users", "paid_users", "selected_users", "unknown"]).describe("unknown means the source did not establish an audience; its All users display label does not establish eligibility."),
   note: localizedTextSchema.nullable().describe("Concise localized audience label. Specific eligibility, products, plans, and quota periods are described in event and action summaries."),
 });
 const eventObjectSchema = z.strictObject({

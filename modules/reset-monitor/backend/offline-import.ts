@@ -16,7 +16,7 @@ import { sourceContentIssue } from "./source-completeness.ts";
 export const offlineDefinitions: readonly ResetMonitorBackendDefinition[] = RESET_MONITOR_BACKENDS;
 export const offlineClearTables = ["monitor_webhook_deliveries", "monitor_webhook_notifications", "monitor_event_actions", "monitor_event_records", "monitor_source_posts", "monitor_state"] as const;
 export const offlinePreservedTables = ["monitor_webhook_subscriptions", "receipts", "audit_log"] as const;
-const identitySchema = z.strictObject({ monitorId: z.enum(["codex", "claude", "grok"]), id: z.string().regex(/^\d+$/), url: z.url(), evidencePath: z.string().min(1) });
+const identitySchema = z.strictObject({ monitorId: z.enum(offlineDefinitions.map(definition => definition.monitorId)), id: z.string().regex(/^\d+$/), url: z.url(), evidencePath: z.string().min(1) });
 const observedSchema = identitySchema.extend({ status: z.literal("observed"), author: z.string().regex(/^[A-Za-z0-9_]{1,15}$/), publishedAt: z.iso.datetime(), text: z.string().refine(value => !!value.trim(), "Original text is required"), quotedPost: quotedPostSchema.nullable().optional(), replyTo: replyToSchema.nullable().optional(), recognition: actionRecognitionSchema.optional(), reason: z.string().min(1).optional() });
 const unavailableSchema = identitySchema.extend({ status: z.literal("unavailable"), reason: z.string().min(1) });
 export const offlineBundleSchema = z.strictObject({ version: z.literal(1), capturedAt: z.iso.datetime(), sources: z.array(z.discriminatedUnion("status", [observedSchema, unavailableSchema])).min(1) }).superRefine((bundle, ctx) => {

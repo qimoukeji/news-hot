@@ -1,3 +1,4 @@
+import { scopeForWrite } from "../backend/scope-labels.ts";
 import { stub } from "../../../tests/setup.ts";
 import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
@@ -230,7 +231,7 @@ test("a remaining round does not borrow the previous round's audience or schedul
   assert.notEqual(initial.action.time, null);
   await seed([firstRound]); await processPending();
   const input = await loadActionInput(), next = input.events.find(event => event.id !== initial.event.id)!;
-  assert.deepEqual(next.scope, { type: "unknown", note: null });
+  assert.deepEqual(next.scope, scopeForWrite());
   assert.deepEqual(reduceEvent(next, input)!.time, { kind: "instant", at: "2026-11-01T23:59:00.000Z" });
   assert.deepEqual(input.events.find(event => event.id === initial.event.id)!.scope, initial.event.scope);
 }));

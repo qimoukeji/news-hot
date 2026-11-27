@@ -25,7 +25,7 @@ for (const product of platforms) for (const status of ["needs_attention", "faile
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   const requestsStart = fixture.requests.length;
   try {
-    await page.goto(`${web.origin}${product.admin}?kind=posts&q=post-1&filter=${status}&collectionFilter=all&page=2`);
+    await page.goto(`${web.origin}${product.admin}?kind=posts&q=post-1&filter=${status}&page=2`);
     const card = page.locator('[data-monitor-post="post-1"]');
     await expect(card).toBeVisible();
     await expect(card.getByText("已关联", { exact: true })).toBeVisible();
@@ -57,7 +57,7 @@ for (const product of platforms) for (const status of ["needs_attention", "faile
     assertForwarded("2");
     await expect(page.getByLabel("搜索帖子", { exact: true })).toHaveValue("post-1");
     await expect(page.getByLabel("识别状态", { exact: true })).toHaveValue(status);
-    await expect(page.getByLabel("采集记录", { exact: true })).toHaveValue("all");
+    await expect(page.getByLabel("采集记录", { exact: true })).toHaveCount(0);
     const url = page.url();
     await card.getByRole("button", { name: "编辑", exact: true }).click();
     await editDialog(page).getByLabel("标题（中文）", { exact: true }).fill("核对中的帖子");

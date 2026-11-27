@@ -104,7 +104,7 @@ export async function cancelReviewNotification(db: Db, postId: string) {
 }
 
 function messageFor(definition: ResetMonitorBackendDefinition, post: ReviewPost): ReviewMessage {
-  const query = new URLSearchParams({ kind: "posts", q: post.id, filter: post.processing_status, collectionFilter: "all" });
+  const query = new URLSearchParams({ kind: "posts", q: post.id, filter: post.processing_status });
   const adminUrl = `${config.siteUrl}${definition.adminPath}?${query}`;
   // Escape source text without changing author handles or allowing embedded Markdown links/images.
   const plain = (value: string) => value.replace(/\s+/g, " ").trim().replace(/[\\`*_{}\[\]()<>!#|]/g, "\\$&");

@@ -7,6 +7,10 @@ import { startWebServer, type WebServer } from "./web-server.ts";
 
 const API = "/api/admin/reset-subscriptions";
 const at = "2026-10-19T08:00:00.000Z";
+const platforms = [
+  { id: "codex", label: "Codex" }, { id: "claude-code", label: "Claude" }, { id: "grok", label: "Grok" },
+  { id: "gemini", label: "Gemini" }, { id: "future-platform", label: "Future product" },
+];
 const initial: WebhookSubscription = {
   id: "e2e9058c-bf76-4d41-9b26-4ba01836b730", name: "额度通知服务", url: "https://receiver.example/events",
   platforms: ["codex", "claude-code", "grok"], enabled: false, enabledAt: null, generation: 1, createdAt: at, updatedAt: at,
@@ -33,7 +37,7 @@ const api = createServer(async (req, res) => {
   if (path === "/api/admin/me") return send({ name: "Fixture admin", csrf: "fixture-csrf", dev: true });
   if (["/api/admin/nav-counts", "/api/site/meta", "/api/health"].includes(path)) return send({});
   if (path === "/api/site/track") { res.statusCode = 204; return res.end(); }
-  if (req.method === "GET" && path === API) { reads.push(path); return send({ subscriptions, pushEnabled: false }); }
+  if (req.method === "GET" && path === API) { reads.push(path); return send({ subscriptions, pushEnabled: false, platforms }); }
   if (req.method === "GET" && path === `${API}/${initial.id}/deliveries`) { reads.push(path); return send({ deliveries: [delivery] }); }
   if (path.startsWith(API) && (req.method === "POST" || req.method === "PATCH")) {
     let text = "";
@@ -107,12 +111,14 @@ test("admin creates a disabled platform subscription and reveals signing secrets
     await dialog.locator("label").filter({ hasText: "名称" }).locator("input").fill("Codex 与 Grok 通知");
     await dialog.locator("label").filter({ hasText: "HTTPS 回调地址" }).locator("input").fill("https://new-receiver.example/events");
     await dialog.getByRole("checkbox", { name: "Claude", exact: true }).uncheck();
+    await expect(dialog.getByRole("checkbox", { name: "Gemini", exact: true })).toBeChecked();
+    await expect(dialog.getByRole("checkbox", { name: "Future product", exact: true })).toBeChecked();
     await expect(dialog.getByRole("button", { name: "创建", exact: true })).toBeDisabled();
     await dialog.locator("textarea").fill("接入运营通知服务");
     await dialog.getByRole("button", { name: "创建", exact: true }).click();
     await expect(page.getByLabel("签名密钥", { exact: true })).toHaveValue(createdSecret);
     const created = writes.find(write => write.path === API)!;
-    assert.deepEqual(created.body, { name: "Codex 与 Grok 通知", url: "https://new-receiver.example/events", platforms: ["codex", "grok"], reason: "接入运营通知服务" });
+    assert.deepEqual(created.body, { name: "Codex 与 Grok 通知", url: "https://new-receiver.example/events", platforms: ["codex", "grok", "gemini", "future-platform"], reason: "接入运营通知服务" });
     assert.equal(created.csrf, "fixture-csrf");
     assert.ok(created.key);
     assert.equal(subscriptions.at(-1)!.enabled, false);

@@ -58,7 +58,7 @@ test("monitor translation schedules register independently with model calls enab
   installModules(SERVER_MODULES);
   config.modelCallsEnabled = true;
   process.env.COLLECT_ENABLED = "false";
-  const translationQueues = ["cron.claude-reset.translate", "cron.codex-reset.translate", "cron.grok-reset.translate"];
+  const translationQueues = ["cron.claude-reset.translate", "cron.codex-reset.translate", "cron.gemini-reset.translate", "cron.grok-reset.translate"];
   const expectedSchedules = siteQueueSelection!.filter(name => name.startsWith("cron.")).sort();
   const boss = new PgBoss({ connectionString: config.databaseUrl, schedule: false, supervise: false });
   await boss.start();

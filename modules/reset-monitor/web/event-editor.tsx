@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useAdminAction } from "@aihot/web/features/admin/action";
 import { Button } from "@aihot/web/features/admin/ui";
-import { emptyScope, type AdminEvent, type ReviewEvent } from "./admin-types.ts";
+import { eventDraftScope, type AdminEvent, type EventDraft, type ReviewEvent } from "./admin-types.ts";
 import { useMonitor } from "./context.tsx";
 import { KIND, STATUS, stamp, text } from "./components/format.ts";
 import { EventFields } from "./event-fields.tsx";
@@ -11,7 +11,12 @@ export function EventEditorDialog({ event, onClose, onCreated }: { event?: Revie
   if (event?.editorial) event = { ...event, ...event.editorial };
   const { adminApiPath, eventKinds } = useMonitor();
   const { run, busy } = useAdminAction();
-  const initial = () => ({ type: event?.type ?? eventKinds[0]!, title: text(event?.title), summary: text(event?.summary), scope: text(event?.scope?.note) });
+  const initial = (): EventDraft => {
+    const scope = text(event?.scope?.note);
+    const scopeMode = event?.scope?.type ?? "unknown";
+    return { type: event?.type ?? eventKinds[0]!, title: text(event?.title), summary: text(event?.summary),
+      scopeMode: scopeMode === "selected_users" && scope === "付费用户" ? "multiple_users" : scopeMode, scope };
+  };
   const [form, setForm] = useState(initial);
   const [preview, setPreview] = useState<{ previewToken: string; before: AdminEvent; after: AdminEvent } | null>(null);
   const close = () => { if (!busy) onClose(); };
@@ -23,7 +28,7 @@ export function EventEditorDialog({ event, onClose, onCreated }: { event?: Revie
       if (!event) {
         const created = await run<{ id: string; createdAt?: string }>("POST", `${adminApiPath}/events`, {
           type: form.type, title: { zh: form.title.trim() }, summary: form.summary.trim() ? { zh: form.summary } : null,
-          scope: form.scope.trim() ? { ...emptyScope(), note: { zh: form.scope.trim() } } : null,
+          scope: eventDraftScope(form),
         }, { label: "create-event", revalidate: false, success: "事件已创建，请在列表中添加动作" });
         if (!created) return;
         onCreated?.(created);
@@ -34,7 +39,7 @@ export function EventEditorDialog({ event, onClose, onCreated }: { event?: Revie
       if (form.type !== event.type) patch.type = form.type;
       if (form.title !== text(event.title)) patch.title = { zh: form.title };
       if (form.summary !== text(event.summary)) patch.summary = form.summary.trim() ? { zh: form.summary } : null;
-      if (form.scope !== initial().scope) patch.scope = { type: event.scope?.type ?? "unknown", note: form.scope.trim() ? { zh: form.scope.trim() } : null };
+      if (form.scopeMode !== initial().scopeMode || form.scopeMode === "selected_users" && form.scope !== initial().scope) patch.scope = eventDraftScope(form);
       const base = `${adminApiPath}/events/${encodeURIComponent(event.id)}`;
       if (form.type !== event.type && !preview) {
         setPreview(await run("POST", `${base}/preview`, { version: event.version, patch }, { label: "preview-event", revalidate: false }));

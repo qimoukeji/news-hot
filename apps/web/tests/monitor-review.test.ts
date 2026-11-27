@@ -11,19 +11,20 @@ before(async () => { web = await startWebServer(fixture.api); browser = await ch
 after(async () => { await browser?.close(); await web?.stop(); });
 const reviewReason = async (page: Page) => page.getByLabel("复核理由", { exact: false }).fill("核对原帖事实和事件影响范围");
 
-async function openPost(page: Page, query = "") {
-  await page.goto(web.origin+"/admin/codex-reset?kind=posts"+query);
+async function openPost(page: Page) {
+  await page.goto(web.origin+"/admin/codex-reset?kind=posts");
   await page.locator('[data-monitor-post="post-1"]').getByRole("button",{name:/^(管理关联|关联事件)$/}).click();
   await expect(page.getByRole("dialog")).toBeVisible();
 }
 
-test("post list hides filtered unlinked records by default", async () => {
+test("post list shows filtered unlinked records without a collection filter", async () => {
   fixture.state.filteredOut = true;
   const page = await browser.newPage();
   try {
     await page.goto(`${web.origin}/admin/codex-reset?kind=posts`);
-    await expect(page.getByText("待核对的独立帖子", { exact: true })).toHaveCount(0);
-    await expect(page.getByLabel("采集记录", { exact: true })).toHaveValue("normal");
+    await expect(page.getByText("待核对的独立帖子", { exact: true })).toBeVisible();
+    await expect(page.getByRole("article", { name: "帖子：待核对的独立帖子" }).getByText("被过滤", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("采集记录", { exact: true })).toHaveCount(0);
   } finally { fixture.state.filteredOut = false; await page.close(); }
 });
 
@@ -32,7 +33,7 @@ test("keeping a filtered reply in the association dialog previews only its colle
   fixture.state.processingStatus = "processed"; fixture.state.reviewReason = null;
   const page = await browser.newPage();
   try {
-    await openPost(page, "&collectionFilter=filtered");
+    await openPost(page);
     await page.getByRole("button", { name: "保留帖子", exact: true }).click(); await reviewReason(page);
     await page.getByRole("button", { name: "预览影响", exact: true }).click();
     await expect(page.getByLabel("采集记录变化", { exact: true })).toContainText("被过滤 → 正常记录");
@@ -51,9 +52,10 @@ test("keeping a filtered reply in the association dialog previews only its colle
 test("time range survives pagination and tab changes, and reset stays on the current tab", async () => {
   const page = await browser.newPage();
   try {
-    await page.goto(`${web.origin}/admin/codex-reset?kind=posts&from=2026-10-23&to=2026-10-23`);
+    await page.goto(`${web.origin}/admin/codex-reset?kind=posts&from=2026-10-23&to=2026-10-23&collectionFilter=filtered`);
     await page.getByRole("link", { name: "下一页", exact: true }).click();
     await expect(page).toHaveURL(/page=2/);
+    assert.equal(new URL(page.url()).searchParams.has("collectionFilter"), false);
     await expect(page.getByLabel("开始日期", { exact: true })).toHaveValue("2026-10-23");
     await page.getByRole("link", { name: "事件列表", exact: true }).click();
     await expect(page).toHaveURL(/kind=events$/);
@@ -118,7 +120,7 @@ for (const kind of ["events", "posts"]) test(`${kind} list applies its date rang
     await expect(form.locator('input[type="date"]')).toHaveCount(2);
     await expect(form.getByLabel("搜索帖子", { exact: true })).toHaveCount(kind === "posts" ? 1 : 0);
     await expect(form.getByLabel("识别状态", { exact: true })).toHaveCount(kind === "posts" ? 1 : 0);
-    await expect(form.locator("select")).toHaveCount(kind === "posts" ? 3 : 0);
+    await expect(form.locator("select")).toHaveCount(kind === "posts" ? 2 : 0);
     await page.getByLabel("开始日期", { exact: true }).fill("2026-10-24");
     await page.getByLabel("结束日期", { exact: true }).fill("2026-10-24");
     await page.getByRole("button", { name: "查询", exact: true }).click();
@@ -226,12 +228,13 @@ test("event editor preserves ordinary text fields and sends no reason", async ()
     await expect(dialog.getByLabel(/原因|备注|JSON|状态|实际时间/)).toHaveCount(0);
     await dialog.getByLabel("标题（中文）", { exact: true }).fill("人工确定的显示标题");
     await dialog.getByLabel("摘要（中文）", { exact: true }).fill("调整后的中文摘要");
-    await dialog.getByLabel("影响范围（中文）", { exact: true }).fill("仅限 Pro 用户的每周额度");
+    await dialog.getByLabel("影响范围", { exact: true }).selectOption("selected_users");
+    await dialog.getByLabel("影响范围（中文）", { exact: true }).fill("仅限 Pro 用户");
     await dialog.getByRole("button", { name: "保存", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     const write = fixture.writes[0]!;
     assert.equal("reason" in write.body, false);
-    assert.deepEqual(write.body.patch, { title: { zh: "人工确定的显示标题" }, summary: { zh: "调整后的中文摘要" }, scope: { type: "paid_users", note: { zh: "仅限 Pro 用户的每周额度" } } });
+    assert.deepEqual(write.body.patch, { title: { zh: "人工确定的显示标题" }, summary: { zh: "调整后的中文摘要" }, scope: { type: "selected_users", note: { zh: "仅限 Pro 用户" } } });
     await page.goto(`${web.origin}/admin/codex-reset`);
     await page.getByRole("link", { name: "下一页", exact: true }).click();
     await expect(page).toHaveURL(/page=2/);

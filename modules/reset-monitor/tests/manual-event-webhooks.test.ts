@@ -9,6 +9,7 @@ import { installModules } from "@aihot/backend/modules";
 import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
 import { backendDefinition as claude } from "../../claude-reset/backend-definition.ts";
 import { backendDefinition as grok } from "../../grok-reset/backend-definition.ts";
+import { backendDefinition as gemini } from "../../gemini-reset/backend-definition.ts";
 import { inMonitor } from "../backend/context.ts";
 import { createMonitorEvent, listMonitorEntries } from "../backend/admin.ts";
 import { monitorEventDetail, previewMonitorEventReview, submitMonitorEventReview } from "../backend/manual-review.ts";
@@ -16,17 +17,17 @@ import { publicV2Snapshot, properName } from "../backend/public-v2.ts";
 import { translatePublicV2Pending as processPublicV2Pending } from "../backend/public-v2-generate.ts";
 import { sweepConfirmationResults } from "../backend/webhook-events.ts";
 import { createSubscription } from "../backend/webhooks.ts";
-import { webhookPayloadSchema } from "../webhooks.ts";
+import { webhookPayloadSchema, type WebhookPlatform } from "../webhooks.ts";
 import { createMonitorServer } from "../server.ts";
 
-const definitions = [codex, claude, grok];
+const definitions = [codex, claude, grok, gemini];
 const snapshotAt = Date.parse("2026-10-27T00:00:00Z");
 beforeEach(async () => {
   await sql`DELETE FROM monitor_webhook_deliveries`; await sql`DELETE FROM monitor_webhook_notifications`; await sql`DELETE FROM monitor_webhook_subscriptions`;
   await sql`DELETE FROM monitor_event_actions`; await sql`DELETE FROM monitor_event_records`; await sql`DELETE FROM monitor_source_posts`; await sql`DELETE FROM monitor_state`; await sql`DELETE FROM audit_log`;
 });
 after(async () => { installModules([]); await stopBoss(); await closeDb(); });
-async function subscribe(platform: "codex" | "claude-code" | "grok") {
+async function subscribe(platform: WebhookPlatform) {
   return createSubscription({ name: "Manual event test", url: "https://8.8.8.8/hook", platforms: [platform], enabled: true, reason: "Local integration test" }, "test-admin", definitions);
 }
 async function confirm(id: string) {
@@ -61,7 +62,7 @@ for (const definition of definitions) for (const baselineFirst of [true, false])
 test("translating a draft cannot notify early or suppress its first later action", async () => inMonitor(codex, async () => {
   const model = await stub((_hit, request) => {
     const body = JSON.parse(request.body), input = JSON.parse(body.messages[1].content);
-    const content = Object.fromEntries(["title", "summary", "note"].map(key => [key, input[key] ? properName(Object.values(input[key])[0] as string) : null]));
+    const content = Object.fromEntries(["title", "summary", "note"].map(key => [key, input[key] ? { ...properName(Object.values(input[key])[0] as string), ...input[key] } : null]));
     return { choices: [{ finish_reason: "stop", message: { content: JSON.stringify(content) } }], usage: { prompt_tokens: 10, completion_tokens: 10 } };
   });
   const env = { MONITOR_MODEL: "default", LLM_BASE_URL: `${model.url}/v1`, LLM_API_KEY: "synthetic-local-key", LLM_MODEL: "synthetic-manual-event" };

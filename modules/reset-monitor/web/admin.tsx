@@ -87,7 +87,6 @@ function ListFilters({ posts }: { posts: boolean }) {
     <Field label="结束日期"><Input type="date" name="to" value={to} onChange={e => setTo(e.target.value)} min={from || undefined} /></Field>
     {posts && <Field label="识别状态"><Select name="filter" defaultValue={params.get("filter") ?? "all"}><option value="all">全部</option>{Object.entries(PROCESSING_STATUS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>}
     {posts && <Field label="关联状态"><Select name="association" defaultValue={params.get("association") ?? "all"}><option value="all">全部</option><option value="linked">已关联</option><option value="unlinked">无关联</option></Select></Field>}
-    {posts && <Field label="采集记录"><Select name="collectionFilter" defaultValue={params.get("collectionFilter") ?? "normal"}><option value="normal">正常记录</option><option value="filtered">被过滤</option><option value="all">全部记录</option></Select></Field>}
     <div className="flex items-center gap-2 whitespace-nowrap sm:gap-3"><Button type="submit">查询</Button><ButtonLink tone="ghost" to={posts ? `${adminPath}?kind=posts` : adminPath}>重置</ButtonLink></div>
     </fieldset>
   </Form>;

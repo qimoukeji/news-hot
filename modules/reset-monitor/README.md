@@ -4,7 +4,7 @@
 
 帖子列表使用紧凑卡片，提供“编辑”“创建帖子”和“关联事件/管理关联”弹框。人工创建填写来源作者、发布时间、链接、原文及中文标题摘要，保存为已处理来源，不自动识别或生成事件动作；已有帖子只编辑标题摘要，保留来源与识别状态。关联主弹框不显示顶部帖子信息，按事件分组展示当前关联。“关联事件”和“新建事件”按钮位于当前关联标题右侧，独立子弹框只暂存来源、新动作或新事件及首个动作，可组合多项变更并逐项撤销；主弹框底部先预览影响，再统一保存，不要求手填理由；从帖子新建事件并将当前帖子关联到有效首个动作，视为完成该帖人工复核，预览展示状态与原因变化，保存时同一事务设为 processed 并清空 review_reason，原状态与原因保留审计；仅补已有动作来源、编辑动作或移除关联仍不改变识别状态。取消不留下空事件。管理关联可移除来源，最后来源移除须预览动作删除及事件影响。创建后按帖子发布时间定位日期列表，编辑后保留原筛选和页码；原文仅后台可见，不复制到审计。
 
-Codex、Claude、Grok 共用一条流程：**按平台配置增量采集 → 可选关键词初筛 → 模型提出动作与相关性 → 校验来源及事实 → 聚合事件 → 补齐七语言文案**。所有公开出口通过 publication 的 v2 投影读取，读请求不触发模型。
+Codex、Claude、Grok 和 Gemini 共用一条流程：**按平台配置增量采集 → 可选关键词初筛 → 模型提出动作与相关性 → 校验来源及事实 → 聚合事件 → 补齐七语言文案**。所有公开出口通过 publication 的 v2 投影读取，读请求不触发模型。
 
 ## 数据与事件
 
@@ -52,7 +52,7 @@ Codex、Claude、Grok 共用一条流程：**按平台配置增量采集 → 可
 
 新产品、新套餐和新周期不需要预先配置，不做名称或代码映射。影响范围与两仓切换要求见[影响范围简化](../../docs/reset-monitor-scope-simplification.md)。
 
-三个产品的后台基础路径分别是 `/admin/codex-reset`、`/admin/claude-reset`、`/admin/grok-reset`；Codex 后台 API 使用 `/api/admin/codex-reset`，不保留旧路径兼容。基础页分为“事件列表”和“帖子列表”两个 tab，默认事件列表，以 kind=events/posts 切换。筛选区只保留北京时间开始日期 from、结束日期 to（包含当天）。事件按最新来源时间筛选和排序，卡片与动作行复用公开页布局，首行显示类型、范围、状态和事件时间，下方显示标题、摘要及默认展开的动作和全部来源；管理按钮、数量与最新来源时间放在卡片底部，时间线可收起。帖子列表包含已关联与未关联帖子，默认隐藏被过滤记录，按发布时间筛选和排序，显示关联事件及弹框入口。两个列表各自分页；切换时保留时间范围并清除页码，重置仅清除当前列表时间范围。`/events/:id` 复用列表时间线管理动作和来源，动作顺序单独弹框预览提交；帖子在列表管理关联弹框中完成保留与人工复核，旧 `/posts/:id/review` 和独立 `/posts` 页面均返回 404。
+后台基础路径分别是 `/admin/codex-reset`、`/admin/claude-reset`、`/admin/grok-reset` 和 `/admin/gemini-reset`；Codex 后台 API 使用 `/api/admin/codex-reset`，不保留旧路径兼容。基础页分为“事件列表”和“帖子列表”两个 tab，默认事件列表，以 kind=events/posts 切换。筛选区只保留北京时间开始日期 from、结束日期 to（包含当天）。事件按最新来源时间筛选和排序，卡片与动作行复用公开页布局，首行显示类型、范围、状态和事件时间，下方显示标题、摘要及默认展开的动作和全部来源；管理按钮、数量与最新来源时间放在卡片底部，时间线可收起。帖子列表包含已关联与未关联帖子，显示被过滤记录并标记，按发布时间筛选和排序，显示关联事件及弹框入口。两个列表各自分页；切换时保留时间范围并清除页码，重置仅清除当前列表时间范围。`/events/:id` 复用列表时间线管理动作和来源，动作顺序单独弹框预览提交；帖子在列表管理关联弹框中完成保留与人工复核，旧 `/posts/:id/review` 和独立 `/posts` 页面均返回 404。
 
 事件列表通过“添加动作”和每条动作唯一的“编辑”按钮打开弹框；事件标题保留详情入口，详情页管理全部动作与顺序。来源帖的原文和链接在帖子编辑弹框核对，识别状态用中性、绿色、黄色、红色标签表示待识别、已处理、待处理、处理失败，不再显示“处理帖子”链接；帖子列表提供编辑和管理关联弹框。
 
@@ -68,9 +68,9 @@ Codex、Claude、Grok 共用一条流程：**按平台配置增量采集 → 可
 
 ### 帖子人工核对通知
 
-独立分钟任务 `reset-review.notify` 通过 Server酱 Turbo 向管理员微信单帖通知，覆盖三个平台的 `needs_attention` 与 `failed`。仅 `SERVERCHAN_ENABLED=true` 且 `integrations` 的 `SERVERCHAN_SENDKEY` 齐全时开启；不依赖采集或模型开关。worker 首次启用时建立起点，既有异常、历史修复和关闭期间的异常不补发。停用时持久作废旧待发资格。
+独立分钟任务 `reset-review.notify` 通过 Server酱 Turbo 向管理员微信单帖通知，覆盖各平台的 `needs_attention` 与 `failed`。仅 `SERVERCHAN_ENABLED=true` 且 `integrations` 的 `SERVERCHAN_SENDKEY` 齐全时开启；不依赖采集或模型开关。worker 首次启用时建立起点，既有异常、历史修复和关闭期间的异常不补发。停用时持久作废旧待发资格。
 
-三平台共享北京时间每天最多 5 次发送尝试，失败及中断导致的未知结果计次；明确未发起请求的取消不占额度。每轮异常只请求一次，不重试、不汇总、不催办；超额和跨日未发送永久跳过。退出异常后再次进入可以重新通知，编辑文案、翻译和修改原因不触发。通知包含标题、作者、发布时间、固定原因及原帖和后台处理链接，详细原因留在后台。后台帖子列表支持搜索帖子 ID 和识别状态筛选，包含已关联事件的帖子。
+所有平台共享北京时间每天最多 5 次发送尝试，失败及中断导致的未知结果计次；明确未发起请求的取消不占额度。每轮异常只请求一次，不重试、不汇总、不催办；超额和跨日未发送永久跳过。退出异常后再次进入可以重新通知，编辑文案、翻译和修改原因不触发。通知包含标题、作者、发布时间、固定原因及原帖和后台处理链接，详细原因留在后台。后台帖子列表支持搜索帖子 ID 和识别状态筛选，包含已关联事件的帖子。
 
 状态写入与通知资格在同一事务保存；发送前核对当前帖子及轮次，已恢复的取消，已经发起的请求独立保留结果。轮次和发送结果保存在 `monitor_state`，共享日额度保存在 `settings`，不新增表或列。后台运行页显示脱敏的结果和未知轮次；接口确认成功只表示服务已接受。部署与停用操作见[部署说明](../../docs/deploy.md#帖子人工核对通知)。
 
@@ -79,7 +79,7 @@ Codex、Claude、Grok 共用一条流程：**按平台配置增量采集 → 可
 
 公开页标题为“产品 今天会重置吗？”，副标题使用监控账号。日期卡有公开预告时显示 announcedResetTime，否则使用 predictedResetTime；时刻按北京时间显示月日时分，范围保留起止，截止显示之前。页面不补业务时间、不以时间经过判定完成、不自行生成预测。概览使用 resetTime、statistics.typicalInterval 和 sources。
 
-账号、显示名及采集选项在 `site/reset-monitors.ts`，产品专属规则留各产品模块。统一启用 `direct_reset`、`reset_credit`、`bonus_credit`。主帖始终开启；各平台分别配置 `collection.includeReplies`（回复他人）、`collection.includeSelfReplies`（自回复）和 `collection.resetOnly`（关键词加模型过滤）；本站三个平台设为 includeReplies=false、includeSelfReplies=true、resetOnly=false，采集主帖及自回复。只采配置账号自己发布的内容，不采其他人的回复；纯转推始终排除，引用帖保留。
+账号、显示名及采集选项在 `site/reset-monitors.ts`，产品专属规则留各产品模块。统一启用 `direct_reset`、`reset_credit`、`bonus_credit`。主帖始终开启；各平台分别配置 `collection.includeReplies`（回复他人）、`collection.includeSelfReplies`（自回复）和 `collection.resetOnly`（关键词加模型过滤）；本站各平台设为 includeReplies=false、includeSelfReplies=true、resetOnly=false，采集主帖及自回复。只采配置账号自己发布的内容，不采其他人的回复；纯转推始终排除，引用帖保留。
 
 ```ts
 collection: {
@@ -103,12 +103,12 @@ collection: {
 
 回复保存供应商提供的 `reply_to` 父帖 ID、目标账号，缺失值保持为空，不影响收录。上下文依次从本轮响应、当前监控已保存帖子及供应商按 ID 查询补齐，引用帖保留自身父帖关系；父帖和引用只帮助确定对象，不能代替回复自身的动作依据。关联不明或只有 X Article 链接而缺内容时转人工复核。
 
-模型明确无关且无需复核时保留帖子及回执关联，设置 `filtered_out`；后台默认隐藏被过滤的未关联帖子，可按“采集记录”切换正常记录、被过滤、全部。识别失败和待复核不作为无关隐藏。人工“保留帖子”或给有效动作补来源会解除过滤，普通文案编辑不改变过滤标记；过滤不增加识别进度状态，公开接口保持不变。
+模型明确无关且无需复核时保留帖子及回执关联，设置 `filtered_out`；后台帖子列表显示全部帖子，并标记被过滤的记录。管理员 API 可按 collectionFilter 查询正常、被过滤或全部记录。人工“保留帖子”或给有效动作补来源会解除过滤，普通文案编辑不改变过滤标记；过滤不增加识别进度状态，公开接口保持不变。
 
-| 配置 | Codex | Claude | Grok |
-| --- | --- | --- | --- |
-| 提供商 | `CODEX_RESET_PROVIDER` | `CLAUDE_RESET_PROVIDER` | `GROK_RESET_PROVIDER` |
-| 间隔 | `CODEX_RESET_SCAN_MINUTES` | `CLAUDE_RESET_SCAN_MINUTES` | `GROK_RESET_SCAN_MINUTES` |
+| 配置 | Codex | Claude | Grok | Gemini |
+| --- | --- | --- | --- | --- |
+| 提供商 | `CODEX_RESET_PROVIDER` | `CLAUDE_RESET_PROVIDER` | `GROK_RESET_PROVIDER` | `GEMINI_RESET_PROVIDER` |
+| 间隔 | `CODEX_RESET_SCAN_MINUTES` | `CLAUDE_RESET_SCAN_MINUTES` | `GROK_RESET_SCAN_MINUTES` | `GEMINI_RESET_SCAN_MINUTES` |
 | 识别和翻译模型 | `MONITOR_MODEL` | `MONITOR_MODEL` | `MONITOR_MODEL` |
 
 默认 SocialData、15 分钟，也支持 TwitterAPI.io。供应商共用凭据、付费回执、预算和安全阀，TwitterAPI.io 在进程内共用 5.5 秒请求队列。原始响应先存回执，再校验处理；搜索失败只停止当前账号，本次不重发，其他账号继续，停机、安全阀或预算拒绝立即停止。下一次独立任务保留固定窗口与分页进度，已收到的页直接复用；明确未受理的可重试拒绝沿原回执恢复。网络结果未知的搜索页保留旧回执，以关联旧回执的新请求身份补采同一页，可能再次计费，失败尝试也计入每轮上限与预算。收到无效响应或不可重试的拒绝等待人工处理。此搜索页恢复不适用于上下文补采和模型请求。
@@ -117,7 +117,7 @@ collection: {
 
 ## 定点上下文修复
 
-`node --env-file-if-exists=.env modules/reset-monitor/scripts/thread-repair.ts --platform <codex|claude|grok> --receipts <回执ID列表> --targets <目标帖子ID列表>` 默认只读预览，仅恢复选择的回执及明确祖先中可核验的材料。正式应用需停止 worker、关闭采集与模型和通知，提供完整备份与预览指纹，再增加 `--apply --worker-stopped --fingerprint <指纹> --backup <备份.dump>`。已处理帖子不重跑；只有明确指定的 needs_attention 帖子重新进入 pending。工具不购买内容或识别、不改事件动作、不回退检查点，历史目标的后续处理抑制真实通知。
+`node --env-file-if-exists=.env modules/reset-monitor/scripts/thread-repair.ts --platform <codex|claude|grok|gemini> --receipts <回执ID列表> --targets <目标帖子ID列表>` 默认只读预览，仅恢复选择的回执及明确祖先中可核验的材料。正式应用需停止 worker、关闭采集与模型和通知，提供完整备份与预览指纹，再增加 `--apply --worker-stopped --fingerprint <指纹> --backup <备份.dump>`。已处理帖子不重跑；只有明确指定的 needs_attention 帖子重新进入 pending。工具不购买内容或识别、不改事件动作、不回退检查点，历史目标的后续处理抑制真实通知。
 
 ## 数据库与维护
 

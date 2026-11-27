@@ -9,6 +9,7 @@ import type { Proposition } from "../backend/recognize.ts";
 import codex from "../../codex-reset/definition.ts";
 import claude from "../../claude-reset/definition.ts";
 import grok from "../../grok-reset/definition.ts";
+import gemini from "../../gemini-reset/definition.ts";
 import { excludeProposition as excludeClaude } from "../../claude-reset/recognition-policy.ts";
 import { buildPrompt as buildCodexPrompt } from "../../codex-reset/prompt.ts";
 
@@ -16,12 +17,14 @@ const proposition = (excerpt: string, kind: Proposition["kind"] = "direct_reset"
   kind, kindExplicit: true, action: "confirm", real: true, eventId: null, excerpt, timeExcerpt: null,
 });
 
-test("the three monitors share event kinds and configure authors without credentials", () => {
-  for (const definition of [codex, claude, grok]) {
+test("installed monitors share event kinds and configure authors without credentials", () => {
+  for (const definition of [codex, claude, grok, gemini]) {
     assert.equal(definition.eventKinds, RESET_EVENT_KINDS);
     assert.deepEqual(definition.authors, RESET_MONITORS[definition.monitorId as keyof typeof RESET_MONITORS].authors);
     assert.equal("collection" in definition, false, "browser definition must not carry collection policy");
   }
+  assert.deepEqual(grok.authors, [{ handle: "bot", name: "Grok Bot" }]);
+  assert.deepEqual(gemini.authors, [{ handle: "_mohansolo", name: "Varun Mohan" }]);
   const collection = RESET_MONITORS.codex.collection;
   assert.throws(() => validateResetMonitorConfig({ collection, authors: [{ handle: "one", name: "One" }, { handle: "ONE", name: "Two" }] }), /Invalid X/);
   assert.throws(() => validateResetMonitorConfig({ collection, authors: [] }), /Invalid X/);

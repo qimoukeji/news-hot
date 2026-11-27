@@ -1,6 +1,6 @@
 # Domain Docs
 
-本仓库采用 single-context：共享领域用语集中在根目录 `CONTEXT.md`。虽然使用 npm workspaces，当前 Codex、Claude、Grok 监控共用同一套帖子、动作、事件模型，按现有文档统一阅读即可。
+本仓库采用 single-context：共享领域用语集中在根目录 `CONTEXT.md`。虽然使用 npm workspaces，当前 Codex、Claude、Grok 和 Gemini 监控共用同一套帖子、动作、事件模型，按现有文档统一阅读即可。
 
 ## 阅读顺序
 

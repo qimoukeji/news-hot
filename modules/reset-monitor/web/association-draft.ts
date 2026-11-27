@@ -1,4 +1,4 @@
-import { emptyScope, type ActionFact, type EventDraft, type ReviewCommands } from "./admin-types.ts";
+import { eventDraftScope, type ActionFact, type EventDraft, type ReviewCommands } from "./admin-types.ts";
 
 export type AssociationAddition =
   | { key: string; kind: "source"; eventId: string; actionId: string; fact?: ActionFact }
@@ -31,7 +31,7 @@ export function buildAssociationCommands(additions: AssociationAddition[], remov
       const eventKey = `event-${addition.key}`;
       commands.events.create.push({ localKey: eventKey, type: addition.event.type, title: { zh: addition.event.title.trim() },
         summary: addition.event.summary.trim() ? { zh: addition.event.summary } : null,
-        ...(addition.event.scope.trim() ? { scope: { ...emptyScope(), note: { zh: addition.event.scope.trim() } } } : {}),
+        scope: eventDraftScope(addition.event),
       });
       commands.actions.create.push({ localKey: addition.key, eventKey, ...structuredClone(addition.fact) });
     } else commands.actions.create.push({ localKey: addition.key, eventId: addition.eventId, ...structuredClone(addition.fact) });

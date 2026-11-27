@@ -121,9 +121,10 @@ for (const definition of definitions) test(`${definition.monitorId}: a Chinese-o
     const input = await loadActionInput(), event = (await publicV2Snapshot()).events.find(event => event.id === input.events[0]!.id)!;
     assert.ok(event, "the manual event must not disappear while title/summary translation is disabled");
     assert.equal(event.scope.type, "unknown");
-    assert.equal(event.scope.note!.en, "Eligibility unspecified");
-    assert.equal(event.scope.note!.zh, "适用范围未明确");
-    assert.deepEqual(input.events[0]!.scope!.note, { zh: "所有用户" }, "reading must not persist generated labels");
+    assert.equal(event.scope.note!.en, "All users");
+    assert.equal(event.scope.note!.zh, "所有用户");
+    assert.equal(Object.keys(input.events[0]!.scope!.note!).length, 7);
+    assert.deepEqual(input.events[0]!.scope!.note, event.scope.note, "publication reads the saved translations");
     assert.equal((await sourcePost("review"))!.processing_status, "processed");
     assert.deepEqual(await sql`SELECT id FROM receipts`, beforeReceipts);
   } finally { config.modelCallsEnabled = callsEnabled; }

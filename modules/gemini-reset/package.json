@@ -1,0 +1,14 @@
+{
+  "name": "@aihot/gemini-reset",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./module": "./module.ts",
+    "./server": "./server.ts",
+    "./web": "./web.tsx"
+  },
+  "dependencies": {
+    "@aihot/reset-monitor": "*",
+    "@aihot/site": "*"
+  }
+}

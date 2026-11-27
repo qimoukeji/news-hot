@@ -20,6 +20,7 @@ COPY site/package.json site/
 COPY modules/codex-reset/package.json modules/codex-reset/
 COPY modules/claude-reset/package.json modules/claude-reset/
 COPY modules/grok-reset/package.json modules/grok-reset/
+COPY modules/gemini-reset/package.json modules/gemini-reset/
 COPY modules/reset-monitor/package.json modules/reset-monitor/
 RUN npm ci --no-audit --no-fund ${NPM_REGISTRY:+--registry=$NPM_REGISTRY}
 COPY . .

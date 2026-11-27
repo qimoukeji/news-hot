@@ -39,7 +39,7 @@ const explicitActionSchema = z.enum(updateActions);
 const recognitionActionSchema = z.string().trim().nullish()
   .describe("Use announce, confirm, progress, amend or unknown.")
   .transform(action => explicitActionSchema.safeParse(action).data ?? "confirm");
-const claimScopeSchema = z.strictObject({ type: scopeSchema.shape.type, note: actionTextSchema.nullable() });
+const claimScopeSchema = z.strictObject({ type: scopeSchema.shape.type, note: actionTextSchema.nullable(), multipleAudiences: z.boolean().optional() });
 const claimSchema = z.strictObject({
   eventId: z.string().nullable(), localEventKey: z.string().nullable(), existingActionId: z.string().nullable(),
   kind: z.enum(["direct_reset", "reset_credit", "bonus_credit"]), kindExplicit: z.boolean(),
@@ -57,8 +57,8 @@ export const actionRecognitionSchema = z.strictObject({
 });
 export type ActionRecognitionBody = z.infer<typeof actionRecognitionSchema>;
 export type ActionRecognition = ActionRecognitionBody & { model: string; promptVersion: string; receiptId: number };
-export const actionRecognitionVersion = "reset-monitor-actions-2026-11-25.1";
-export const threadRecognitionVersion = "reset-monitor-thread-2026-11-25.1";
+export const actionRecognitionVersion = "reset-monitor-actions-2026-11-27.1";
+export const threadRecognitionVersion = "reset-monitor-thread-2026-11-27.1";
 const threadPostBodySchema = actionRecognitionSchema.extend({ postId: z.string().min(1), reviewReason: z.string().nullable() });
 const threadPostSchema = z.preprocess(value => {
   // A live response included a meaningless post-level scope:null; never discard non-null facts.
@@ -146,7 +146,9 @@ function paidPost(post: Record<string, unknown>, postId: string) {
     const scope = record(claim.scope);
     const scopeType = scopeSchema.shape.type.safeParse(scope?.type);
     const cleanScope = scopeType.success
-      ? { type: scopeType.data, note: localized(scope?.note, "动作范围说明不完整") }
+      ? { type: scopeType.data, note: scopeType.data === "selected_users" && scope?.multipleAudiences !== true
+        ? localized(scope?.note, "动作范围说明不完整") : null,
+        ...(typeof scope?.multipleAudiences === "boolean" ? { multipleAudiences: scope.multipleAudiences } : {}) }
       : fallback("动作范围无法确认", { type: "unknown", note: null });
     const parsed = claimSchema.safeParse({
       kind, action, role: role.success ? role.data : fallback("动作说明格式无法确认", "uncertain"),

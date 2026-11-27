@@ -27,7 +27,7 @@ test("site schedule reconciliation previews, removes retired execution work and 
   installModules(SERVER_MODULES);
   process.env.MODEL_CALLS_ENABLED = "false";
   config.modelCallsEnabled = false;
-  const expected = ["cron.claude-reset.tick", "cron.grok-reset.tick", "cron.monitor.tick", "cron.reset-confirmations.check", "cron.reset-review.notify", "cron.reset-subscriptions.sweep"];
+  const expected = ["cron.claude-reset.tick", "cron.gemini-reset.tick", "cron.grok-reset.tick", "cron.monitor.tick", "cron.reset-confirmations.check", "cron.reset-review.notify", "cron.reset-subscriptions.sweep"];
   assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), expected);
   const collectEnabled = process.env.COLLECT_ENABLED;
   const modelCallsEnabled = config.modelCallsEnabled;
@@ -37,7 +37,7 @@ test("site schedule reconciliation previews, removes retired execution work and 
     config.modelCallsEnabled = false;
     assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), expected);
     config.modelCallsEnabled = true;
-    assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), [...expected, "cron.claude-reset.translate", "cron.codex-reset.translate", "cron.grok-reset.translate"].sort());
+    assert.deepEqual(currentSchedules().map(s => `cron.${s.name}`).sort(), [...expected, "cron.claude-reset.translate", "cron.codex-reset.translate", "cron.gemini-reset.translate", "cron.grok-reset.translate"].sort());
   } finally {
     process.env.COLLECT_ENABLED = collectEnabled;
     config.modelCallsEnabled = modelCallsEnabled;
@@ -77,7 +77,7 @@ test("site schedule reconciliation previews, removes retired execution work and 
   assert.deepEqual(await sql`SELECT * FROM job_runs ORDER BY id`, beforeRuns, "operator process must never run task handlers");
   assert.deepEqual(await sql`SELECT * FROM receipts ORDER BY id`, beforeReceipts);
   assert.equal((await sql`SELECT id FROM audit_log WHERE action='schedules.reconcile'`).length, 1);
-  assert.equal((await sql`SELECT id FROM pgboss.job WHERE name IN ('cron.ops.alerts','cron.ops.recover','cron.ops.retention','cron.claude-reset.tick','cron.grok-reset.tick')`).length, 0,
+  assert.equal((await sql`SELECT id FROM pgboss.job WHERE name IN ('cron.ops.alerts','cron.ops.recover','cron.ops.retention','cron.claude-reset.tick','cron.gemini-reset.tick','cron.grok-reset.tick')`).length, 0,
     "operator process must not dispatch cron work");
   const again = await command("--apply", "--worker-stopped");
   assert.equal(again.code, 0, again.stderr);

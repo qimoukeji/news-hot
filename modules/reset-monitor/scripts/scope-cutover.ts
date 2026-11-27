@@ -15,7 +15,7 @@ import { inMonitor, monitor, type ResetMonitorBackendDefinition } from "../backe
 import { editorialKey, editorialVersion, saveEditorialState } from "../backend/event-editorial.ts";
 import { projectPublicV2 } from "../backend/public-v2.ts";
 import { cancelReviewNotification } from "../backend/review-notifications.ts";
-import { completeStandardScopeLabel, defaultScopeLabel, publicScopeLabel } from "../backend/scope-labels.ts";
+import { completeStandardScopeLabel, defaultScopeLabel, fixedScopeNote, hasCustomScopeNote } from "../backend/scope-labels.ts";
 import { assertScopeCutoverComplete, legacyScopeBaselineKey, readyEvent, rebaseScopeWebhookHistory, refreshWebhookBaseline, retiredScopeFields } from "../backend/webhook-events.ts";
 
 import { legacyEditorialStatus, legacyEditorialVersion, legacyProjectedEvent, loadLegacyTimeInput, planTimeCutover,
@@ -207,9 +207,9 @@ export async function executeScopeCutover(db: Db, definitions: readonly ResetMon
       const entry = reviewed.get(recordKey(definition.monitorId, row.id));
       const remaining = Object.fromEntries(Object.entries(row.scope).filter(([key]) => !Object.hasOwn(legacyFields(row), key)));
       const { type, note } = editorialScopeSchema.parse(remaining);
-      const completeNote = completeStandardScopeLabel(note);
-      const normalizedNote = type === "unknown" && completeNote ? publicScopeLabel(type, completeNote) : note;
-      const scope = entry?.scope ?? { type, note: normalizedNote };
+      const editedScope = entry?.scope ?? { type, note };
+      const scope = editedScope.type === "unknown" && !hasCustomScopeNote(editedScope.note)
+        ? { ...editedScope, note: fixedScopeNote("unknown") } : editedScope;
       const summary = entry?.summary ?? row.summary;
       const eventActions = before.actions.filter(action => action.event_id === row.id);
       const corrections = entry?.actions ?? [];

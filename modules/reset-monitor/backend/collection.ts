@@ -73,11 +73,19 @@ export async function collectPosts(opts: { startedAt?: Date; roundId?: string; r
     const lower = lowerByAuthor.get(authorKey(author.handle))!;
     return { handle: author.handle, lower, query: collectionQuery(author.handle, lower, started.getTime(), monitor().collection) };
   });
-  if (progress && (progress.startedAt !== started.toISOString() || progress.authors.length !== plannedAuthors.length
-    || progress.authors.some((author, index) => author.handle !== plannedAuthors[index].handle || author.lower !== plannedAuthors[index].lower || author.query !== plannedAuthors[index].query))) {
-    throw new Error("Collection window configuration changed; review its saved progress before continuing");
-  }
-  if (!progress) {
+  if (progress) {
+    // Removing authors leaves the retained queries and receipt identities intact.
+    const retained = progress.authors.filter(author => lowerByAuthor.has(authorKey(author.handle)));
+    if (progress.startedAt !== started.toISOString() || retained.length !== plannedAuthors.length
+      || retained.some((author, index) => author.handle !== plannedAuthors[index].handle
+        || author.lower !== plannedAuthors[index].lower || author.query !== plannedAuthors[index].query)) {
+      throw new Error("Collection window configuration changed; review its saved progress before continuing");
+    }
+    if (retained.length !== progress.authors.length) {
+      progress.authors = retained;
+      await saveProgress();
+    }
+  } else {
     progress = { startedAt: started.toISOString(), pages: 0, authors: plannedAuthors.map(author => ({ ...author, cursor: null, visited: [], complete: author.lower >= started.getTime() })) };
     await saveProgress();
   }

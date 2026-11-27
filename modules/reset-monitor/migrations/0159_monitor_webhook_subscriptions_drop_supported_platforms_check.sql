@@ -1,0 +1,1 @@
+ALTER TABLE monitor_webhook_subscriptions DROP CONSTRAINT IF EXISTS monitor_webhook_subscriptions_supported_platforms_check;

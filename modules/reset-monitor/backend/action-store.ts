@@ -1,3 +1,4 @@
+import { scopeForWrite } from "./scope-labels.ts";
 import { randomUUID } from "node:crypto";
 import { sql, type Db } from "@aihot/backend/db";
 import { sha256, stableJson } from "@aihot/backend/lib/ids";
@@ -224,7 +225,8 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
   if (!actual) throw invalid("来源帖子不存在于当前监控");
   if (actual.context_only) throw invalid("辅助上下文不能作为动作来源");
   for (const change of options.events ?? []) {
-    if (change.scope) validateScope(change.scope);
+    const scope = change.scope === undefined ? undefined : scopeForWrite(change.scope);
+    if (scope) validateScope(scope);
     const [event] = await db<EventRow[]>`SELECT id,type,title,summary,scope,withdrawn,created_at,updated_at FROM monitor_event_records WHERE monitor_id=${monitorId()} AND id=${change.id}`;
     if (!event) {
       const startsEvent = normalized.some(action => action.eventId === change.id && ["announce", "confirm"].includes(action.action));
@@ -232,15 +234,15 @@ export async function writePostActions(db: Db, post: SourcePostRow, drafts: Acti
         throw invalid("新事件必须由有类型的预告或确认动作创建");
       const initial = normalized.find(action => action.eventId === change.id)!;
       await db`INSERT INTO monitor_event_records(monitor_id,id,type,title,summary,scope,created_at)
-        VALUES(${monitorId()},${change.id},${change.type},${change.title ? db.json(change.title) : null},${change.summary === undefined ? initial.summary ? db.json(initial.summary) : null : change.summary ? db.json(change.summary) : null},${change.scope ? db.json(change.scope) : null},${post.published_at})`;
+        VALUES(${monitorId()},${change.id},${change.type},${change.title ? db.json(change.title) : null},${change.summary === undefined ? initial.summary ? db.json(initial.summary) : null : change.summary ? db.json(change.summary) : null},${db.json(scope ?? scopeForWrite())},${post.published_at})`;
     } else {
       if (change.type && change.type !== event.type) throw invalid("事件类型修改必须通过事件编辑预览");
       if (!options.editExisting && normalized.filter(action => action.eventId === event.id).every(action => !!action.id)
-        && stableJson({ title: change.title ?? event.title, summary: change.summary === undefined ? event.summary : change.summary, scope: change.scope === undefined ? event.scope : change.scope }) !== stableJson({ title: event.title, summary: event.summary, scope: event.scope }))
+        && stableJson({ title: change.title ?? event.title, summary: change.summary === undefined ? event.summary : change.summary, scope: scope ?? event.scope }) !== stableJson({ title: event.title, summary: event.summary, scope: event.scope }))
         throw invalid("补充来源不能修改事件事实或影响范围");
       await db`UPDATE monitor_event_records SET title=${change.title === undefined ? event.title ? db.json(event.title) : null : change.title ? db.json(change.title) : null},
         summary=${change.summary === undefined ? event.summary ? db.json(event.summary) : null : change.summary ? db.json(change.summary) : null},
-        scope=${change.scope === undefined ? event.scope ? db.json(event.scope) : null : change.scope ? db.json(change.scope) : null},updated_at=clock_timestamp()
+        scope=${scope ? db.json(scope) : event.scope ? db.json(event.scope) : null},updated_at=clock_timestamp()
         WHERE monitor_id=${monitorId()} AND id=${event.id}`;
     }
   }

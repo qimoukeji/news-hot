@@ -34,6 +34,19 @@ async function saveBaseline(db: Db, id: string, value: Baseline) {
     ON CONFLICT(monitor_id,key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()`;
 }
 
+export async function loadWebhookBaselines(db: Db) {
+  const rows = await db<{ key: string; value: Baseline }[]>`SELECT key,value FROM monitor_state
+    WHERE monitor_id=${monitorId()} AND (key=${initializedKey} OR starts_with(key,'webhook:event:')) ORDER BY key`;
+  if (!rows.some(row => row.key === initializedKey)) return null;
+  return new Map(rows.filter(row => row.key !== initializedKey).map(row => [row.key.slice(eventKey("").length), row.value]));
+}
+
+/** A data backfill may replace a verified fingerprint without changing its notification state. */
+export async function replaceWebhookFingerprint(db: Db, id: string, fingerprint: string) {
+  await db`UPDATE monitor_state SET value=jsonb_set(value,'{fingerprint}',to_jsonb(${fingerprint}::text)),updated_at=now()
+    WHERE monitor_id=${monitorId()} AND key=${eventKey(id)}`;
+}
+
 export async function assertScopeCutoverComplete(db: Db = sql) {
   const [result] = await db<{ blocked: boolean }[]>`SELECT
     EXISTS (SELECT 1 FROM monitor_event_records WHERE scope ?| ${[...retiredScopeFields]}::text[])

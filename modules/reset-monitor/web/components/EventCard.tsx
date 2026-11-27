@@ -5,9 +5,7 @@ import { ACTION, KIND, STATUS, stamp, text } from "./format.ts";
 
 function scopeText(scope: Scope | null) {
   if (!scope) return "适用范围未说明";
-  const note = text(scope.note).trim();
-  if (scope.type === "unknown" && (!note || /^(所有用户|All users|适用范围未明确|Eligibility unspecified)$/i.test(note))) return "适用范围未说明";
-  return note || { all_users: "所有用户", paid_users: "付费用户", selected_users: "部分用户", unknown: "适用范围未说明" }[scope.type];
+  return text(scope.note).trim() || { all_users: "所有用户", paid_users: "付费用户", selected_users: "部分用户", unknown: "适用范围未说明" }[scope.type];
 }
 
 type CardEvent = Pick<AdminEvent, "type" | "status" | "time" | "title" | "summary" | "scope"> & { withdrawn?: boolean };

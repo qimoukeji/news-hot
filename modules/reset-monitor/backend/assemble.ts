@@ -230,9 +230,9 @@ async function applyRecognitionBody(postId: string, recognition: ActionRecogniti
     const updatesScope = claim.action === "amend" && !claim.invalidatesEvent && claim.scopeExcerpt !== null && claim.scope.type !== "unknown";
     if (!prior && (initial || updatesScope)) {
       const { scope, issue } = recognizedScope(claim, text);
-      if (issue) { reasons.push(issue); return; }
+      if (issue) reasons.push(issue);
       if (initial) events.set(eventId, { id: eventId, type: claim.kind, title: claim.title, summary: claim.summary, scope });
-      else events.set(eventId, { ...(events.get(eventId) ?? { id: eventId }), scope });
+      else if (!issue) events.set(eventId, { ...(events.get(eventId) ?? { id: eventId }), scope });
     }
     if (claim.localEventKey) localEvents.set(claim.localEventKey, eventId);
     const refineTime = prior?.action === "announce" && claim.action === "announce" && claim.timeExcerpt !== null

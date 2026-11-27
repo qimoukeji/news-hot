@@ -6,14 +6,15 @@ import { defineQueue } from "@aihot/backend/modules";
 import { enqueueOn } from "@aihot/backend/jobs/queue";
 import { assertOutboundUrl, guardedFetch, type GuardedFetchOptions } from "@aihot/backend/lib/http-fetch";
 import { stableJson } from "@aihot/backend/lib/ids";
-import { webhookPlatforms, webhookPayloadSchema, type WebhookSubscription, type WebhookAdminData, type WebhookDelivery } from "../webhooks.ts";
+import { platformSchema } from "../public-v2.ts";
+import { webhookPayloadSchema, type WebhookSubscription, type WebhookAdminData, type WebhookDelivery, type WebhookPlatform } from "../webhooks.ts";
 import type { ResetMonitorBackendDefinition } from "./context.ts";
 import { initializeWebhookBaselines } from "./webhook-events.ts";
 
 const reasonSchema = z.string().trim().min(1).max(1000);
 export const subscriptionInputSchema = z.strictObject({
   name: z.string().trim().min(1).max(120), url: z.string().trim().min(1).max(2048),
-  platforms: z.array(z.enum(webhookPlatforms)).min(1).max(webhookPlatforms.length).refine(v => new Set(v).size === v.length, "平台不能重复"),
+  platforms: z.array(platformSchema).min(1).refine(v => new Set(v).size === v.length, "平台不能重复"),
   enabled: z.boolean().default(false), reason: reasonSchema,
 });
 export const subscriptionPatchSchema = subscriptionInputSchema.partial().extend({ enabled:z.boolean().optional(), reason: reasonSchema });
@@ -53,13 +54,23 @@ async function secretWrite<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-export async function listSubscriptions(): Promise<WebhookAdminData> {
-  const rows = await sql`SELECT ${subscriptionColumns} FROM monitor_webhook_subscriptions ORDER BY created_at,id`;
-  return { subscriptions: rows.map(subscription), pushEnabled: webhookPushEnabled() };
+function subscriptionPlatforms(definitions: readonly ResetMonitorBackendDefinition[]) {
+  return definitions.flatMap(({ publicV2, product }) => publicV2 ? [{ id: publicV2.platform, label: product }] : []);
 }
 
-export async function createSubscription(value: unknown, actor: string, definitions: readonly ResetMonitorBackendDefinition[] = []) {
+function validateSubscriptionPlatforms(platforms: readonly WebhookPlatform[], definitions: readonly ResetMonitorBackendDefinition[]) {
+  const available = new Set(subscriptionPlatforms(definitions).map(platform => platform.id));
+  if (platforms.some(platform => !available.has(platform))) throw invalid("包含本站未启用的订阅平台");
+}
+
+export async function listSubscriptions(definitions: readonly ResetMonitorBackendDefinition[]): Promise<WebhookAdminData> {
+  const rows = await sql`SELECT ${subscriptionColumns} FROM monitor_webhook_subscriptions ORDER BY created_at,id`;
+  return { subscriptions: rows.map(subscription), pushEnabled: webhookPushEnabled(), platforms: subscriptionPlatforms(definitions) };
+}
+
+export async function createSubscription(value: unknown, actor: string, definitions: readonly ResetMonitorBackendDefinition[]) {
   const input = subscriptionInputSchema.parse(value);
+  validateSubscriptionPlatforms(input.platforms, definitions);
   const url = await callbackUrl(input.url);
   await initializeWebhookBaselines(definitions);
   const secret = randomBytes(32).toString("base64url");
@@ -78,9 +89,10 @@ async function cancelOutstanding(db: Db, id: string) {
     WHERE subscription_id=${id} AND status IN ('pending','sending')`;
 }
 
-export async function updateSubscription(id: string, value: unknown, actor: string, definitions: readonly ResetMonitorBackendDefinition[] = []) {
+export async function updateSubscription(id: string, value: unknown, actor: string, definitions: readonly ResetMonitorBackendDefinition[]) {
   uuid(id);
   const input = subscriptionPatchSchema.parse(value);
+  if (input.platforms) validateSubscriptionPlatforms(input.platforms, definitions);
   const url = input.url === undefined ? undefined : await callbackUrl(input.url);
   if (input.enabled === true) await initializeWebhookBaselines(definitions);
   return secretWrite(() => sql.begin(async tx => {

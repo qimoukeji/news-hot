@@ -4,7 +4,11 @@ import type { Pagination } from "./admin-types.ts";
 export function MonitorPagination({ page, total, totalPages }: Pagination) {
   const [params] = useSearchParams();
   const to = (next: number) => {
-    const q = new URLSearchParams(params);
+    const q = new URLSearchParams();
+    for (const name of ["kind", "from", "to", "q", "filter", "association"]) {
+      const value = params.get(name);
+      if (value) q.set(name, value);
+    }
     q.set("page", String(next));
     return `?${q}`;
   };

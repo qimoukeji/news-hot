@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { RESET_EVENT_KINDS, validateCollectionConfig, type ResetMonitorDefinition, type ResetMonitorCollectionConfig } from "../definition.ts";
+import { platformSchema } from "../public-v2.ts";
 import type { Proposition } from "./recognize.ts";
 
 export interface ResetMonitorBackendDefinition extends ResetMonitorDefinition {
@@ -48,6 +49,7 @@ export function bindMonitor<A extends unknown[], R>(definition: ResetMonitorBack
 export function validateDefinition(definition: ResetMonitorBackendDefinition) {
   validateCollectionConfig(definition.collection);
   if (!/^[a-z][a-z0-9-]*$/.test(definition.monitorId)) throw new Error("Invalid reset monitor ID");
+  if (definition.publicV2 && !platformSchema.safeParse(definition.publicV2.platform).success) throw new Error("Invalid public reset monitor platform");
   if (!definition.authors.length || definition.authors.some((a) => !/^[A-Za-z0-9_]{1,15}$/.test(a.handle) || !a.name.trim())
     || new Set(definition.authors.map((a) => a.handle.toLowerCase())).size !== definition.authors.length) throw new Error("Invalid X monitor authors");
   if (!definition.eventKinds.length || new Set(definition.eventKinds).size !== definition.eventKinds.length

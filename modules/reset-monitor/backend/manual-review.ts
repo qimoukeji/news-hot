@@ -1,3 +1,4 @@
+import { scopeForWrite } from "./scope-labels.ts";
 import { stableJson } from "@aihot/backend/lib/ids";
 import { z } from "zod";
 import { cancelReviewNotification } from "./review-notifications.ts";
@@ -118,12 +119,13 @@ function prepare(state: ActionInput, origin: Origin, value: unknown) {
   const findAction = (id: string) => { const action = after.actions.find(action => action.id === id); if (!action) throw invalid("动作不存在于当前监控"); return action; };
   for (const item of command.events.create) {
     if (!monitor().eventKinds.includes(item.type)) throw invalid("当前监控不支持事件类型");
-    if (item.scope) validateScope(item.scope);
+    const scope = scopeForWrite(item.scope);
+    validateScope(scope);
     const id = eventKeys.get(item.localKey)!; affected.add(id);
     const sourceDate = origin.kind === "post" ? state.posts.find(post => post.id === origin.id)!.published_at : createdAt;
-    after.events.push({ id, type: item.type, title: item.title ?? null, summary: item.summary ?? null, scope: item.scope ?? null, withdrawn: false, created_at: sourceDate, updated_at: sourceDate });
+    after.events.push({ id, type: item.type, title: item.title ?? null, summary: item.summary ?? null, scope, withdrawn: false, created_at: sourceDate, updated_at: sourceDate });
   }
-  for (const item of command.events.update) { if (item.scope) validateScope(item.scope); findEvent(item.id).scope = item.scope; }
+  for (const item of command.events.update) { const scope = scopeForWrite(item.scope); validateScope(scope); findEvent(item.id).scope = scope; }
   for (const item of command.actions.create) {
     const event = findEvent(eventRef(item)); if (event.withdrawn) throw invalid("已撤回事件不能新增动作");
     if (!after.actions.some(action => action.event_id === event.id && ["announce", "confirm"].includes(action.action)) && !["announce", "confirm"].includes(item.action)) throw invalid("事件首个动作必须为预告或确认");

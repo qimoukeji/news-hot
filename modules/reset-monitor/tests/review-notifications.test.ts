@@ -531,7 +531,7 @@ test("notification contains concise source metadata and the exact admin filter, 
   const url = new URL(admin);
   assert.equal(url.pathname, claude.adminPath);
   assert.equal(url.searchParams.get("kind"), "posts"); assert.equal(url.searchParams.get("q"), "message");
-  assert.equal(url.searchParams.get("filter"), "failed"); assert.equal(url.searchParams.get("collectionFilter"), "all");
+  assert.equal(url.searchParams.get("filter"), "failed"); assert.equal(url.searchParams.has("collectionFilter"), false);
 });
 
 test("notification safely preserves an author's underscore without exposing original source text", async () => {

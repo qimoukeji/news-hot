@@ -38,6 +38,8 @@ export default defineConfig({
   // The modules' pages import the engine's web code by this name (tsconfig.json paths).
   resolve: { alias: { "@aihot/web/": `${path.resolve(import.meta.dirname, "app")}/` } },
   server: { port: 3000, strictPort: true },
+  // Lazy routes must share the same pre-bundled React as the login page during development.
+  optimizeDeps: { include: ["@js-temporal/polyfill", "motion/react", "zod"] },
   build: {
     rolldownOptions: {
       output: {

@@ -85,7 +85,7 @@ function ExistingSource({ detail, event, additions, onClose, onBack, onAdd }: { 
 
 function NewAssociation({ detail, event, onClose, onAdd }: { detail: AdminReviewDetail; event?: ReviewEvent; onClose: () => void; onAdd: (addition: AssociationAddition) => string | undefined }) {
   const { eventKinds } = useMonitor();
-  const [draft, setDraft] = useState<EventDraft>(() => ({ type: eventKinds[0]!, title: "", summary: "", scope: "" }));
+  const [draft, setDraft] = useState<EventDraft>(() => ({ type: eventKinds[0]!, title: "", summary: "", scopeMode: "unknown", scope: "" }));
   const [fact, setFact] = useState<ActionFact>(() => ({ ...emptyFact(), title: { zh: text(detail.post?.title) }, summary: detail.post?.summary ? { zh: text(detail.post.summary) } : null }));
   const [error, setError] = useState("");
   const blocked = !!event?.withdrawn || event?.status === "cancelled";

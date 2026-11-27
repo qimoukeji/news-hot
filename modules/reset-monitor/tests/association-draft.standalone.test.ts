@@ -19,14 +19,14 @@ test("one review command combines independent new events, actions, sources and r
   const additions: AssociationAddition[] = [
     { key: "source", kind: "source", eventId: "existing", actionId: "official-confirmation" },
     { key: "progress", kind: "action", eventId: "existing", fact: fact("Delivery progress", "progress") },
-    { key: "new-event-a", kind: "event", event: { type: "direct_reset", title: "  First event  ", summary: "Original summary", scope: "  Paid users  " }, fact: fact("First announcement", "announce") },
-    { key: "new-event-b", kind: "event", event: { type: "bonus_credit", title: "Second event", summary: "", scope: "" }, fact: fact("Second confirmation") },
+    { key: "new-event-a", kind: "event", event: { type: "direct_reset", title: "  First event  ", summary: "Original summary", scopeMode: "selected_users", scope: "  Paid users  " }, fact: fact("First announcement", "announce") },
+    { key: "new-event-b", kind: "event", event: { type: "bonus_credit", title: "Second event", summary: "", scopeMode: "unknown", scope: "" }, fact: fact("Second confirmation") },
   ];
   const commands = buildAssociationCommands(additions, ["old-action"], "current-post");
   assert.deepEqual(commands.events.create, [
     { localKey: "event-new-event-a", type: "direct_reset", title: { zh: "First event" }, summary: { zh: "Original summary" },
-      scope: { type: "unknown", note: { zh: "Paid users" } } },
-    { localKey: "event-new-event-b", type: "bonus_credit", title: { zh: "Second event" }, summary: null },
+      scope: { type: "selected_users", note: { zh: "Paid users" } } },
+    { localKey: "event-new-event-b", type: "bonus_credit", title: { zh: "Second event" }, summary: null, scope: { type: "unknown", note: null } },
   ]);
   assert.deepEqual(commands.actions.create, [
     { localKey: "progress", eventId: "existing", ...fact("Delivery progress", "progress") },
@@ -51,8 +51,8 @@ test("adding official evidence corrects only the chosen confirmation and preserv
 });
 
 test("whitespace-only optional event fields remain empty rather than producing scope facts", () => {
-  const commands = buildAssociationCommands([{ key: "event", kind: "event", event: { type: "reset_credit", title: "  Reset card  ", summary: " \n ", scope: " \t " }, fact: fact() }], [], "post");
-  assert.deepEqual(commands.events.create, [{ localKey: "event-event", type: "reset_credit", title: { zh: "Reset card" }, summary: null }]);
+  const commands = buildAssociationCommands([{ key: "event", kind: "event", event: { type: "reset_credit", title: "  Reset card  ", summary: " \n ", scopeMode: "unknown", scope: " \t " }, fact: fact() }], [], "post");
+  assert.deepEqual(commands.events.create, [{ localKey: "event-event", type: "reset_credit", title: { zh: "Reset card" }, summary: null, scope: { type: "unknown", note: null } }]);
 });
 
 test("building commands leaves caller drafts unchanged and returns an isolated preview snapshot", () => {
