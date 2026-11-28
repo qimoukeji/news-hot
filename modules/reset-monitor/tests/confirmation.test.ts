@@ -68,7 +68,7 @@ for (const definition of [codex, claude, grok]) test(`${definition.monitorId}: s
   input = await loadActionInput();
   assert.equal(input.actions.length, 1); assert.deepEqual(input.actions[0]!.time, bt("2026-10-10T18:00:00Z")); assert.equal(input.actions[0]!.sources.length, 2);
   const snapshot = await publicV2Snapshot();
-  assert.equal(snapshot.hasAnnouncement, true); assert.deepEqual(snapshot.announcedResetTime, bt("2026-10-10T18:00:00Z"));
+  assert.deepEqual(snapshot.announcedResetTime, bt("2026-10-10T18:00:00Z"));
   assert.equal(snapshot.events[0]!.status, "announced"); assert.deepEqual(snapshot.events[0]!.time, bt("2026-10-10T18:00:00Z"));
 }));
 

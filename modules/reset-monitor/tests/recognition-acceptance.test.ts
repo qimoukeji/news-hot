@@ -152,7 +152,6 @@ for (const [expression, expected, confirmedAt] of [
       const snapshot = projectPublicV2(input, codex, Date.parse(at));
       assert.equal(snapshot.events.find(row => row.id === event.id)!.status, "announced");
       assert.deepEqual(snapshot.events.find(row => row.id === event.id)!.time, action.time);
-      assert.equal(snapshot.hasAnnouncement, true);
       assert.deepEqual(snapshot.announcedResetTime, action.time);
       return;
     }

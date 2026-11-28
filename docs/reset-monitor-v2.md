@@ -114,9 +114,9 @@ API、站点、统计、Agent、MCP、通知和 Webhook 共用动作归并的事
 
 ## 总览、范围与派生数据
 
-总览每个平台包含 platform、sources、statistics、hasAnnouncement、predictedResetTime、announcedResetTime、resetTime。当前事件由最新有效动作发布时间决定，同时间优先预告；当前事件为 announced 时 hasAnnouncement=true，announcedResetTime 直接取其 time，否则 hasAnnouncement=false 且 announcedResetTime=null。resetTime 独立取最新有效确认的 instant.at，非单点确认或无结果时为 null。新预告不清空其他事件的结果；同一预告改时刻使旧自动推定失效，官方及人工确认保留。
+总览每个平台包含 platform、sources、statistics、predictedResetTime、announcedResetTime、resetTime。当前事件由最新有效动作发布时间决定，同时间优先预告；当前事件为 announced 时 announcedResetTime 直接取其 time，否则为 null。resetTime 独立取最新有效确认的 instant.at，非单点确认或无结果时为 null。新预告不清空其他事件的结果；同一预告改时刻使旧自动推定失效，官方及人工确认保留。
 
-`statistics.typicalInterval` 混合使用此前 90 天额度重置（`direct_reset`）、重置卡（`reset_credit`）、奖励额度（`bonus_credit`）三类有效事件的精确生效时间；官方确认、管理员核对、自动推定都参与，不因确认是否有帖子来源排除样本，也不按事件类型拆分。每个事件只计算一次；相邻正间隔取中位数，零间隔排除，不足时为 null。日期及区间不充当精确间隔样本。此统计口径为既定规范，只有使用者明确要求时才调整。`predictedResetTime` 为 resetTime 加 typicalInterval，任一不足时为 null；结果仅为保留最多九位小数秒的 UTC ISO 8601 时间字符串。过期后保留原时间点，页面标注“已过预估时间”，不回落为今天的日期对象，不自动追加周期。预测不落库，不是官方事实。30 天统计按北京时间含当天最近 30 个自然日，以三类有效结果的生效日期分别计数，不受列表筛选或来源数影响；取消、撤回或不再有有效确认的事件移出统计。
+`statistics.typicalInterval` 混合使用此前 90 天额度重置（`direct_reset`）、重置卡（`reset_credit`）、奖励额度（`bonus_credit`）三类有效事件的精确生效时间；官方确认、管理员核对、自动推定都参与，不因确认是否有帖子来源排除样本，也不按事件类型拆分。每个事件只计算一次；相邻正间隔取中位数，零间隔排除，不足时为 null。日期及区间不充当精确间隔样本。此统计口径为既定规范，只有使用者明确要求时才调整。`predictedResetTime` 为 resetTime 加 typicalInterval，任一不足时为 null；结果仅为保留最多九位小数秒的 UTC ISO 8601 时间字符串。达到计算时刻后，返回当前北京时间日期的次日 00:00 对应的 UTC 时间。预测不落库，不是官方事实。30 天统计按北京时间含当天最近 30 个自然日，以三类有效结果的生效日期分别计数，不受列表筛选或来源数影响；取消、撤回或不再有有效确认的事件移出统计。
 
 影响范围只保存在事件 `scope`。事件创建或修改、动作创建或更正、来源增删、动作重排是分开的事务指令，不把 eventScope 嵌在动作草稿。补来源不得改变既有事实或范围；移除最后来源时提示核对范围，不猜测历史范围。摘要描述事实变化，但程序不从摘要推导状态或范围。
 

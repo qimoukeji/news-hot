@@ -134,10 +134,11 @@ test("a normalized announcement confirms at its saved UTC boundary", () => {
   assert.deepEqual(completed.events[0]!.updates.find(update => update.action === "announce")!.time, plan);
   assert.equal(eventUpdateSchema.safeParse({ ...snapshot.events[0]!.updates[0], time: "2026-11-02" }).success, false);
   const { events: _events, schemaVersion: _version, generatedAt: _generatedAt, ...overview } = snapshot;
-  assert.equal(platformOverviewSchema.safeParse({ ...overview, name: "Codex", eventsPath: "/api/v2/codex-resets", mcpTool: "get_codex_resets" }).success, true);
-  assert.equal(platformOverviewSchema.safeParse({ ...overview, announcedResetTime: "11月02日 18:00:00" }).success, false);
-  assert.equal(platformOverviewSchema.safeParse({ ...overview, announcedResetTime: null }).success, false);
-  assert.equal(platformOverviewSchema.safeParse({ ...overview, hasAnnouncement: false }).success, false);
+  const platform = { ...overview, name: "Codex", eventsPath: "/api/v2/codex-resets", mcpTool: "get_codex_resets" };
+  assert.equal(platformOverviewSchema.safeParse(platform).success, true);
+  assert.equal(platformOverviewSchema.safeParse({ ...platform, announcedResetTime: "11月02日 18:00:00" }).success, false);
+  assert.equal(platformOverviewSchema.safeParse({ ...platform, announcedResetTime: null }).success, true);
+  assert.equal(platformOverviewSchema.safeParse({ ...platform, hasAnnouncement: true }).success, false);
 });
 
 test("calendar dates and weekdays without a source zone both infer at 18:00 UTC", () => {

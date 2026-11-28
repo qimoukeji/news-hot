@@ -4,7 +4,7 @@ news-hot 保留 `/api/v2/overview`、`/api/v2/<平台>-resets`、`schemaVersion:
 
 ## 字段与校验
 
-`event.time` 与 `updates[].time` 必填，使用以下三个 BusinessTime 分支。`announcedResetTime` 有预告时为该预告 time，无预告时为 null；hasAnnouncement 与之保持一致。`resetTime`、`predictedResetTime` 仍为 UTC ISO 字符串或 null。消费者直接读取，不补时间或转换旧格式。
+`event.time` 与 `updates[].time` 必填，使用以下三个 BusinessTime 分支。`announcedResetTime` 有预告时为该预告 time，无预告时为 null。`resetTime`、`predictedResetTime` 仍为 UTC ISO 字符串或 null。消费者直接读取，不补时间或转换旧格式。
 
 ```ts
 type BusinessTime =
@@ -13,7 +13,6 @@ type BusinessTime =
   | { kind: "deadline"; at: string };
 
 type OverviewTimes = {
-  hasAnnouncement: boolean;
   announcedResetTime: BusinessTime | null;
   resetTime: string | null;          // UTC ISO 8601，以 Z 结尾
   predictedResetTime: string | null; // UTC ISO 8601，以 Z 结尾
@@ -38,9 +37,9 @@ BusinessTime 严格验证三个分支与字段，拒绝 date、unknown、null、
 - 业务时间已在 news-hot 写入时规范化：日期与星期追加 18:00 UTC；无时间预告追加发帖日期 18:00 UTC，首次处理过点取 23:59；异常时间取发帖日期 18:00 UTC 并待处理。客户端不再接收纯日期对象。
 - 区间保留起止时间，截止按用户语言展示之前；deadline 不能当作已发生时刻。
 - 日历使用所选时区请求列表；instant/deadline 按 at 归日，range 按 from 归日。API 决定顺序、范围和统计，客户端不重新推算。
-- hasAnnouncement=true 时直接展示 announcedResetTime；无预告才显示 predictedResetTime。
+- When Reset 的首页统计卡和平台页优先展示未过期的 announcedResetTime。预告到期或缺失时改用 predictedResetTime。
 - news-hot 将 instant/deadline 的 at、range 的 through 保存为自动确认 instant；待处理来源阻断推定。有来源官方确认使用确认帖发布时间。客户端直接消费，不改变状态。
-- 总览 resetTime 是最新有效确认的单一生效时刻，最新记录不能确定时刻时返回 null；predictedResetTime 是该点加典型间隔，过期保留原值并提示，不滚动日期或重算预测。
+- 总览 resetTime 是最新有效确认的单一生效时刻，最新记录不能确定时刻时返回 null；predictedResetTime 是该点加典型间隔，该计算时刻到期后，接口返回当前北京时间日期的次日 00:00 对应的 UTC 时间。When Reset 直接展示接口返回值。
 
 ## Webhook 与缓存
 
@@ -52,4 +51,4 @@ BusinessTime 严格验证三个分支与字段，拒绝 date、unknown、null、
 
 ## 接入验收
 
-覆盖三平台、七语言、所选时区、跨年、跨日、小数秒、三种时间对象、hasAnnouncement 与仅无预告时为空的 announcedResetTime、无来源及多来源确认、ETag/304 和新游标；拒绝 date/null/unknown 的事件或动作 time。列表和 Webhook 契约一致，客户端不重新补时间或改变状态。使用本地合成数据，不发送真实通知。
+覆盖三平台、七语言、所选时区、跨年、跨日、小数秒、三种时间对象、有预告时非空、无预告时为 null 的 announcedResetTime、无来源及多来源确认、ETag/304 和新游标；拒绝 date/null/unknown 的事件或动作 time。列表和 Webhook 契约一致，客户端不重新补时间或改变状态。使用本地合成数据，不发送真实通知。

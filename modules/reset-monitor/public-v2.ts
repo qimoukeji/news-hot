@@ -113,10 +113,9 @@ export const statisticsSchema = z.strictObject({
 });
 const overviewFields = {
   platform: platformSchema, sources: z.array(sourceSchema), statistics: statisticsSchema,
-  hasAnnouncement: z.boolean(), predictedResetTime: utcInstantSchema.nullable(), announcedResetTime: publicTimeSchema.nullable(), resetTime: utcInstantSchema.nullable(),
+  predictedResetTime: utcInstantSchema.nullable(), announcedResetTime: publicTimeSchema.nullable(), resetTime: utcInstantSchema.nullable(),
 };
-function validateOverview(value: { sources: z.infer<typeof sourceSchema>[]; hasAnnouncement: boolean; announcedResetTime: PublicTime | null }, context: z.RefinementCtx) {
-  if (value.hasAnnouncement !== (value.announcedResetTime !== null)) context.addIssue({ code: "custom", path: ["announcedResetTime"], message: "An announced time requires an announcement and every announcement requires its saved time" });
+function validateOverview(value: { sources: z.infer<typeof sourceSchema>[] }, context: z.RefinementCtx) {
   if (new Set(value.sources.map(source => source.id)).size !== value.sources.length) context.addIssue({ code: "custom", path: ["sources"], message: "IDs must be unique" });
 }
 export const platformOverviewSchema = z.strictObject({

@@ -15,7 +15,7 @@ export function monitorOpenApi() {
     "/api/v2/overview": {
       get: {
         summary: "Quota monitor overview",
-        description: "resetTime and predictedResetTime are UTC ISO timestamps or null. When hasAnnouncement is true, announcedResetTime is the active announcement's saved BusinessTime; otherwise it is null. Inferred confirmations use the saved instant, deadline or range end as an instant. Expired predictions retain their original timestamp.",
+        description: "resetTime and predictedResetTime are UTC ISO timestamps or null. announcedResetTime is the active announcement's saved BusinessTime, or null when there is no active announcement. Inferred confirmations use the saved instant, deadline or range end as an instant. predictedResetTime is resetTime plus the median of positive adjacent confirmation intervals from the past 90 days. At or after that instant, it is midnight at the start of the next Beijing calendar day, expressed in UTC. Missing inputs yield null.",
         responses: { "200": response("Overview") },
       },
     },

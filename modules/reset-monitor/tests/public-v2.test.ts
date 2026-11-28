@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
 import { sql, closeDb } from "@aihot/backend/db";
 import { installModules } from "@aihot/backend/modules";
+import { addDays, beijingDate, beijingMidnight } from "@aihot/contracts/time";
 import { config } from "@aihot/backend/config";
 import { buildApp } from "../../../apps/api/src/app.ts";
 import { backendDefinition as codex } from "../../codex-reset/backend-definition.ts";
@@ -168,16 +169,16 @@ test("HTTP overview retains confirmations beside a new plan and recomputes cance
   await add("future-plan", "direct_reset", 1, "announce");
   const app = await buildApp();
   try {
-    const before = await app.inject("/api/v2/overview"), platform = overviewSchema.parse(before.json()).platforms.find(row => row.platform === "codex")!;
-    assert.match(String(before.headers.etag), /reset-actions-overview-v2\.7-/);
-    const staleVersion = await app.inject({ url: "/api/v2/overview", headers: { "if-none-match": String(before.headers.etag).replace("overview-v2.7", "overview-v2.6") } });
+    const before = await app.inject("/api/v2/overview");
+    const overview = overviewSchema.parse(before.json());
+    const platform = overview.platforms.find(row => row.platform === "codex")!;
+    assert.match(String(before.headers.etag), /reset-actions-overview-v2\.8-/);
+    const staleVersion = await app.inject({ url: "/api/v2/overview", headers: { "if-none-match": String(before.headers.etag).replace("overview-v2.8", "overview-v2.7") } });
     assert.equal(staleVersion.statusCode, 200);
     assert.deepEqual(platform.announcedResetTime, bt(time(1)));
-    assert.equal(platform.hasAnnouncement, true);
     assert.deepEqual(platform.resetTime, time(-3));
     assert.deepEqual(platform.statistics.typicalInterval, { value: 3, unit: "day", sampleCount: 2 });
-    assert.equal(typeof platform.predictedResetTime, "string");
-    assert.equal(Date.parse(platform.predictedResetTime!), Date.parse(time(0)));
+    assert.equal(platform.predictedResetTime, beijingMidnight(addDays(beijingDate(overview.generatedAt), 1)).toISOString());
     await inMonitor(codex, async () => sql.begin(async db => writePostActions(db, (await sourcePost("bonus-history", db))!, [{ eventId: "bonus-history", action: "amend", invalidatesEvent: true, time: bt(time(0)), title: properName("Campaign cancelled"), summary: null }])));
     const after = await app.inject({ url: "/api/v2/overview", headers: { "if-none-match": before.headers.etag! } });
     assert.equal(after.statusCode, 200);
@@ -185,7 +186,6 @@ test("HTTP overview retains confirmations beside a new plan and recomputes cance
     const changed = overviewSchema.parse(after.json()).platforms.find(row => row.platform === "codex")!;
     assert.deepEqual(changed.resetTime, time(-6));
     assert.deepEqual(changed.announcedResetTime, bt(time(1)));
-    assert.equal(changed.hasAnnouncement, true);
     assert.equal(changed.statistics.bonusesLast30Days, 0);
     assert.deepEqual(changed.statistics.typicalInterval, { value: 3, unit: "day", sampleCount: 1 });
     const snapshot = await inMonitor(codex, () => publicV2Snapshot());
@@ -453,8 +453,7 @@ test("OpenAPI v2 describes action sources and v1 no longer advertises monitor sn
     assert.deepEqual(event.properties.time.oneOf.map((time: { properties: { kind: { const: string } } }) => time.properties.kind.const).sort(), ["deadline", "instant", "range"]);
     const overview = spec.components.schemas.Overview.properties.platforms.items;
     assert.equal(overview.properties.catalog, undefined);
-    assert.equal(overview.properties.hasAnnouncement.type, "boolean");
-    assert.ok(overview.required.includes("hasAnnouncement"));
+    assert.ok(!Object.hasOwn(overview.properties, "hasAnnouncement"));
     const confirmation = variants.find((variant: any) => variant.properties.action.const === "confirm");
     assert.equal(confirmation.properties.sources.minItems, undefined);
     assert.ok(variants.filter((variant: any) => variant !== confirmation).every((variant: any) => variant.properties.sources.minItems === 1));

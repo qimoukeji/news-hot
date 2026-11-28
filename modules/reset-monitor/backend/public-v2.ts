@@ -1,6 +1,6 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { sql } from "@aihot/backend/db";
-import { beijingDate, addDays } from "@aihot/contracts/time";
+import { beijingDate, beijingMidnight, addDays } from "@aihot/contracts/time";
 import { monitor, type ResetMonitorBackendDefinition } from "./context.ts";
 import {
   resetSnapshotSchema,
@@ -216,10 +216,12 @@ function medianInterval(events: Array<{ time: PublicTime }>) {
   };
 }
 
-function predictedTime(time: string | null, interval: number | null): string | null {
+function predictedTime(time: string | null, interval: number | null, now: number): string | null {
   if (time === null || interval === null) return null;
   const milliseconds = Math.round(interval * 86_400_000);
-  return Temporal.Instant.from(time).add({ milliseconds }).toString();
+  const prediction = Temporal.Instant.from(time).add({ milliseconds });
+  if (Temporal.Instant.compare(prediction, Temporal.Instant.fromEpochMilliseconds(now)) > 0) return prediction.toString();
+  return beijingMidnight(addDays(beijingDate(now), 1)).toISOString();
 }
 
 export function publicV2Sources(
@@ -336,8 +338,7 @@ export function projectRawV2(
     generatedAt: new Date(now).toISOString(),
     sources: [...sourceMap.values()],
     events,
-    predictedResetTime: predictedTime(resetTime, typical?.value ?? null),
-    hasAnnouncement: latest?.status === "announced",
+    predictedResetTime: predictedTime(resetTime, typical?.value ?? null, now),
     announcedResetTime: latest?.status === "announced" ? facts.get(latest.id)!.announcedTime : null,
     resetTime,
     statistics: {

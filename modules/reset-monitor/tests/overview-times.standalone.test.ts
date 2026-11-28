@@ -39,14 +39,12 @@ test("a same-post next-round saved plan wins over the completed round and older 
   event(input, "a-completed", "2026-11-01T00:43:20Z", "reset_credit");
   event(input, "z-next", "2026-11-01T00:43:20Z", "reset_credit", "announce").time = bt("2026-11-01T18:00:00Z");
   const result = read(input);
-  assert.equal(result.hasAnnouncement, true);
   assert.deepEqual(result.announcedResetTime, bt("2026-11-01T18:00:00Z"));
   assert.deepEqual(result.events.find(event => event.id === "z-next")!.time, bt("2026-11-01T18:00:00Z"));
   assert.equal(result.resetTime, "2026-11-01T00:43:20Z");
   assert.equal(older.time!.kind, "instant");
   addAction(input, "done-next", "confirm", "2026-11-01T23:27:20Z", { event_id: "z-next" });
   const completed = read(input);
-  assert.equal(completed.hasAnnouncement, false);
   assert.equal(completed.announcedResetTime, null);
 });
 
@@ -68,9 +66,10 @@ test("official, administrator and inferred confirmations jointly contribute acro
   const manual = event(input, "manual", "2026-10-05T00:00:00Z", "reset_credit");
   manual.sources = [];
   event(input, "inferred", "2026-10-09T00:00:00Z/2026-10-11T00:00:00Z", "bonus_credit", "announce");
-  const inferred = inferredConfirmation(input.events.find(event => event.id === "inferred")!, input, now)!;
+  const at = Date.parse("2026-10-12T00:00:00Z");
+  const inferred = inferredConfirmation(input.events.find(event => event.id === "inferred")!, input, at)!;
   input.actions.push(inferred);
-  const result = read(input);
+  const result = read(input, at);
   assert.deepEqual(result.statistics.typicalInterval, { value: 5, unit: "day", sampleCount: 2 });
   assert.equal(result.resetTime, "2026-10-11T00:00:00Z");
   assert.equal(result.predictedResetTime, "2026-10-16T00:00:00Z");
@@ -81,7 +80,7 @@ test("overview instant strings preserve nanoseconds in both the confirmation and
   const input = empty();
   event(input, "first", "2026-10-01T00:00:00.123456789Z");
   event(input, "latest", "2026-10-03T00:00:00.123456789Z", "reset_credit");
-  const result = read(input);
+  const result = read(input, Date.parse("2026-10-05T00:00:00Z"));
   assert.equal(result.resetTime, "2026-10-03T00:00:00.123456789Z");
   assert.equal(result.predictedResetTime, "2026-10-05T00:00:00.123456789Z");
 });
@@ -182,16 +181,17 @@ test("median ignores duplicates, dates, ranges, future and older-than-90-day con
   assert.deepEqual(stale.predictedResetTime, null);
 });
 
-test("prediction remains the same point after expiry and Beijing midnight", () => {
+test("prediction moves to the next Beijing calendar day at expiry and rolls at Beijing midnight", () => {
   const input = empty();
   event(input, "first", "2026-10-24T00:00:00Z");
   event(input, "second", "2026-10-25T00:00:00Z", "bonus_credit");
   for (const [at, expected] of [
     ["2026-10-25T10:00:00Z", "2026-10-26T00:00:00Z"],
-    ["2026-10-26T10:00:00Z", "2026-10-26T00:00:00Z"],
-    ["2026-10-26T15:59:59Z", "2026-10-26T00:00:00Z"],
-    ["2026-10-26T16:00:00Z", "2026-10-26T00:00:00Z"],
-    ["2026-10-27T16:00:00Z", "2026-10-26T00:00:00Z"],
+    ["2026-10-25T23:59:59.999Z", "2026-10-26T00:00:00Z"],
+    ["2026-10-26T00:00:00Z", "2026-10-26T16:00:00.000Z"],
+    ["2026-10-26T15:59:59Z", "2026-10-26T16:00:00.000Z"],
+    ["2026-10-26T16:00:00Z", "2026-10-27T16:00:00.000Z"],
+    ["2026-10-27T16:00:00Z", "2026-10-28T16:00:00.000Z"],
   ]) assert.deepEqual(read(input, Date.parse(at!)).predictedResetTime, expected!);
 });
 
