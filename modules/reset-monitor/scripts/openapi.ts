@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { eventListSchema, overviewSchema } from "../public-v2.ts";
-import { RESET_MONITORS } from "@aihot/site/reset-monitors";
+import { RESET_MONITOR_BACKENDS } from "@aihot/site/reset-monitor-backends";
 import { SITE } from "@aihot/site";
 
 const response = (name: string) => ({
@@ -20,10 +20,10 @@ export function monitorOpenApi() {
       },
     },
   };
-  for (const id of Object.keys(RESET_MONITORS))
-    paths[`/api/v2/${id}-resets`] = {
+  for (const definition of RESET_MONITOR_BACKENDS.filter(item => item.publicV2))
+    paths[definition.publicApiPath] = {
       get: {
-        summary: `${id} events with accepted actions and all source links`,
+        summary: `${definition.product} events with accepted actions and all source links`,
         description:
               "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Event and action time are required saved values: instant {at}, range {from,through}, or deadline {at}. Business timestamps use UTC; publishedAt separately records source publication or source-free action creation. Individual quota status remains subject to the account display.",
         parameters: [
@@ -69,10 +69,10 @@ export function monitorOpenApi() {
         },
       },
     };
-  for (const id of Object.keys(RESET_MONITORS))
-    paths[`/api/v2/agent/${id}-resets`] = {
+  for (const definition of RESET_MONITOR_BACKENDS.filter(item => item.publicV2))
+    paths[`/api/v2/agent${definition.agentPath}`] = {
       get: {
-        summary: `${id} quota events for agents`,
+        summary: `${definition.product} quota events for agents`,
         responses: {
           "200": {
             description:

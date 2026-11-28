@@ -54,7 +54,8 @@ export function createMonitorServer(definition: ResetMonitorBackendDefinition) {
         eventsV2: bound(async (query: Record<string, unknown>) => paginatePublicV2(await publicV2Snapshot(), query as unknown as PublicV2Query)),
         overviewV2: bound(async ({ now }: Record<string, unknown>) => {
           const { schemaVersion: _schema, generatedAt: _generated, events: _events, ...overview } = await publicV2Snapshot(Number(now));
-          return platformOverviewSchema.parse({ ...overview, sources: publicV2Sources(definition) });
+          return platformOverviewSchema.parse({ ...overview, name: definition.product, eventsPath: definition.publicApiPath,
+            mcpTool: definition.mcpTool, sources: publicV2Sources(definition) });
         }),
       } : {}),
     },

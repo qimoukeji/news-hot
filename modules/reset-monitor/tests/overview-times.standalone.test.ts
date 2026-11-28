@@ -95,7 +95,7 @@ test("a new future announcement preserves the latest persisted confirmation with
   assert.deepEqual(result.announcedResetTime, bt("2026-10-28T00:00:00Z"));
   assert.deepEqual(result.resetTime, "2026-10-10T00:00:00Z");
   const { events: _events, generatedAt: _generated, schemaVersion: _schema, ...overview } = result;
-  assert.equal(platformOverviewSchema.safeParse(overview).success, true);
+  assert.equal(platformOverviewSchema.safeParse({ ...overview, name: "Codex", eventsPath: "/api/v2/codex-resets", mcpTool: "get_codex_resets" }).success, true);
 });
 
 test("confirmation replaces its plan and does not borrow scheduled time", () => {

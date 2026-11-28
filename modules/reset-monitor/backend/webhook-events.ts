@@ -173,6 +173,16 @@ export async function refreshWebhookBaseline(db: Db, id: string) {
   finally { await db`SELECT set_config('aihot.suppress_monitor_notifications',${previous?.value ?? "false"},true)`; }
 }
 
+/** Record complete historical state in the import transaction before live sweeps can see it. */
+export async function establishHistoricalWebhookBaselines(db: Db, ids: Set<string>, now = Date.now()) {
+  await lockWebhookMonitor(db);
+  await db`INSERT INTO monitor_state(monitor_id,key,value) VALUES(${monitorId()},${initializedKey},'{"initialized":true}'::jsonb)
+    ON CONFLICT(monitor_id,key) DO NOTHING`;
+  const input = await loadPublicV2Input(db);
+  await persistConfirmations(db, input, now, ids);
+  for (const id of ids) await refreshWebhookBaseline(db, id);
+}
+
 /** Time changes publication without new posts; use the same per-monitor lock and fingerprints. */
 export async function sweepConfirmationResults(definitions: readonly ResetMonitorBackendDefinition[], now = Date.now()) {
   await initializeWebhookBaselines(definitions, now);

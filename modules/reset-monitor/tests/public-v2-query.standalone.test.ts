@@ -201,8 +201,8 @@ test("response contracts reject old top-level metadata and invalid pagination", 
   ]) assert.equal(eventListSchema.safeParse(invalid).success, false);
   const data = snapshot();
   const { events: _events, schemaVersion: _schema, generatedAt: _at, ...platform } = data;
-  const overview = { schemaVersion: 2, generatedAt: data.generatedAt, platforms: [platform] };
+  const overview = { schemaVersion: 2, generatedAt: data.generatedAt, platforms: [{ ...platform, name: "Codex", eventsPath: "/api/v2/codex-resets", mcpTool: "get_codex_resets" }] };
   assert.equal(overviewSchema.safeParse(overview).success, true);
-  assert.equal(overviewSchema.safeParse({ ...overview, platforms: [{ ...platform, events: [] }] }).success, false);
-  assert.equal(overviewSchema.safeParse({ ...overview, platforms: [{ ...platform, catalog: {} }] }).success, false);
+  assert.equal(overviewSchema.safeParse({ ...overview, platforms: [{ ...overview.platforms[0], events: [] }] }).success, false);
+  assert.equal(overviewSchema.safeParse({ ...overview, platforms: [{ ...overview.platforms[0], catalog: {} }] }).success, false);
 });

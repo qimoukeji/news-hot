@@ -119,12 +119,19 @@ function validateOverview(value: { sources: z.infer<typeof sourceSchema>[]; hasA
   if (value.hasAnnouncement !== (value.announcedResetTime !== null)) context.addIssue({ code: "custom", path: ["announcedResetTime"], message: "An announced time requires an announcement and every announcement requires its saved time" });
   if (new Set(value.sources.map(source => source.id)).size !== value.sources.length) context.addIssue({ code: "custom", path: ["sources"], message: "IDs must be unique" });
 }
-export const platformOverviewSchema = z.strictObject(overviewFields).superRefine(validateOverview);
+export const platformOverviewSchema = z.strictObject({
+  ...overviewFields,
+  name: text,
+  eventsPath: z.string().regex(/^\/api\/v2\/[a-z][a-z0-9-]*-resets$/),
+  mcpTool: z.string().regex(/^[a-z][a-z0-9_]*$/).refine(value => value !== "get_reset_overview"),
+}).superRefine(validateOverview);
 export const overviewSchema = z.strictObject({
   schemaVersion: z.literal(2), generatedAt: timestampSchema, platforms: z.array(platformOverviewSchema),
 }).superRefine((value, context) => {
-  if (new Set(value.platforms.map(platform => platform.platform)).size !== value.platforms.length) {
-    context.addIssue({ code: "custom", path: ["platforms"], message: "Platforms must be unique" });
+  for (const key of ["platform", "eventsPath", "mcpTool"] as const) {
+    if (new Set(value.platforms.map(platform => platform[key])).size !== value.platforms.length) {
+      context.addIssue({ code: "custom", path: ["platforms"], message: `Platform ${key} values must be unique` });
+    }
   }
 });
 function validateEventOrder(events: Array<{ id: string; time: PublicTime; publishedAt: string }>, context: z.RefinementCtx, path: string) {

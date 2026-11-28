@@ -123,7 +123,12 @@ test("all platforms expose action updates through v2 only and support ETag", asy
     assert.deepEqual(overview.platforms.map(platform => platform.platform), ["codex", "claude-code", "grok", "gemini"]);
     assert.deepEqual(overview.platforms.find(platform => platform.platform === "grok")?.sources.map(source => source.url), ["https://x.com/bot"]);
     assert.ok(overview.platforms.find(platform => platform.platform === "gemini")?.sources.some(source => source.url === "https://x.com/_mohansolo"));
-    assert.ok(overview.platforms.every(platform => !("catalog" in platform)));
+    assert.deepEqual(overview.platforms.map(({ name, eventsPath, mcpTool }) => [name, eventsPath, mcpTool]), [
+      ["Codex", "/api/v2/codex-resets", "get_codex_resets"],
+      ["Claude", "/api/v2/claude-resets", "get_claude_resets"],
+      ["Grok", "/api/v2/grok-resets", "get_grok_resets"],
+      ["Gemini", "/api/v2/gemini-resets", "get_gemini_resets"],
+    ]);
     assert.ok(
       overview.platforms.every(
         (platform) =>
@@ -164,8 +169,8 @@ test("HTTP overview retains confirmations beside a new plan and recomputes cance
   const app = await buildApp();
   try {
     const before = await app.inject("/api/v2/overview"), platform = overviewSchema.parse(before.json()).platforms.find(row => row.platform === "codex")!;
-    assert.match(String(before.headers.etag), /reset-actions-overview-v2\.6-/);
-    const staleVersion = await app.inject({ url: "/api/v2/overview", headers: { "if-none-match": String(before.headers.etag).replace("overview-v2.6", "overview-v2.5") } });
+    assert.match(String(before.headers.etag), /reset-actions-overview-v2\.7-/);
+    const staleVersion = await app.inject({ url: "/api/v2/overview", headers: { "if-none-match": String(before.headers.etag).replace("overview-v2.7", "overview-v2.6") } });
     assert.equal(staleVersion.statusCode, 200);
     assert.deepEqual(platform.announcedResetTime, bt(time(1)));
     assert.equal(platform.hasAnnouncement, true);

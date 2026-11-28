@@ -35,7 +35,7 @@ Codex、Claude、Grok 和 Gemini 共用“帖子提供来源、动作记录事�
 | `/api/v2/gemini-resets` | `list`、`pagination` |
 | `/api/v2/agent/codex-resets`、`/api/v2/agent/claude-resets`、`/api/v2/agent/grok-resets`、`/api/v2/agent/gemini-resets` | 基于同一 v2 投影的 Agent Markdown |
 
-总览的平台标识为 `codex`、`claude-code`、`grok` 和 `gemini`。
+总览逐平台返回 name、eventsPath 和 mcpTool，分别标识展示名、事件路径和 MCP 工具名。三类标识各自唯一，消费方直接使用总览的值。当前平台标识为 `codex`、`claude-code`、`grok` 和 `gemini`。
 
 `/openapi-v2.json` 提供由共享 Zod 契约生成的静态 OpenAPI，生成命令为 `node modules/reset-monitor/scripts/openapi.ts`，文件位于 `site/public/openapi-v2.json`。契约变化须同时重新生成并核验。`/openapi-v1.json` 仅移除监控路径及无人引用的监控专属 schema，其他新闻接口保持。
 

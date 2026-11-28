@@ -47,7 +47,8 @@ export function createMonitorFixture() {
           : { action: "confirm" as const, invalidatesEvent: false as const, sources: state.emptyConfirmation ? [] : [{ postId: "post-1", sourceId: "official", url: "https://example.org/official-1" }, { postId: "post-2", sourceId: "other", url: "https://example.org/official-2" }] }) },
     ],
   });
-  const overview = (product: Product): PlatformOverview => ({ platform: product.platform,
+  const overview = (product: Product): PlatformOverview => ({ platform: product.platform, name: product.product,
+    eventsPath: product.list, mcpTool: "get_" + product.list.split("/").at(-1)!.replaceAll("-", "_"),
     sources: ["official", "other"].map((id, index) => ({ id, type: "official_social", name: localized(`官方账号 ${index + 1}`), url: `https://example.org/account-${index}` })),
     statistics: { typicalInterval: state.typicalInterval, resetsLast30Days: state.type !== "bonus_credit" && state.status !== "cancelled" ? 1 : 0, cardsLast30Days: 0, bonusesLast30Days: state.type === "bonus_credit" && state.status !== "cancelled" ? 1 : 0 },
     hasAnnouncement: state.status === "announced", predictedResetTime: state.predictedResetTime, announcedResetTime: state.status === "announced" ? state.actionTimes ? state.actionTimes[0] ?? instant(at) : instant(at) : null, resetTime: state.resetTime !== undefined ? state.resetTime : state.status === "cancelled" ? null : state.status === "announced" ? "2026-10-20T16:30:00Z" : at,

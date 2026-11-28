@@ -5,7 +5,8 @@
 // 3. The raw response is saved before any business write; recovery reuses a received response.
 // 4. Monitor attempts retain unknown billing outcomes; model processing never buys them again.
 //    Only definite failures can resume under one key. Other callers retain operations/recover.ts.
-import { sql, type Db } from "../db.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { sql, type Sql, type Db } from "../db.ts";
 import { sha256, stableJson } from "../lib/ids.ts";
 import { shutdownSignal } from "../lib/shutdown.ts";
 
@@ -96,6 +97,42 @@ export interface ReceiptResult {
 
 const PENDING_STALE_MS = 10 * 60 * 1000;
 
+const stagedLedger = new AsyncLocalStorage<{ database: Sql; run: string }>();
+
+/** Share the live budget and receipt identities while staging business writes in a separate database. */
+export function withStagedReceiptLedger<T>(database: Sql, run: string, execute: () => Promise<T>): Promise<T> {
+  return stagedLedger.run({ database, run }, execute);
+}
+
+function ledgerRequest(req: ReceiptRequest): ReceiptRequest {
+  const ledger = stagedLedger.getStore();
+  if (!ledger) return req;
+  if (!req.purpose.startsWith("reset_monitor.gemini.")) throw new Error("Unexpected staged provider request");
+  return { ...req, attemptTag: ["gemini-history", ledger.run, req.attemptTag ?? "0"].join(":") };
+}
+
+export function receiptLedger(): Sql {
+  return stagedLedger.getStore()?.database ?? sql;
+}
+
+async function mirrorStagedReceipt(id: number) {
+  const ledger = stagedLedger.getStore();
+  if (!ledger) return;
+  const [row] = await ledger.database<{ receipt: object; attempts: object[] }[]>`SELECT to_jsonb(r) AS receipt,
+    ARRAY(SELECT to_jsonb(a) FROM receipt_attempts a WHERE a.receipt_id=r.id ORDER BY a.attempt) AS attempts FROM receipts r WHERE id=${id}`;
+  if (!row) throw new Error("Staged receipt disappeared");
+  await sql.begin(async tx => {
+    await tx`INSERT INTO receipts SELECT * FROM jsonb_populate_record(NULL::receipts,${tx.json(row.receipt as never)})
+      ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, attempts=EXCLUDED.attempts, response=EXCLUDED.response,
+      error=EXCLUDED.error, updated_at=EXCLUDED.updated_at WHERE receipts.logical_key=EXCLUDED.logical_key AND receipts.attempts<EXCLUDED.attempts`;
+    for (const attempt of row.attempts) await tx`INSERT INTO receipt_attempts
+      SELECT * FROM jsonb_populate_record(NULL::receipt_attempts,${tx.json(attempt as never)})
+      ON CONFLICT (id) DO NOTHING`;
+    const [matched] = await tx`SELECT 1 FROM receipts WHERE id=${id} AND logical_key=${(row.receipt as { logical_key: string }).logical_key}`;
+    if (!matched) throw new Error("Staging contains a conflicting receipt");
+  });
+}
+
 export function logicalKeyFor(req: ReceiptRequest): string {
   const identity = sha256(stableJson(req.identity));
   return [req.service, req.purpose, req.model ?? "-", identity, req.attemptTag ?? "0"].join(":");
@@ -103,10 +140,10 @@ export function logicalKeyFor(req: ReceiptRequest): string {
 
 /** A later collection round may resume a definite refusal, never an already-paid or uncertain answer. */
 export async function canResumeDefiniteFailure(req: ReceiptRequest): Promise<boolean> {
-  const [row] = await sql<{ receipt_status: string; attempt_status: string | null }[]>`
+  const [row] = await receiptLedger()<{ receipt_status: string; attempt_status: string | null }[]>`
     SELECT r.status AS receipt_status,
       (SELECT status FROM receipt_attempts WHERE receipt_id=r.id ORDER BY attempt DESC LIMIT 1) AS attempt_status
-    FROM receipts r WHERE logical_key=${logicalKeyFor(req)}`;
+    FROM receipts r WHERE logical_key=${logicalKeyFor(ledgerRequest(req))}`;
   return row?.receipt_status === "failed" && row.attempt_status === "failed";
 }
 
@@ -144,7 +181,7 @@ async function checkBudget(tx: Db, service: string): Promise<void> {
 /** Recheck the stop controls immediately before sending an already-reserved attempt. */
 export async function assertRequestCanSend(service: string): Promise<void> {
   if (shutdownSignal.signal.aborted) throw new ProviderNotSentError("Request stopped before sending", { cause: shutdownSignal.signal.reason });
-  const [budget] = await sql<{ per_minute: number; per_hour: number; per_day: number }[]>`
+  const [budget] = await receiptLedger()<{ per_minute: number; per_hour: number; per_day: number }[]>`
     SELECT per_minute, per_hour, per_day FROM budgets WHERE service = ${service}`;
   // Reservation already counted this attempt. Rechecking counts would reject the last allowed one.
   if (budget && (budget.per_minute <= 0 || budget.per_hour <= 0 || budget.per_day <= 0)) {
@@ -158,9 +195,21 @@ export async function assertRequestCanSend(service: string): Promise<void> {
  * A caller persisting business results completes the receipt in the same transaction.
  */
 export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallOutcome>): Promise<ReceiptResult> {
+  const database = receiptLedger();
+  let result: ReceiptResult;
+  try { result = await runPaidRequest(database, ledgerRequest(req), call); }
+  catch (error) {
+    if (error instanceof Error && "receiptId" in error && typeof error.receiptId === "number") await mirrorStagedReceipt(error.receiptId);
+    throw error;
+  }
+  await mirrorStagedReceipt(result.receiptId);
+  return result;
+}
+
+async function runPaidRequest(database: Sql, req: ReceiptRequest, call: () => Promise<CallOutcome>): Promise<ReceiptResult> {
   const logicalKey = logicalKeyFor(req);
 
-  const claimed = await sql.begin(async (tx) => {
+  const claimed = await database.begin(async (tx) => {
     // Serialise budget checks per service so concurrent workers cannot overshoot.
     await tx`SELECT pg_advisory_xact_lock(hashtext(${"budget:" + req.service}))`;
     const [existing] = await tx<ReceiptRow[]>`
@@ -221,7 +270,7 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
     const receiptStatus = isMonitorRequest(req.purpose) ? "failed" : status;
     // "unknown": the request may have reached the provider (timeout, reset): do not re-send automatically.
     const message = (notAccepted ? error.message : String(error)).slice(0, 2000);
-    await sql.begin(async (tx) => {
+    await database.begin(async (tx) => {
       await tx`UPDATE receipts SET status = ${receiptStatus}, error = ${message}, updated_at = now() WHERE id = ${receiptId}`;
       await tx`UPDATE receipt_attempts SET status = ${status}, error = ${message}, latency_ms = ${Date.now() - started}, finished_at = now() WHERE id = ${attemptId}`;
     });
@@ -231,7 +280,7 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
     throw error;
   }
 
-  await sql.begin(async (tx) => {
+  await database.begin(async (tx) => {
     await tx`
       UPDATE receipts SET
         status = 'received',

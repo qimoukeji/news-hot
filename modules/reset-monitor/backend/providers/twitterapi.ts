@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { credential } from "@aihot/backend/config";
-import { sql } from "@aihot/backend/db";
 import { guardedFetch } from "@aihot/backend/lib/http-fetch";
-import { assertAccepted, assertRequestCanSend, canResumeDefiniteFailure, paidRequest, ProviderNotSentError, ReceiptFailedError, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
+import { assertAccepted, assertRequestCanSend, canResumeDefiniteFailure, paidRequest, ProviderNotSentError, ReceiptFailedError, receiptLedger, rejectReceivedResponse } from "@aihot/backend/providers/receipts";
 import type { Tweet, SearchOptions, LookupOptions, LookupResult } from "./collectors.ts";
 import { pacedTwitterApiRequest } from "./twitterapi-pacing.ts";
 
@@ -49,6 +48,7 @@ export function normalizeTweet(raw: unknown, depth = 0): Tweet {
 
 // Apply the existing X collector's default request caps; administrator changes are retained.
 export async function ensureTwitterApiBudget() {
+  const sql = receiptLedger();
   await sql`INSERT INTO budgets (service, per_minute, per_hour, per_day)
     SELECT 'twitterapi_io', per_minute, per_hour, per_day FROM budgets WHERE service = 'socialdata'
     ON CONFLICT (service) DO NOTHING`;

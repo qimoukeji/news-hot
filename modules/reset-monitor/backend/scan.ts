@@ -76,13 +76,18 @@ export async function flushResetPushes(): Promise<number> {
   return pushed;
 }
 
+export const geminiBackfillGate = "backfill:gemini:awaiting-sync";
+
 export async function monitorTick() {
   if (process.env.COLLECT_ENABLED !== "true" || !config.modelCallsEnabled) return { skipped: true, reason: "automatic_processing_disabled" };
   const connection = await sql.reserve();
   try {
     const [lock] = await connection<{ acquired: boolean }[]>`SELECT pg_try_advisory_lock(hashtext(${monitor().names.tick})) AS acquired`;
     if (!lock?.acquired) return { skipped: true, reason: "busy" };
-    try { return await tick(); }
+    try {
+      if (monitorId() === "gemini" && await getState(geminiBackfillGate)) return { skipped: true, reason: "history_sync_pending" };
+      return await tick();
+    }
     finally { await connection`SELECT pg_advisory_unlock(hashtext(${monitor().names.tick}))`; }
   } finally { connection.release(); }
 }

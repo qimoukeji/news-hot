@@ -417,3 +417,11 @@ node --env-file=.env modules/reset-monitor/scripts/scope-cutover.ts --apply .dat
 用户明确开启后，只在开发 worker 的启动进程中设置 `MODEL_CALLS_ENABLED=true`，保持 `COLLECT_ENABLED=false`、`WEBHOOK_PUSH_ENABLED=false`、`SERVERCHAN_ENABLED=false`、`FEISHU_*_ENABLED=false`、`INDEXNOW_SUBMIT_ENABLED=false`；API 和页面进程保持模型关闭。启动配置不得把模型开关重新硬编码为 false；可以使用该进程的启动参数或环境覆盖，无需修改 `.env`。使用现有监控模型、付费回执和预算控制，不另建翻译服务。
 
 保存事件、动作和帖子的文案后，下一分钟翻译任务补齐 en、zh、zh-Hant、ja、ko、ru、es，并在版本仍一致时提交；编辑状态和业务字段不随翻译改变。读取页面不会调用模型。后台显示与公开接口可能受最长 60 秒缓存影响，完整译文到齐后公开展示和现有通知基线按原规则更新；开发环境不打开真实推送。
+
+## Gemini 历史补录
+
+使用独立且以 `_gemini_stage` 结尾的数据库，先迁移到与生产相同的结构，并核对 Gemini 基线。补录命令使用 `DATABASE_URL` 保存业务记录，通过 `GEMINI_BACKFILL_LEDGER_DATABASE_URL` 复用生产回执和供应商限额。采集和识别均使用生产监控配置，补录进程的通知开关保持关闭。
+
+1. 运行 `node modules/reset-monitor/scripts/gemini-backfill.ts collect`。命令固定起止时间，维护各周的分页进度；退出码 75 表示达到现有付费上限。连接结果未知的分页保留原回执并等待核对，其余窗口可以继续。
+2. 隔离库通过核验后运行 `export --bundle <私有路径>`。在生产运行 `preview --bundle <同一文件>` 检查基线与影响范围，再用 `gate` 登记同步指纹。文件包含原帖与业务记录，放在私有目录。
+3. 配对部署后，使用 `GEMINI_RESET_PROVIDER=twitterapi_io` 运行 `apply --bundle <同一文件> --backup <完整备份>`。命令验证备份可恢复，在一个事务内写入 Gemini 记录、到期确认、历史通知基线与日常覆盖起点。应用成功后 Gemini 定时任务自动接续。复用同一同步包重复运行时保留原结果。

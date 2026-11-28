@@ -7,7 +7,7 @@ import { monitor, monitorId, isAuthor, purpose } from "./context.ts";
 import { collectorName, cursorKey, watermarksKey } from "../config.ts";
 import { searchTweets, lookupTweets, tweetText, type Tweet } from "./providers/collectors.ts";
 import { storeCollectedPost, loadActionInput } from "./action-store.ts";
-import { authorCollectionSince, prepareCollectionCoverage } from "./collection-coverage.ts";
+import { authorCollectionSince, prepareCollectionCoverage, reconcileCollectionCoverage } from "./collection-coverage.ts";
 import { collectionQuery, embeddedQuote, replyTarget } from "./post-policy.ts";
 import { buildThreadGroups } from "./thread-groups.ts";
 
@@ -53,16 +53,20 @@ function validatePost(post: Tweet) {
 }
 
 /** Parse and persist all returned candidates before following ancestry or invoking any model. */
-export async function collectPosts(opts: { startedAt?: Date; roundId?: string; resume?: boolean } = {}): Promise<CollectionResult> {
+export async function collectPosts(opts: { startedAt?: Date; roundId?: string; resume?: boolean; historicalLower?: number } = {}): Promise<CollectionResult> {
   const result: CollectionResult = { stored: 0, pages: 0, returned: 0, embedded: 0, contextFetched: 0, contextOnly: 0, issues: 0, contextLimitReached: false,
     paidPages: 0, reusedPages: 0, windowPages: 0, collectionComplete: false, pageLimitReached: false, searchFailures: [] };
   if (process.env.COLLECT_ENABLED !== "true") return result;
   const started = opts.startedAt ?? new Date(), cursor = await state<Cursor>(cursorKey());
   if (cursor && (cursor.checkpointVersion !== 2 || !cursor.scannedThrough)) throw new Error("Monitor success checkpoint is incomplete");
-  let since = cursor?.scannedThrough ? Date.parse(cursor.scannedThrough) : started.getTime();
+  const historical = opts.historicalLower !== undefined;
+  let since = opts.historicalLower ?? (cursor?.scannedThrough ? Date.parse(cursor.scannedThrough) : started.getTime());
   if (!Number.isFinite(since) || since > started.getTime()) throw new Error("Monitor success checkpoint must be a valid past time");
-  const coverage = await prepareCollectionCoverage(started.toISOString(), new Date(since).toISOString());
-  if (!cursor && coverage.scopeEffectiveAt) since = Date.parse(coverage.scopeEffectiveAt);
+  const baseline = new Date(since).toISOString();
+  const coverage = historical
+    ? reconcileCollectionCoverage(null, monitor(), started.toISOString(), baseline)
+    : await prepareCollectionCoverage(started.toISOString(), baseline);
+  if (!historical && !cursor && coverage.scopeEffectiveAt) since = Date.parse(coverage.scopeEffectiveAt);
   if (since > started.getTime()) throw new Error("Monitor collection starting point must be a valid past time");
   const lowerByAuthor = new Map(monitor().authors.map(author => [authorKey(author.handle), authorCollectionSince(coverage, author.handle, since)]));
   const roundId = opts.roundId ?? randomUUID();
@@ -71,7 +75,7 @@ export async function collectPosts(opts: { startedAt?: Date; roundId?: string; r
   let progress = await state<CollectionProgress>(progressKey);
   const plannedAuthors = monitor().authors.map(author => {
     const lower = lowerByAuthor.get(authorKey(author.handle))!;
-    return { handle: author.handle, lower, query: collectionQuery(author.handle, lower, started.getTime(), monitor().collection) };
+    return { handle: author.handle, lower, query: collectionQuery(author.handle, lower - (historical ? 1000 : 0), started.getTime() + (historical ? 1000 : 0), monitor().collection) };
   });
   if (progress) {
     // Removing authors leaves the retained queries and receipt identities intact.
@@ -95,6 +99,10 @@ export async function collectPosts(opts: { startedAt?: Date; roundId?: string; r
   const old = new Map(before.posts.map(post => [post.id, post]));
   function business(post: Tweet) {
     const lower = lowerByAuthor.get(authorKey(post.user.screen_name)), at = Date.parse(post.tweet_created_at);
+    if (historical) {
+      const reply = replyTarget(post);
+      if (post.is_retweet || post.retweeted_status || reply?.author && !isAuthor(reply.author)) return false;
+    }
     return lower !== undefined && at >= lower && at <= started.getTime();
   }
   async function save(post: Tweet, receiptId: number | null, embedded = false) {
@@ -107,9 +115,18 @@ export async function collectPosts(opts: { startedAt?: Date; roundId?: string; r
     seen.set(post.id_str, post);
     touched.add(post.id_str);
     const contextOnly = !business(post);
-    const inserted = await storeCollectedPost({ id: post.id_str, author: post.user.screen_name,
+    const data = { id: post.id_str, author: post.user.screen_name,
       publishedAt: new Date(post.tweet_created_at).toISOString(), url: `https://x.com/${post.user.screen_name}/status/${post.id_str}`,
-      text: tweetText(post), quotedPost: embeddedQuote(post)[0] ?? null, replyTo: replyTarget(post), receiptId, contextOnly });
+      text: tweetText(post), quotedPost: embeddedQuote(post)[0] ?? null, replyTo: replyTarget(post), receiptId, contextOnly };
+    const inserted = !historical || contextOnly ? await storeCollectedPost(data) : await sql.begin(async db => {
+      const count = await storeCollectedPost(data, db);
+      if (count && (!old.has(post.id_str) || old.get(post.id_str)?.context_only)) {
+        await db`INSERT INTO monitor_state(monitor_id,key,value)
+          VALUES(${monitorId()},${`recognition:historical:${post.id_str}`},'{"suppressNotifications":true}'::jsonb)
+          ON CONFLICT (monitor_id,key) DO NOTHING`;
+      }
+      return count;
+    });
     if (!ingested.has(post.id_str)) {
       if (inserted && !contextOnly && (!old.has(post.id_str) || old.get(post.id_str)?.context_only)) result.stored++;
       if (inserted && contextOnly && !old.has(post.id_str)) result.contextOnly++;
@@ -138,6 +155,7 @@ export async function collectPosts(opts: { startedAt?: Date; roundId?: string; r
         shutdownSignal.signal.throwIfAborted();
         const failure = await searchFailure(error, author.handle);
         if (!failure) throw error;
+        if (historical && failure.billingUnknown) failure.recovery = "manual";
         author.failure = failure;
         if (failure.reason === "network_unknown") author.replacesReceiptId = failure.receiptId;
         result.searchFailures.push(failure);
@@ -148,6 +166,10 @@ export async function collectPosts(opts: { startedAt?: Date; roundId?: string; r
       if (response.reused) result.reusedPages++;
       for (const post of response.tweets) {
         validatePost(post);
+        const publishedAt = Date.parse(post.tweet_created_at);
+        if (historical && authorKey(post.user.screen_name) === authorKey(author.handle)
+          && publishedAt >= author.lower - 1000 && publishedAt <= started.getTime() + 1000
+          && (publishedAt < author.lower || publishedAt > started.getTime())) continue;
         if (authorKey(post.user.screen_name) !== authorKey(author.handle)
           || Date.parse(post.tweet_created_at) < author.lower || Date.parse(post.tweet_created_at) > started.getTime())
           throw new Error(`Collector returned post ${post.id_str} outside the requested author or window`);

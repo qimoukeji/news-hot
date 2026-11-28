@@ -25,7 +25,7 @@
     },
     "/api/v2/codex-resets": {
       "get": {
-        "summary": "codex events with accepted actions and all source links",
+        "summary": "Codex events with accepted actions and all source links",
         "description": "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Event and action time are required saved values: instant {at}, range {from,through}, or deadline {at}. Business timestamps use UTC; publishedAt separately records source publication or source-free action creation. Individual quota status remains subject to the account display.",
         "parameters": [
           {
@@ -99,7 +99,7 @@
     },
     "/api/v2/claude-resets": {
       "get": {
-        "summary": "claude events with accepted actions and all source links",
+        "summary": "Claude events with accepted actions and all source links",
         "description": "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Event and action time are required saved values: instant {at}, range {from,through}, or deadline {at}. Business timestamps use UTC; publishedAt separately records source publication or source-free action creation. Individual quota status remains subject to the account display.",
         "parameters": [
           {
@@ -173,7 +173,7 @@
     },
     "/api/v2/grok-resets": {
       "get": {
-        "summary": "grok events with accepted actions and all source links",
+        "summary": "Grok events with accepted actions and all source links",
         "description": "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Event and action time are required saved values: instant {at}, range {from,through}, or deadline {at}. Business timestamps use UTC; publishedAt separately records source publication or source-free action creation. Individual quota status remains subject to the account display.",
         "parameters": [
           {
@@ -247,7 +247,7 @@
     },
     "/api/v2/gemini-resets": {
       "get": {
-        "summary": "gemini events with accepted actions and all source links",
+        "summary": "Gemini events with accepted actions and all source links",
         "description": "Activity history includes announcements, confirmations, progress and amendments, with their available source links. Event and action time are required saved values: instant {at}, range {from,through}, or deadline {at}. Business timestamps use UTC; publishedAt separately records source publication or source-free action creation. Individual quota status remains subject to the account display.",
         "parameters": [
           {
@@ -321,7 +321,7 @@
     },
     "/api/v2/agent/codex-resets": {
       "get": {
-        "summary": "codex quota events for agents",
+        "summary": "Codex quota events for agents",
         "responses": {
           "200": {
             "description": "Read-only answer derived from the same v2 events and actions",
@@ -338,7 +338,7 @@
     },
     "/api/v2/agent/claude-resets": {
       "get": {
-        "summary": "claude quota events for agents",
+        "summary": "Claude quota events for agents",
         "responses": {
           "200": {
             "description": "Read-only answer derived from the same v2 events and actions",
@@ -355,7 +355,7 @@
     },
     "/api/v2/agent/grok-resets": {
       "get": {
-        "summary": "grok quota events for agents",
+        "summary": "Grok quota events for agents",
         "responses": {
           "200": {
             "description": "Read-only answer derived from the same v2 events and actions",
@@ -372,7 +372,7 @@
     },
     "/api/v2/agent/gemini-resets": {
       "get": {
-        "summary": "gemini quota events for agents",
+        "summary": "Gemini quota events for agents",
         "responses": {
           "200": {
             "description": "Read-only answer derived from the same v2 events and actions",
@@ -2204,6 +2204,19 @@
                       "type": "null"
                     }
                   ]
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "eventsPath": {
+                  "type": "string",
+                  "pattern": "^\\/api\\/v2\\/[a-z][a-z0-9-]*-resets$"
+                },
+                "mcpTool": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
                 }
               },
               "required": [
@@ -2213,7 +2226,10 @@
                 "hasAnnouncement",
                 "predictedResetTime",
                 "announcedResetTime",
-                "resetTime"
+                "resetTime",
+                "name",
+                "eventsPath",
+                "mcpTool"
               ],
               "additionalProperties": false
             }
